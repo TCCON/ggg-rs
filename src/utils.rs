@@ -33,7 +33,9 @@ pub enum GggError {
     HeaderError{path: PathBuf, cause: String},
     /// Used for problems with the format of the data in a file, usually meaning that it could not be converted
     /// to the proper type. `path` must be the path to the problematic file and `cause` a description of the problem.
-    DataError{path: PathBuf, cause: String}
+    DataError{path: PathBuf, cause: String},
+    /// A generic error for an unimplemented case in the code
+    NotImplemented(String)
 }
 
 impl Display for GggError {
@@ -57,11 +59,52 @@ impl Display for GggError {
             Self::DataError { path, cause } => {
                 write!(f, "Error in data format of {}: {cause}", path.display())
             },
+            Self::NotImplemented(case) => {
+                write!(f, "Not implemented: {case}")
+            }
         }
     }
 }
 
 impl Error for GggError {}
+
+impl GggError {
+    /// For variants with `path` field, return a new instance with the `path` replaced with a new value. Other variants are returned unchanged.
+    /// 
+    /// This is useful when an inner error may normally need to refer to a path, but it doesn't actually know the path
+    /// of the file that relates to the error. When the outer function that knows the path receives the path, it can
+    /// use this to replace it:
+    /// 
+    /// ```
+    /// fn throw() -> Result<(), GggError> {
+    ///     Err(GggError::CouldNotRead{path: PathBuf::new(), "demo".to_owned()})
+    /// }
+    /// 
+    /// let path = PathBuf::from_str("~/Documents").unwrap();
+    /// throw().or_else(
+    ///     |e| Err(e.with_path(path))
+    /// ).unwrap_err();
+    /// ```
+    pub fn with_path(self, new_path: PathBuf) -> Self {
+        match self {
+            Self::CouldNotOpen { descr, path: _, reason } => {
+                Self::CouldNotOpen { descr, path: new_path, reason }
+            },
+            Self::CouldNotRead { path: _, reason } => {
+                Self::CouldNotRead { path: new_path, reason }
+            },
+            Self::HeaderError { path: _, cause } => {
+                Self::HeaderError { path: new_path, cause }
+            },
+            Self::DataError { path: _, cause } => {
+                Self::DataError { path: new_path, cause }
+            },
+            _ => {
+                self
+            }
+        }
+    }
+}
 
 /// An interior error type for the `GggPathError` variant of [`GggError`]
 #[derive(Debug)]
@@ -227,6 +270,22 @@ impl <'p, F: BufRead> FileBuf<'p, F> {
             .or_else(|e| Err(GggError::CouldNotRead { path: self.path.to_owned(), reason: format!("{e} (while reading the data)") }))?;
         Ok(buf)
     }
+
+    /// Consume the FileBuf, returning the contained reader
+    /// 
+    /// Useful when you know you do not need the extra functionality of the `FileBuf`
+    /// anymore but do want to call a method on the [`BufRead`] reader that requires 
+    /// a move, e.g. the `lines` method:
+    /// 
+    /// ```no_run
+    /// let f = FileBuf("./list.txt");
+    /// for line in f.into_reader().lines() {
+    ///     ...
+    /// }
+    /// ```
+    pub fn into_reader(self) -> F {
+        self.reader
+    }
 }
 
 impl<'p, F: BufRead> Deref for FileBuf<'p, F> {
@@ -242,6 +301,7 @@ impl <'p, F: BufRead> DerefMut for FileBuf<'p, F> {
         &mut self.reader
     }
 }
+
 
 /// A structure representing some common elements contained in GGG file headers
 /// 
@@ -416,4 +476,59 @@ pub fn read_common_header<'p, F: BufRead>(f: &mut FileBuf<'p, F>) -> Result<Comm
     }
 
     Ok(CommonHeader { nhead, ncol, missing, format_str, column_names })
+}
+
+
+/// Find a spectrum in one of the directories listed in the data_part.lst file.
+/// 
+/// This searches each (uncommented) directory in `$GGGPATH/config/data_part.lst`
+/// until it finds a spectrum with file name `specname` or it runs out of directories.
+/// 
+/// # Returns
+/// If the spectrum was found, then an `Ok(Some(p))` is returned, where `p` is the path
+/// to the spectrum. If the spectrum was *not* found, `Ok(None)` is returned. An `Err`
+/// is returned if:
+/// 
+/// * `$GGGPATH` is not set,
+/// * `$GGGPATH/config/data_part.lst` does not exist, or
+/// * a line of `data_part.lst` could not be read.
+/// 
+/// The final condition returns an `Err` rather than silently skipping the unreadable line
+/// to avoid accidentally reading a spectrum from a later directory than it should if the
+/// `data_part.lst` file was formatted correctly.
+/// 
+/// # Difference to Fortran
+/// Unlike the Fortran subroutine that performs this task, this function does not require
+/// that the paths in `data_part.lst` end in a path separator.
+pub fn find_spectrum(specname: &str) -> Result<Option<PathBuf>, GggError> {
+    let gggpath = get_ggg_path()?;
+    let data_partition_file = gggpath.join("config/data_part.lst");
+    if !data_partition_file.exists() {
+        return Err(GggError::CouldNotOpen { descr: "data_part.lst".to_owned(), path: data_partition_file, reason: "does not exist".to_owned() });
+    }
+
+    let data_part = FileBuf::open(&data_partition_file)?;
+    for (iline, line) in data_part.into_reader().lines().enumerate() {
+        let line = match line {
+            Ok(l) => l,
+            Err(e) => {
+                return Err(GggError::CouldNotRead { 
+                    path: data_partition_file, 
+                    reason: format!("Error reading line {} was: {}", iline+1, e)
+                });
+            }
+        };
+
+        // GGG convention is that lines beginning with ":" are comments
+        if line.starts_with(":") { continue; }
+
+        // Apparently from_str cannot error, so okay to unwrap.
+        let search_path = PathBuf::from_str(&line.trim()).unwrap();
+        let spec_path = search_path.join(specname);
+        if spec_path.exists() {
+            return Ok(Some(spec_path));
+        }
+    }
+
+    return Ok(None);
 }
