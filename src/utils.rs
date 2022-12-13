@@ -26,6 +26,7 @@ pub enum GggError {
     /// to the problematic file and `cause` a description of the problem (often the string representation of another
     /// error type).
     CouldNotRead{path: PathBuf, reason: String},
+    CouldNotWrite{path: PathBuf, reason: String},
     /// Used for problems with the header format in file, meaning it could be read in, but not interpreted
     /// properly *or* there is some inconsistency (e.g. different number of columns given in the first line of the
     /// file from the number of columns actually in the file). `path` must be the path to the problematic file and
@@ -52,6 +53,9 @@ impl Display for GggError {
             },
             Self::CouldNotRead {path, reason} => {
                 write!(f, "Could not read from {} because: {reason}", path.display())
+            },
+            Self::CouldNotWrite {path, reason} => {
+                write!(f, "Could not write to {} because: {reason}", path.display())
             },
             Self::HeaderError { path, cause } => {
                 write!(f, "Error in header format of {}: {cause}", path.display())
@@ -154,6 +158,22 @@ pub enum ApodizationFxn {
     MediumNortonBeer,
     StrongNortonBeer,
     Triangular
+}
+
+impl ApodizationFxn {
+    pub fn as_int(&self) -> i8 {
+        match self {
+            ApodizationFxn::BoxCar => 0,
+            ApodizationFxn::WeakNortonBeer => 1,
+            ApodizationFxn::MediumNortonBeer => 2,
+            ApodizationFxn::StrongNortonBeer => 3,
+            ApodizationFxn::Triangular => 4,
+        }
+    }
+
+    pub fn int_map_string() -> &'static str {
+        "0 = Boxcar, 1 = Weak Norton-Beer, 2 = Medium Norton-Beer, 3 = Strong Norton-Beer, 4 = Triangular"
+    }
 }
 
 impl FromStr for ApodizationFxn {
