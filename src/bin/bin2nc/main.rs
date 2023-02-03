@@ -3,9 +3,20 @@ use std::path::{PathBuf, Path};
 use clap::Parser;
 use ggg_rs::{self, utils::{GggError, self}, runlogs::RunlogDataRec, opus::Spectrum};
 
+/// Generate netCDF versions of binary TCCON spectra listed in a given runlog
+///
+/// This follows the existing GGG convention in that it will search for the spectra
+/// named in the runlog under directories listed in `$GGGPATH/config/data_part.lst`.
+/// If a spectrum cannot be found, the program will crash with an error.
 #[derive(Debug, Parser)]
 struct Cli {
+    /// Path to the runlog. This must be a full relative or absolute path, that is,
+    /// if you are running this program from `$GGGPATH`, then 
+    /// `runlogs/gnd/pa_ggg_benchmark.grl` would work, but not just `pa_ggg_benchmark.grl`.
     runlog: PathBuf,
+
+    /// Directory to which to output the spectra. The spectra will be named automatically.
+    /// Existing spectra will be overwritten.
     output: PathBuf
 }
 
