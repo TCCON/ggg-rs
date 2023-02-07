@@ -1,12 +1,12 @@
 use std::{collections::HashMap, path::{Path, PathBuf}, str::FromStr, io::BufRead};
 use clap::Parser;
-use plotly::{Plot, Scatter, ImageFormat};
+use plotly::{Plot, Scatter, ImageFormat, common::{Line, Mode, Title}, Layout, layout::Axis};
 use ggg_rs::utils::{self, GggError};
 
 
 struct SptData {
-    header: SptHeader,
-    columns: Vec<String>,
+    _header: SptHeader,
+    _columns: Vec<String>,
     data: HashMap<String, Vec<f32>>
 }
 
@@ -28,7 +28,7 @@ impl SptHeader {
     fn from_header_line(line: &str) -> Result<SptHeader, GggError> {
         fn parse_field<T: FromStr>(s: &str, i: usize) -> Result<T, GggError> {
             s.parse::<T>()
-                .map_err(|e| GggError::HeaderError { path: PathBuf::new(), cause: format!("Could not parse {}th element {} as a number", i+1, s) })
+                .map_err(|_| GggError::HeaderError { path: PathBuf::new(), cause: format!("Could not parse {}th element {} as a number", i+1, s) })
         }
 
         let split: Vec<&str> = line.trim().split_ascii_whitespace().collect();
@@ -129,8 +129,8 @@ fn read_spt_file(spt_file: &Path) -> Result<SptData, GggError> {
     }
 
     Ok(SptData{
-        header,
-        columns: col_names.into_iter().map(|el| el.to_owned()).collect(),
+        _header: header,
+        _columns: col_names.into_iter().map(|el| el.to_owned()).collect(),
         data: data_map,
     })
 }
@@ -144,21 +144,40 @@ struct Cli {
 
 fn main() -> Result<(), GggError> {
     let clargs = Cli::parse();
-    let spt = read_spt_file(&clargs.spt_file)?;
+    let mut spt = read_spt_file(&clargs.spt_file)?;
 
+    let spt_basename = clargs.spt_file.file_name().expect("Expecting input SPT file to have a path component after the final slash");
     let output_file = clargs.output_file.unwrap_or_else(|| {
-        clargs.spt_file.with_extension("png")
+        let mut tmp = spt_basename.to_owned();
+        tmp.push(".png");
+        clargs.spt_file.with_file_name(tmp)
     });
 
-    let freq = spt.data.get("Freq")
+    let freq = spt.data.remove("Freq")
         .ok_or_else(|| GggError::DataError { path: clargs.spt_file.clone(), cause: "Could not find the 'Freq' column".to_owned() })?;
 
-    let tm = spt.data.get("Tm").unwrap();
+    let tm = spt.data.remove("Tm").unwrap();
 
     let mut plot = Plot::new();
-    let trace = Scatter::new(freq.clone(), tm.clone());
-    let trace = trace.line(plotly::common::Line::new().color("black"));
+    let trace = Scatter::new(freq.clone(), tm).name("Measured").mode(Mode::Lines);
+    let trace = trace.line(Line::new().color("black"));
     plot.add_trace(trace);
+
+    let tc = spt.data.remove("Tc").expect("Did not find the Tc column in the spt file");
+    let trace = Scatter::new(freq.clone(), tc).name("Total calc.").mode(Mode::Lines);
+    let trace = trace.line(Line::new().color("gray").dash(plotly::common::DashType::Dash));
+    plot.add_trace(trace);
+
+    for (key, value) in spt.data.into_iter() {
+        let trace = Scatter::new(freq.clone(), value).name(key).mode(Mode::Lines);
+        plot.add_trace(trace);
+    }
+
+    let layout = Layout::new()
+        .title(Title::new(spt_basename.to_string_lossy().as_ref()))
+        .x_axis(Axis::new().title(Title::new("Frequency (cm-1)")))
+        .y_axis(Axis::new().title(Title::new("Transmittance (AU)")));
+    plot.set_layout(layout);
     
     plot.write_image(&output_file, ImageFormat::PNG, 2400, 600, 1.0);
     Ok(())
