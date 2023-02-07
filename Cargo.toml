@@ -2,7 +2,8 @@
 name = "ggg-rs"
 version = "0.1.0"
 edition = "2021"
-
+# Use the newer feature resolving algorithm
+resolver = "2"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
@@ -10,10 +11,12 @@ clap = {version = "4", features = ["derive"]}
 ndarray = "0.15"
 netcdf = "0.7"
 # Could move behind a feature
-plotly = { version = "0.8.3", features = ["kaleido"] }
+plotly = { version = "0.8.3", features = ["kaleido"], optional=true }
 
 [features]
+default = ["plotting"]
 static = ["netcdf/static"]
+plotting = ["dep:plotly"]
 
 [lib]
 
@@ -22,3 +25,4 @@ name = "bin2nc"
 
 [[bin]]
 name = "plot_spt"
+required-features = ["plotting"]
