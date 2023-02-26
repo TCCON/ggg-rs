@@ -1,4 +1,4 @@
-use std::{collections::HashMap, path::{Path, PathBuf}, str::FromStr, io::BufRead};
+use std::{collections::{HashMap,HashSet}, path::{Path, PathBuf}, str::FromStr, io::BufRead, convert::Infallible, borrow::Borrow, hash::Hash};
 use clap::Parser;
 use plotly::{Plot, Scatter, ImageFormat, common::{Line, Mode, Title}, Layout, layout::Axis};
 use ggg_rs::utils::{self, GggError};
@@ -6,7 +6,7 @@ use ggg_rs::utils::{self, GggError};
 
 struct SptData {
     _header: SptHeader,
-    _columns: Vec<String>,
+    columns: Vec<String>,
     data: HashMap<String, Vec<f32>>
 }
 
@@ -130,16 +130,54 @@ fn read_spt_file(spt_file: &Path) -> Result<SptData, GggError> {
 
     Ok(SptData{
         _header: header,
-        _columns: col_names.into_iter().map(|el| el.to_owned()).collect(),
+        columns: col_names.into_iter().map(|el| el.to_owned()).collect(),
         data: data_map,
     })
 }
 
 #[derive(Debug, Parser)]
 struct Cli {
+    /// Path to the SPT file to plot.
     spt_file: PathBuf,
+    
+    /// File to save the plot to. If not given, uses the same name as the SPT file plus ".png".
     #[clap(short = 'o', long = "output-file")]
-    output_file: Option<PathBuf>
+    output_file: Option<PathBuf>,
+    
+    /// Columns from the SPT file to plot. If omitted, all are plotted.
+    #[clap(short = 'c', long = "columns", value_parser = comma_list, default_value = "")]
+    columns: OptionalSet<String>, // HashSet was easier to parse to, when this was a Vec, clap expected the parser to return a String, not Vec<String>
+}
+
+fn comma_list(arg: &str) -> Result<OptionalSet<String>, Infallible> {
+    if arg.len() == 0 {
+        Ok(OptionalSet::All)
+    }else{
+        let set = arg.split(',').map(|el| el.to_owned()).collect();
+        Ok(OptionalSet::Some(set))
+    }
+}
+
+#[derive(Debug, Clone)]
+enum OptionalSet<T> 
+where T: Eq + Hash
+{
+    All,
+    Some(HashSet<T>)
+}
+
+impl<T> OptionalSet<T> 
+where T: Eq + std::hash::Hash
+{
+    fn contains<Q>(&self, el: &Q) -> bool 
+    where T: Borrow<Q>,
+          Q: Eq + Hash + ?Sized  
+    {
+        match self {
+            OptionalSet::All => true,
+            OptionalSet::Some(set) => set.contains(el.borrow()),
+        }
+    }
 }
 
 fn main() -> Result<(), GggError> {
@@ -156,21 +194,33 @@ fn main() -> Result<(), GggError> {
     let freq = spt.data.remove("Freq")
         .ok_or_else(|| GggError::DataError { path: clargs.spt_file.clone(), cause: "Could not find the 'Freq' column".to_owned() })?;
 
-    let tm = spt.data.remove("Tm").unwrap();
-
     let mut plot = Plot::new();
-    let trace = Scatter::new(freq.clone(), tm).name("Measured").mode(Mode::Lines);
-    let trace = trace.line(Line::new().color("black"));
-    plot.add_trace(trace);
 
-    let tc = spt.data.remove("Tc").expect("Did not find the Tc column in the spt file");
-    let trace = Scatter::new(freq.clone(), tc).name("Total calc.").mode(Mode::Lines);
-    let trace = trace.line(Line::new().color("gray").dash(plotly::common::DashType::Dash));
-    plot.add_trace(trace);
-
-    for (key, value) in spt.data.into_iter() {
-        let trace = Scatter::new(freq.clone(), value).name(key).mode(Mode::Lines);
+    if clargs.columns.contains("Tm") {
+        let tm = spt.data.remove("Tm").unwrap();
+        let trace = Scatter::new(freq.clone(), tm).name("Measured").mode(Mode::Lines);
+        let trace = trace.line(Line::new().color("black"));
         plot.add_trace(trace);
+    }
+
+    if clargs.columns.contains("Tc") {
+        let tc = spt.data.remove("Tc").expect("Did not find the Tc column in the spt file");
+        let trace = Scatter::new(freq.clone(), tc).name("Total calc.").mode(Mode::Lines);
+        let trace = trace.line(Line::new().color("gray").dash(plotly::common::DashType::Dash));
+        plot.add_trace(trace);
+    }
+
+    // Iterate over columns to retain the order. Okay that Tm and Tc are in the columns; they are already removed from the
+    // HashMap, so the if let Some(_) check will skip them.
+    for key in spt.columns.iter() {
+        if !clargs.columns.contains(key) {
+            continue;
+        }
+
+        if let Some(value) = spt.data.remove(key) {
+            let trace = Scatter::new(freq.clone(), value).name(key).mode(Mode::Lines);
+            plot.add_trace(trace);
+        }
     }
 
     let layout = Layout::new()
