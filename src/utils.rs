@@ -1,5 +1,5 @@
 //! General GGG utilities, not particular to any program or I/O step.
-use std::env;
+use std::{env, f64};
 use std::error::Error;
 use std::fmt::Display;
 use std::fs::File;
@@ -7,6 +7,8 @@ use std::io::{BufRead, BufReader};
 use std::ops::{Deref, DerefMut};
 use std::path::{PathBuf, Path};
 use std::str::FromStr;
+
+use chrono::TimeZone;
 
 
 /// Standard error type for all GGG functions
@@ -551,4 +553,22 @@ pub fn find_spectrum(specname: &str) -> Result<Option<PathBuf>, GggError> {
     }
 
     return Ok(None);
+}
+
+/// Convert a runlog year, day, and hour value to a proper UTC datetime
+/// 
+/// GGG runlogs store the ZPD time of a spectrum as a year, day of year, and UTC hour value where the
+/// day of year accounts for leap years (i.e. Mar 1 is DOY 60 on non-leap years and DOY 61 on leap years)
+/// and the UTC hour has a decimal component that provides the minutes and seconds. This function converts
+/// those values into a [`chrono::DateTime`] with the UTC timezone.
+pub fn runlog_ydh_to_datetime(year: i32, day_of_year: i32, utc_hour: f64) -> chrono::DateTime<chrono::Utc> {
+    let ihours = utc_hour.floor();
+    let iminutes = ((utc_hour - ihours) * 60.0).floor();
+    let iseconds = (((utc_hour - ihours) * 60.0 - iminutes) * 60.0).floor();
+
+    chrono::Utc.with_ymd_and_hms(year, 1, 1, 0, 0, 0).unwrap()
+    + chrono::Duration::days((day_of_year - 1).into())
+    + chrono::Duration::hours(ihours as i64)
+    + chrono::Duration::minutes(iminutes as i64)
+    + chrono::Duration::seconds(iseconds as i64)
 }
