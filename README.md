@@ -47,7 +47,7 @@ Once the repo is cloned, you can install the programs from it under your GGGPATH
 standard Fortran programs, by running:
 
 ```
-cargo install --path . --root $GGGPATH
+cargo install --features static --path . --root $GGGPATH
 ```
 
 from the directory containing this README. This will install the programs in `$GGGPATH/bin`.
@@ -63,10 +63,12 @@ e.g. `cargo build --features static`
 
 * `static` - the netCDF library used by this crate can either link to an already built netCDF shared object
   library on your system *or* build its own netCDF and HDF5 libraries from source. The latter takes longer
-  and requires `cmake` be installed on your system, but can get around some incompatible netCDF issues. 
-  If you have trouble building this because of the netCDF requirement, try building with `--features static`.
+  and requires `cmake` be installed on your system, but can get around some incompatible netCDF issues.
+  We recommend using this feature in the `cargo install` command above because generally building the netCDF
+  library this way gives fewer issues than trying to link to a system netCDF library. However, if you have
+  a well-behaved system installation of netCDF, you can try installing without this feature.
 
-## Compilation errors
+## Compilation or runtime errors
 
 ### Any OS
 
@@ -78,6 +80,14 @@ computer. There are two solutions:
 1. Have `cargo` build its own HDF5 and netCDF libraries by adding `--features static` to the `cargo install` command.
   Note that this requires `cmake` be installed on your system. 
 
+**No libhdf5.so file**: if you get a message like:
+
+```
+error while loading shared libraries: libhdf5.so.101: cannot open shared object file: No such file or directory
+```
+
+while trying to run a program like `bin2nc`, this probably means that the system netCDF can't be linked to properly. We recommend
+building with `--features static` to avoid this issue.
 
 ### Mac
 
