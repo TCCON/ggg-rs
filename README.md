@@ -73,7 +73,7 @@ e.g. `cargo build --features static`
 ### Any OS
 
 **Failed custom build command for hdf5-sys or netcdf-sys**: this usually means that the compiler could not find the netCDF and/or HDF5 libraries on your
-computer. There are two solutions:
+computer. This should only show up if you do not use `--features static` in the installation command. There are two solutions:
 
 1. Install the netCDF C library via a system package manager (e.g. `apt` on Ubuntu/Debian, `brew` on Macs with [Homebrew](https://brew.sh/) installed).
   If running on a supercomputing cluster, check if there is a netCDF module you can load.
