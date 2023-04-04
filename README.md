@@ -50,8 +50,11 @@ standard Fortran programs, by running:
 cargo install --path . --root $GGGPATH
 ```
 
-from the directory containing this README.
+from the directory containing this README. This will install the programs in `$GGGPATH/bin`.
 
+If you do not wish to install these programs alongside your standard GGG programs, you may pass a different
+argument to `--root`. Note that it will always install in the `bin` subdirectory inside the path given as
+the argument to `--root`.
 
 ## Features
 
@@ -65,6 +68,17 @@ e.g. `cargo build --features static`
 
 ## Compilation errors
 
+### Any OS
+
+**Failed custom build command for hdf5-sys or netcdf-sys**: this usually means that the compiler could not find the netCDF and/or HDF5 libraries on your
+computer. There are two solutions:
+
+1. Install the netCDF C library via a system package manager (e.g. `apt` on Ubuntu/Debian, `brew` on Macs with [Homebrew](https://brew.sh/) installed).
+  If running on a supercomputing cluster, check if there is a netCDF module you can load.
+1. Have `cargo` build its own HDF5 and netCDF libraries by adding `--features static` to the `cargo install` command.
+  Note that this requires `cmake` be installed on your system. 
+
+
 ### Mac
 
 **Missing xcrun**: if you get a failure to compile on Mac, check the earlier output for a line like:
@@ -74,3 +88,14 @@ note: xcrun: error: invalid active developer path (/Library/Developer/CommandLin
 ```
 
 If you see this, try reinstalling the developer tools using `xcode-select --install`. This can happen even if you had previously installed the developer tools, but then upgraded MacOS since then.
+
+
+**ld linker error for netcdf**: if you get something like the following lines at the end of your compilation:
+
+```
+ld: warning: directory not found for option '-L$HOME/opt/homebrew/Cellar/netcdf/4.8.1/lib/lib'
+ld: library not found for -lnetcdf
+```
+
+then this means that somehow your netCDF library path is not set correctly. The simplest fix is usually to use `--features static` as
+described in the Features section.

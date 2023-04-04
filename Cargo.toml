@@ -29,6 +29,6 @@ name = "bin2nc"
 name = "plot_spt"
 required-features = ["plotting"]
 
-[[bin]]
-name = "plot_opus_spectra"
-required-features = ["plotting"]
+#[[bin]]
+#name = "plot_opus_spectra"
+#required-features = ["plotting"]
