@@ -2,6 +2,7 @@ use std::{path::{PathBuf, Path}, collections::HashMap, cell::Cell};
 
 use clap::Parser;
 use ggg_rs::{self, utils::{GggError, self}, runlogs::{RunlogDataRec, Runlog}, opus::Spectrum};
+use netcdf::extent::Extents;
 
 /// Generate netCDF versions of binary TCCON spectra listed in a given runlog
 ///
@@ -47,7 +48,7 @@ fn writer_loop<W: NcWriter>(mut writer: W, runlog: Runlog) {
 
 trait NcWriter {
     fn add_spectrum(&mut self, data_rec: &RunlogDataRec, spectrum: &Spectrum) -> Result<(), GggError>;
-    fn write_0d_var<'f, T: netcdf::Numeric>(nc: &'f mut netcdf::GroupMut, varname: &str, spec_idx: usize, value: T, units: &str, description: &str) 
+    fn write_0d_var<'f, T: netcdf::NcPutGet>(nc: &'f mut netcdf::GroupMut, varname: &str, spec_idx: usize, value: T, units: &str, description: &str) 
     -> Result<netcdf::VariableMut<'f>, GggError>;
     fn write_1d_var<'f>(nc: &'f mut netcdf::GroupMut, varname: &str, spec_idx: usize, data: &ndarray::Array1<f32>, units: &str, description: &str) 
     -> Result<netcdf::VariableMut<'f>, GggError>;
@@ -207,12 +208,12 @@ impl NcWriter for IndividualNcWriter {
         Self::write_spectrum_values(&mut root, data_rec, spectrum, &out_file, 0, true)
     }
 
-    fn write_0d_var<'f, T: netcdf::Numeric>(nc: &'f mut netcdf::GroupMut, varname: &str, _spec_idx: usize, value: T, units: &str, description: &str) 
+    fn write_0d_var<'f, T: netcdf::NcPutGet>(nc: &'f mut netcdf::GroupMut, varname: &str, _spec_idx: usize, value: T, units: &str, description: &str) 
     -> Result<netcdf::VariableMut<'f>, GggError> {
         let mut var = nc.add_variable::<T>(varname, &[])
             .or_else(|e| Err(GggError::CouldNotWrite { path: PathBuf::new(), reason: format!("{e} (while creating the {varname} variable)") }))?;
 
-        var.put_value(value, None)
+        var.put_value(value, Extents::All)
             .or_else(|e| Err(GggError::CouldNotWrite { path: PathBuf::new(), reason: format!("{e} (while writing value to {varname})") }))?;
 
         var.add_attribute("units", units)
@@ -231,7 +232,7 @@ impl NcWriter for IndividualNcWriter {
         let data_slice = data.as_slice()
             .ok_or_else(|| GggError::CouldNotWrite{path: PathBuf::new(), reason: "Could not convert frequency to a slice".to_owned()})?;
 
-        var.put_values(data_slice, None, None)
+        var.put_values(data_slice, Extents::All)
             .or_else(|e| Err(GggError::CouldNotWrite { path: PathBuf::new(), reason: format!("{} (while writing values to {})", e, varname) }))?;
 
         var.add_attribute("units", units)
@@ -380,35 +381,23 @@ impl MultipleNcWriter {
         Ok(())
     }
 
-    fn init_group(nc_path: &Path, grp: &mut netcdf::GroupMut, group_name: &str, data_rec: &RunlogDataRec, spectrum: &Spectrum) -> Result<(), GggError> {
+    fn init_group(nc_path: &Path, grp: &mut netcdf::GroupMut, group_name: &str, spectrum: &Spectrum) -> Result<(), GggError> {
         grp.add_dimension(Self::spec_dim(), 0)
         .map_err(|e| GggError::CouldNotWrite { 
             path: nc_path.to_owned(), 
-            reason: format!("Could not create dimension 'spectrum' (unlimited): {e}")
+            reason: format!("Could not create dimension 'spectrum' (unlimited) in '{group_name}': {e}")
         })?;
 
         grp.add_dimension(Self::freq_dim(), spectrum.freq.len())
         .map_err(|e| GggError::CouldNotWrite {
             path: nc_path.to_owned(),
-            reason: format!("Could not add frequency dimension to '{group_name}' group: {e}") 
+            reason: format!("Could not add frequency dimension (unlimited) to '{group_name}' group: {e}") 
         })?;
 
-        let mut freq_var = grp.add_variable::<f32>(Self::freq_dim(), &[Self::freq_dim()])
+        let mut freq_var = grp.add_variable::<f32>(Self::freq_dim(), &[Self::spec_dim(), Self::freq_dim()])
         .map_err(|e| GggError::CouldNotWrite { 
             path: nc_path.to_owned(), 
             reason: format!("Could not create frequency variable in group '{group_name}': {e}") 
-        })?;
-
-        let freq_values = spectrum.freq.as_slice()
-        .ok_or_else(|| GggError::CouldNotWrite { 
-            path: nc_path.to_owned(),
-            reason: format!("Could not convert frequency values from spectrum '{}' to a slice", data_rec.spectrum_name)
-        })?;
-
-        freq_var.put_values(freq_values, None, None)
-        .map_err(|e| GggError::CouldNotWrite { 
-            path: nc_path.to_owned(), 
-            reason: format!("Could not write frequency values to group '{group_name}': {e}") 
         })?;
 
         freq_var.add_attribute("units", "cm-1")
@@ -447,7 +436,8 @@ impl MultipleNcWriter {
             v
         };
 
-        var.put_string(value, Some(&[spec_idx]))
+        let ext: Extents = spec_idx.into();
+        var.put_string(value, ext)
         .map_err(|e| GggError::CouldNotWrite { 
             path: PathBuf::from("?"), 
             reason: format!("Could not write string value to variable '{varname}' in group '{group_name}' at index {spec_idx}: {e}")
@@ -480,14 +470,14 @@ impl NcWriter for MultipleNcWriter {
 
         // Initialize group dimensions here because we need the spectrum for the frequency
         if grp.dimension(Self::freq_dim()).is_none() {
-            Self::init_group(&nc_path, &mut grp, &group_name, data_rec, spectrum)?;
+            Self::init_group(&nc_path, &mut grp, &group_name, spectrum)?;
         }
 
         Self::write_str_var(&mut grp, "spectrum", next_idx, &data_rec.spectrum_name, "Spectrum name")?;
-        Self::write_spectrum_values(&mut grp, data_rec, spectrum, &self.save_file, next_idx, false)
+        Self::write_spectrum_values(&mut grp, data_rec, spectrum, &self.save_file, next_idx, true)
     }
 
-    fn write_0d_var<'f, T: netcdf::Numeric>(nc: &'f mut netcdf::GroupMut, varname: &str, spec_idx: usize, value: T, units: &str, description: &str) 
+    fn write_0d_var<'f, T: netcdf::NcPutGet>(nc: &'f mut netcdf::GroupMut, varname: &str, spec_idx: usize, value: T, units: &str, description: &str) 
     -> Result<netcdf::VariableMut<'f>, GggError> {
         let group_name = nc.name();
 
@@ -518,7 +508,8 @@ impl NcWriter for MultipleNcWriter {
             v
         };
 
-        var.put_value(value, Some(&[spec_idx]))
+        let ext: Extents = spec_idx.into();
+        var.put_value(value, ext)
         .map_err(|e| GggError::CouldNotWrite { 
             path: PathBuf::from("?"), 
             reason: format!("Could not write scalar value to variable '{varname}' in group '{group_name}' at index {spec_idx}: {e}")
@@ -561,7 +552,8 @@ impl NcWriter for MultipleNcWriter {
             reason: format!("Could not convert data for variable '{varname}' at spectrum index {spec_idx} in group '{group_name}' to a slice")
         })?;
 
-        var.put_values(values, Some(&[spec_idx, 0]), None)
+        let ext: Extents = [spec_idx..spec_idx+1, 0..values.len()].into();
+        var.put_values(values, ext)
         .map_err(|e| GggError::CouldNotWrite { 
             path: PathBuf::from("?"),
             reason: format!("Could not write values for variable '{varname}' at spectrum index {spec_idx} in group '{group_name}': {e}")

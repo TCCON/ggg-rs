@@ -11,7 +11,7 @@ approx = "0.5.1"
 chrono = "0.4.23"
 clap = {version = "4", features = ["derive"]}
 ndarray = "0.15"
-netcdf = "0.7"
+netcdf = "0.8"
 # Could move behind a feature
 plotly = { version = "0.8.3", features = ["kaleido"], optional=true }
 

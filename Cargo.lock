@@ -235,6 +235,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "curl-sys"
+version = "0.4.63+curl-8.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "aeb0fef7046022a1e2ad67a004978f0e3cacb9e3123dc62ce768f92197b771dc"
+dependencies = [
+ "cc",
+ "libc",
+ "libz-sys",
+ "openssl-sys",
+ "pkg-config",
+ "vcpkg",
+ "winapi",
+]
+
+[[package]]
 name = "cxx"
 version = "1.0.86"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -671,9 +686,9 @@ dependencies = [
 
 [[package]]
 name = "netcdf"
-version = "0.7.0"
+version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9668c493289156ed0dce9472ea33ab7a6f6dfe4565a8433bd103995f8053b467"
+checksum = "dfea96e04fb6c7cc3e58d735dbf9213e30b7e88aac0349feeab66abbcb826acc"
 dependencies = [
  "bitflags",
  "lazy_static",
@@ -683,23 +698,26 @@ dependencies = [
 
 [[package]]
 name = "netcdf-src"
-version = "0.2.0"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "55951a3f2007bc40b0a35341393170a597d0820d53c2106d312d451615ab0cb7"
+checksum = "9efdec1c75d5b0adad74b499c3d97a3906cedd1a9a0dae02a9b8547baef79ec3"
 dependencies = [
  "cmake",
  "hdf5-sys",
+ "libz-sys",
 ]
 
 [[package]]
 name = "netcdf-sys"
-version = "0.4.0"
+version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f1028362b1f88b5c4bdf3538b202b2c83ab3cc8a5537f6337ac147e6e36dc5f9"
+checksum = "e2dfe2cacf1623a0f51f93d2cfd90386ad40b3daff596f5058ec3037c432c772"
 dependencies = [
+ "curl-sys",
  "hdf5-sys",
  "libz-sys",
  "netcdf-src",
+ "semver",
 ]
 
 [[package]]
@@ -745,6 +763,28 @@ name = "once_cell"
 version = "1.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "86f0b0d4bf799edbc74508c1e8bf170ff5f41238e5f8225603ca7caaae2b7860"
+
+[[package]]
+name = "openssl-src"
+version = "111.25.0+1.1.1t"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3173cd3626c43e3854b1b727422a276e568d9ec5fe8cec197822cf52cfb743d6"
+dependencies = [
+ "cc",
+]
+
+[[package]]
+name = "openssl-sys"
+version = "0.9.88"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c2ce0f250f34a308dcfdbb351f511359857d4ed2134ba715a4eadd46e1ffd617"
+dependencies = [
+ "cc",
+ "libc",
+ "openssl-src",
+ "pkg-config",
+ "vcpkg",
+]
 
 [[package]]
 name = "os_str_bytes"
@@ -955,6 +995,12 @@ name = "scratch"
 version = "1.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ddccb15bcce173023b3fedd9436f882a0739b8dfb45e4f6b6002bee5929f61b2"
+
+[[package]]
+name = "semver"
+version = "1.0.17"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bebd363326d05ec3e2f532ab7660680f3b02130d780c299bca73469d521bc0ed"
 
 [[package]]
 name = "serde"
