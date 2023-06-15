@@ -30,7 +30,8 @@ fn main() {
     let clargs = Cli::parse();
     let runlog = ggg_rs::runlogs::Runlog::open(&clargs.runlog).unwrap();
     if clargs.single_file {
-        let writer = MultipleNcWriter::new_with_default_map(clargs.output, true).unwrap();
+        let runlog_clone = ggg_rs::runlogs::Runlog::open(&clargs.runlog).unwrap();
+        let writer = MultipleNcWriter::new_with_default_map(clargs.output, runlog_clone, true).unwrap();
         writer_loop(writer, runlog);
     } else {
         let writer = IndividualNcWriter::new( clargs.output).unwrap();
@@ -251,6 +252,7 @@ struct SpecGroupDef {
     ifirst: usize,
     ilast: usize,
     delta_nu: f64,
+    max_spec_length: usize,
     group_name: String,
     curr_idx: Cell<usize>
 }
@@ -262,8 +264,14 @@ impl SpecGroupDef {
             .get(&rl_det_code)
             .and_then(|s| Some(s.to_owned()))
             .unwrap_or_else(|| rl_det_code.to_string());
+        let spec_length: usize = ggg_rs::opus::get_spectrum_num_points(&runlog_entry.spectrum_name, runlog_entry.pointer, runlog_entry.bpw)
+            .map_err(|e| GggError::CouldNotOpen { 
+                descr: "binary spectrum".to_owned(), 
+                path: PathBuf::from(&runlog_entry.spectrum_name), 
+                reason: e.to_string()
+            })?.try_into().expect("Cannot fit spectrum length into system usize");
 
-        Ok(Self { detector_code: rl_det_code, ifirst: runlog_entry.ifirst, ilast: runlog_entry.ilast, delta_nu: runlog_entry.delta_nu, group_name, curr_idx: Cell::new(0) })
+        Ok(Self { detector_code: rl_det_code, ifirst: runlog_entry.ifirst, ilast: runlog_entry.ilast, delta_nu: runlog_entry.delta_nu, group_name, max_spec_length: spec_length, curr_idx: Cell::new(0) })
     }
 
     fn get_spectrum_det_code(spectrum_name: &str) -> Result<char, GggError> {
@@ -299,13 +307,12 @@ impl SpecGroupDef {
 
 struct MultipleNcWriter {
     save_file: PathBuf,
-    detector_mapping: HashMap<char, String>,
     group_defs: Vec<SpecGroupDef>,
     nc_file: netcdf::MutableFile
 }
 
 impl MultipleNcWriter {
-    fn new(detector_mapping: HashMap<char, String>, output_file: PathBuf, clobber: bool) -> Result<Self, GggError> {
+    fn new(detector_mapping: HashMap<char, String>, output_file: PathBuf, runlog: Runlog, clobber: bool) -> Result<Self, GggError> {
         if output_file.is_dir() {
             return Err(GggError::CouldNotWrite { path: output_file, reason: "Expected a file, got a path to a directory".to_owned() });
         }
@@ -314,26 +321,28 @@ impl MultipleNcWriter {
             return Err(GggError::CouldNotWrite { path: output_file, reason: "File already exists".to_owned() });
         }
 
-        let nc_file = netcdf::create(&output_file)
+        let mut nc_file = netcdf::create(&output_file)
             .map_err(|e| GggError::CouldNotWrite { 
                 path: output_file.clone(), 
                 reason: format!("Could not create netCDF file: {e}")
             })?;
 
-        Ok(Self { save_file: output_file, detector_mapping, group_defs: Vec::new(), nc_file })
+        let group_defs = Self::make_group_defs(runlog, &detector_mapping, &mut nc_file)?;
+
+        Ok(Self { save_file: output_file, group_defs, nc_file })
     }
 
-    fn new_with_default_map(output_file: PathBuf, clobber: bool) -> Result<Self, GggError> {
+    fn new_with_default_map(output_file: PathBuf, runlog: Runlog, clobber: bool) -> Result<Self, GggError> {
         let mapping = Self::default_mapping();
-        Self::new(mapping, output_file, clobber)
+        Self::new(mapping, output_file, runlog, clobber)
     }
 
-    fn new_with_map_overrides(map_overrides: HashMap<char, String>, output_file: PathBuf, clobber: bool) -> Result<Self, GggError> {
+    fn new_with_map_overrides(map_overrides: HashMap<char, String>, output_file: PathBuf, runlog: Runlog, clobber: bool) -> Result<Self, GggError> {
         let mut mapping = Self::default_mapping();
         for (k, v) in map_overrides.into_iter() {
             mapping.insert(k, v);
         }
-        Self::new(mapping, output_file, clobber)
+        Self::new(mapping, output_file, runlog, clobber)
     }
 
     fn default_mapping() -> HashMap<char, String> {
@@ -346,6 +355,28 @@ impl MultipleNcWriter {
 
     fn spec_dim() -> &'static str {
         "spectrum"
+    }
+
+    fn make_group_defs(runlog: Runlog, detector_mapping: &HashMap<char, String>, nc_file: &mut netcdf::MutableFile) -> Result<Vec<SpecGroupDef>, GggError> {
+        let mut groups: Vec<SpecGroupDef> = Vec::new();
+
+        for data_rec in runlog {
+            let spec_grp = groups.iter_mut().find(|g| g.entry_matches_group(&data_rec).unwrap_or(false));
+            if let Some(spec_grp) = spec_grp {
+                if let Ok(size) = ggg_rs::opus::get_spectrum_num_points(&data_rec.spectrum_name, data_rec.pointer, data_rec.bpw) {
+                    let size: usize = size.try_into().expect("Could not fit number of spectrum points into system usize");
+                    if spec_grp.max_spec_length < size {
+                        spec_grp.max_spec_length = size;
+                    }
+                }
+            }else{
+                let new_group = SpecGroupDef::new(&data_rec, detector_mapping)?;
+                Self::create_group(nc_file, &new_group)?;
+                groups.push(new_group);
+            }
+        }
+
+        Ok(groups)
     }
 
     fn find_spectrum_group(&mut self, runlog_entry: &RunlogDataRec) -> Result<&SpecGroupDef, GggError> {
@@ -362,33 +393,32 @@ impl MultipleNcWriter {
         if let Some(i) = idx {
             Ok(&self.group_defs[i])
         }else{
-            let new_group = SpecGroupDef::new(runlog_entry, &self.detector_mapping)?;
-            self.create_group(&new_group)?;
-            self.group_defs.push(new_group);
-            Ok(self.group_defs.last().unwrap())
+            Err(GggError::NotImplemented(format!("Group for spectrum {} was not created during initialization", runlog_entry.spectrum_name)))
         }
     }
 
-    fn create_group(&mut self, group_def: &SpecGroupDef) -> Result<(), GggError> {
-        let nc_path = self.nc_file.path().unwrap_or_else(|_| PathBuf::from("?"));
+    fn create_group(nc_file: &mut netcdf::MutableFile, group_def: &SpecGroupDef) -> Result<(), GggError> {
+        let nc_path = nc_file.path().unwrap_or_else(|_| PathBuf::from("?"));
         // This creates the new spectrum group, with an unlimited dimension for time so that we can append new spectra.
-        self.nc_file.add_group(&group_def.group_name)
+        let mut grp = nc_file.add_group(&group_def.group_name)
             .map_err(|e| GggError::CouldNotWrite { 
                 path: nc_path.clone(), 
                 reason: format!("Could not create netCDF group {}: {}", group_def.group_name, e) 
             })?;
 
+        Self::init_group(&nc_path, &mut grp, &group_def.group_name, group_def.max_spec_length)?;
+
         Ok(())
     }
 
-    fn init_group(nc_path: &Path, grp: &mut netcdf::GroupMut, group_name: &str, spectrum: &Spectrum) -> Result<(), GggError> {
+    fn init_group(nc_path: &Path, grp: &mut netcdf::GroupMut, group_name: &str, max_spec_length: usize) -> Result<(), GggError> {
         grp.add_dimension(Self::spec_dim(), 0)
         .map_err(|e| GggError::CouldNotWrite { 
             path: nc_path.to_owned(), 
             reason: format!("Could not create dimension 'spectrum' (unlimited) in '{group_name}': {e}")
         })?;
 
-        grp.add_dimension(Self::freq_dim(), spectrum.freq.len())
+        grp.add_dimension(Self::freq_dim(), max_spec_length)
         .map_err(|e| GggError::CouldNotWrite {
             path: nc_path.to_owned(),
             reason: format!("Could not add frequency dimension (unlimited) to '{group_name}' group: {e}") 
@@ -452,7 +482,6 @@ impl NcWriter for MultipleNcWriter {
         // For each entry, check if the spectrum can go in one of the existing groups. If we need to create a group, do so.
         // If there's an issue (i.e. the spectrum should go in a certain group based on its detector code but has a different
         // frequency grid) either crash or skip that spectrum.
-        let nc_path = self.nc_file.path().unwrap_or_else(|_| PathBuf::from("?"));
 
         let (group_name, next_idx) = {
             let grp_def = self.find_spectrum_group(data_rec)?;
@@ -467,11 +496,6 @@ impl NcWriter for MultipleNcWriter {
             .ok_or_else(|| GggError::NotImplemented(
                 format!("Could not get netCDF group '{}' (this should not happen)", &group_name)
             ))?;
-
-        // Initialize group dimensions here because we need the spectrum for the frequency
-        if grp.dimension(Self::freq_dim()).is_none() {
-            Self::init_group(&nc_path, &mut grp, &group_name, spectrum)?;
-        }
 
         Self::write_str_var(&mut grp, "spectrum", next_idx, &data_rec.spectrum_name, "Spectrum name")?;
         Self::write_spectrum_values(&mut grp, data_rec, spectrum, &self.save_file, next_idx, true)

@@ -330,6 +330,7 @@ impl <'p, F: BufRead> DerefMut for FileBuf<'p, F> {
 /// This is meant for files that have at least two numbers in the first line of the file,
 /// representing the number of header lines and number of data columns, respectively, and
 /// has the column names as the last line in the header.
+#[derive(Debug, Clone)]
 pub struct CommonHeader {
     /// The number of header lines in the file, according to the first line
     pub nhead: usize,
@@ -553,6 +554,18 @@ pub fn find_spectrum(specname: &str) -> Result<Option<PathBuf>, GggError> {
     }
 
     return Ok(None);
+}
+
+pub fn find_spectrum_result(spectrum_name: &str) -> Result<PathBuf, GggError> {
+    if let Some(f) = find_spectrum(spectrum_name)? {
+        Ok(f)
+    }else{
+        Err(GggError::CouldNotOpen { 
+            descr: "spectrum".to_owned(), 
+            path: PathBuf::from_str(spectrum_name).unwrap(), 
+            reason: "spectrum not found".to_owned()
+        })
+    }
 }
 
 /// Convert a runlog year, day, and hour value to a proper UTC datetime

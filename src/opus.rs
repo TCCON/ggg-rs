@@ -160,3 +160,17 @@ impl BytesToFloat {
         }
     }
 }
+
+pub fn get_spectrum_num_points(spec_name: &str, pointer: i32, bytes_per_word: i8) -> Result<u64, std::io::Error> {
+    let p = utils::find_spectrum_result(spec_name)
+        .map_err(|_| std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("Unable to find spectrum {spec_name}")
+        ))?;
+    let f = std::fs::File::open(p)?;
+    let meta = f.metadata()?;
+    let file_length = meta.len();
+    let pointer = pointer as u64;
+    let abpw = bytes_per_word.abs() as u64;
+    Ok((file_length - pointer) / abpw)
+}
