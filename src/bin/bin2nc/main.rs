@@ -247,11 +247,9 @@ impl NcWriter for IndividualNcWriter {
 }
 
 
+#[derive(Debug)]
 struct SpecGroupDef {
     detector_code: char,
-    ifirst: usize,
-    ilast: usize,
-    delta_nu: f64,
     max_spec_length: usize,
     group_name: String,
     curr_idx: Cell<usize>
@@ -271,31 +269,22 @@ impl SpecGroupDef {
                 reason: e.to_string()
             })?.try_into().expect("Cannot fit spectrum length into system usize");
 
-        Ok(Self { detector_code: rl_det_code, ifirst: runlog_entry.ifirst, ilast: runlog_entry.ilast, delta_nu: runlog_entry.delta_nu, group_name, max_spec_length: spec_length, curr_idx: Cell::new(0) })
+        Ok(Self { detector_code: rl_det_code, group_name, max_spec_length: spec_length, curr_idx: Cell::new(0) })
     }
 
     fn get_spectrum_det_code(spectrum_name: &str) -> Result<char, GggError> {
-        let rl_det_code = if let Some((stem, _)) = spectrum_name.split_once('.') {
-            stem.chars().last()
-                .ok_or_else(|| GggError::DataError { path: PathBuf::new(), cause: format!("Could not get last character of spectrum stem in {}", spectrum_name) })?
+        // Must use the character position rather than splitting on the period - some Karlrsuhe spectra have an extra
+        // character before the detector for example.
+        if let Some(rl_det_code) = spectrum_name.chars().nth(15) {
+            Ok(rl_det_code)
         }else{
-            return Err(GggError::DataError { path: PathBuf::new(), cause: format!("Could not find '.' to split on in spectrum name: {}", spectrum_name )});
-        };
-
-        Ok(rl_det_code)
+            Err(GggError::DataError { path: PathBuf::new(), cause: format!("Could not get 16th character in spectrum name: {}", spectrum_name )})
+        }
     }
 
     fn entry_matches_group(&self, runlog_entry: &RunlogDataRec) -> Result<bool, GggError> {
         let rl_det_code = Self::get_spectrum_det_code(&runlog_entry.spectrum_name)?;
-        
-        if rl_det_code == self.detector_code && runlog_entry.ifirst == self.ifirst && runlog_entry.ilast == self.ilast && runlog_entry.delta_nu == self.delta_nu {
-            Ok(true)
-        }else if rl_det_code == self.detector_code {
-            // Inconsistent detector code and frequency window
-            Err(GggError::DataError { path: PathBuf::new(), cause: format!("Spectrum {} has a different frequency window than other spectra with the same detector code", runlog_entry.spectrum_name) })
-        }else{
-            Ok(false)
-        }
+        Ok(rl_det_code == self.detector_code)
     }
 
     fn get_next_index(&self) -> usize {
@@ -371,11 +360,13 @@ impl MultipleNcWriter {
                 }
             }else{
                 let new_group = SpecGroupDef::new(&data_rec, detector_mapping)?;
-                Self::create_group(nc_file, &new_group)?;
                 groups.push(new_group);
             }
         }
-
+        
+        for group in groups.iter() {
+            Self::create_group(nc_file, group)?;
+        }
         Ok(groups)
     }
 
