@@ -161,6 +161,19 @@ impl BytesToFloat {
     }
 }
 
+/// Calculates the number of points in an Opus binary spectrum
+/// 
+/// # Parameters
+/// * `spec_name` - the file name of the spectrum. The path is not needed, the paths
+///   configued in `$GGGPATH/config/data_part.lst` are searched to find this spectrum.
+/// * `pointer` - the pointer value from the runlog data record for this spectrum.
+/// * `bytes_per_word` - the BPW value from the runlog data record for this spectrum.
+/// 
+/// # Returns
+/// The number of data points expected from the spectrum. It will return an error if:
+/// * it cannot find the spectrum,
+/// * it cannot open the spectrum file, or
+/// * it cannot get the size of the spectrum file.
 pub fn get_spectrum_num_points(spec_name: &str, pointer: i32, bytes_per_word: i8) -> Result<u64, std::io::Error> {
     let p = utils::find_spectrum_result(spec_name)
         .map_err(|_| std::io::Error::new(

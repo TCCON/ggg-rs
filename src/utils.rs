@@ -523,6 +523,10 @@ pub fn read_common_header<'p, F: BufRead>(f: &mut FileBuf<'p, F>) -> Result<Comm
 /// # Difference to Fortran
 /// Unlike the Fortran subroutine that performs this task, this function does not require
 /// that the paths in `data_part.lst` end in a path separator.
+/// 
+/// # See also
+/// * [`find_spectrum_result`] - a version of this function that returns a `Result<PathBuf>`
+///   instead of `Result<Option<PathBuf>>`, making a missing spectrum an error.
 pub fn find_spectrum(specname: &str) -> Result<Option<PathBuf>, GggError> {
     let gggpath = get_ggg_path()?;
     let data_partition_file = gggpath.join("config/data_part.lst");
@@ -556,6 +560,19 @@ pub fn find_spectrum(specname: &str) -> Result<Option<PathBuf>, GggError> {
     return Ok(None);
 }
 
+/// Find a spectrum in one of the directories listed in the data_part.lst file.
+/// 
+/// This searches each (uncommented) directory in `$GGGPATH/config/data_part.lst`
+/// until it finds a spectrum with file name `specname` or it runs out of directories.
+/// 
+/// # Returns
+/// If the spectrum was found, then an `Ok(p)` is returned, where `p` is the path
+/// to the spectrum. An `Err` is returned if the spectrum is not found or if any of
+/// the error conditions in [`find_spectrum`] occur.
+/// 
+/// # See also
+/// * [`find_spectrum`] - a similar function that returns an `Ok(None)` if a spectrum
+///   could not be found, rather than an error.
 pub fn find_spectrum_result(spectrum_name: &str) -> Result<PathBuf, GggError> {
     if let Some(f) = find_spectrum(spectrum_name)? {
         Ok(f)
