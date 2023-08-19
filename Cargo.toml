@@ -14,9 +14,11 @@ ndarray = "0.15"
 netcdf = "0.8"
 # Could move behind a feature
 plotly = { version = "0.8.3", features = ["kaleido"], optional=true }
+strum = { version = "0.25.0", features = ["derive"] }
+thiserror = "1.0.47"
 
 [features]
-default = ["plotting"]
+default = ["plotting", "static"]
 static = ["netcdf/static"]
 plotting = ["dep:plotly"]
 
@@ -28,6 +30,9 @@ name = "bin2nc"
 [[bin]]
 name = "plot_spt"
 required-features = ["plotting"]
+
+[[bin]]
+name = "write_private_netcdf"
 
 #[[bin]]
 #name = "plot_opus_spectra"

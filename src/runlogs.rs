@@ -8,6 +8,9 @@ pub const NUM_RUNLOG_COLS: usize = 36;
 /// A struct representing one line of a GGG2020 runlog.
 #[derive(Debug)]
 pub struct RunlogDataRec {
+    /// The line number in the file
+    file_line_num: usize,
+
     /// The name of the spectrum
     pub spectrum_name: String,
     /// The year the data is from
@@ -80,6 +83,20 @@ pub struct RunlogDataRec {
     pub wavtkr: f64,
     /// Airmass-independent path length in kilometers
     pub aipl: f64
+}
+
+impl RunlogDataRec {
+    pub fn file_line_num(&self) -> usize {
+        self.file_line_num
+    }
+
+    pub fn zpd_time(&self) -> Option<chrono::NaiveDateTime> {
+        let h = self.hour.floor();
+        let m = (self.hour.fract() * 60.0).floor();
+        let s = (self.hour.fract() * 60.0 - m).floor() * 60.0;
+        chrono::NaiveDate::from_yo_opt(self.year, self.day as u32)?
+            .and_hms_opt(h as u32, m as u32, s as u32)
+    }
 }
 
 /// An iterator over lines in a runlog.
@@ -205,8 +222,11 @@ impl<'p> Runlog<'p> {
             });
         }
 
+        let file_line_num = self.curr_line();
+
         // TODO: implement reading GGG files as custom serde
         Ok(Some(RunlogDataRec { 
+            file_line_num,
             spectrum_name: parts[0].to_owned(), 
             year: parse(self, parts[1], "year")?, 
             day: parse(self, parts[2], "day")?, 
@@ -297,7 +317,9 @@ impl<'p> FallibleRunlog<'p> {
         Ok(Self { runlog: rl })
     }
 
-    // TODO: implement a non-consuming iteration so we can use curr_line()?
+    pub fn into_line_iter(self) -> FallibleRunlogLineIter<'p> {
+        FallibleRunlogLineIter { runlog: self.runlog }
+    }
 }
 
 impl<'p> From<Runlog<'p>> for FallibleRunlog<'p> {
@@ -311,5 +333,21 @@ impl<'p> Iterator for FallibleRunlog<'p> {
 
     fn next(&mut self) -> Option<Self::Item> {
         self.runlog.next_data_record().transpose()
+    }
+}
+
+
+pub struct FallibleRunlogLineIter<'p> {
+    runlog: Runlog<'p>
+}
+
+impl <'p> Iterator for FallibleRunlogLineIter<'p> {
+    type Item = (usize, Result<RunlogDataRec, GggError>);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let rec = self.runlog.next_data_record().transpose()?;
+        // TODO: verify that this returns the correct line (i.e. doesn't need to be called first)
+        let line_num = self.runlog.curr_line();
+        Some((line_num, rec))
     }
 }
