@@ -1,7 +1,7 @@
 //! Utilities for reading runlogs and iterating over their data records.
 use std::{path::Path, io::BufReader, fs::File, str::FromStr};
 
-use crate::utils::{self, GggError};
+use crate::{utils::{self, GggError}, error::HeaderError};
 
 pub const NUM_RUNLOG_COLS: usize = 36;
 
@@ -165,11 +165,11 @@ impl Runlog {
         let mut rl = utils::FileBuf::open(runlog)?;
         let header = utils::read_common_header(&mut rl)?;
         if header.ncol != NUM_RUNLOG_COLS {
-            return Err(GggError::HeaderError { 
-                path: runlog.to_owned(), 
+            return Err(HeaderError::ParseError { 
+                location: runlog.into(), 
                 cause: format!("Number of columns specified in the header of runlog {} is not the expected number, {}",
                                header.ncol, NUM_RUNLOG_COLS)
-            });
+            }.into());
         }
     
         // At this point, the file handle will be pointing to the first line of data in the runlog
