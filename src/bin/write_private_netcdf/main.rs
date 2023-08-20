@@ -1,9 +1,18 @@
 mod error;
+mod logging;
 mod interface;
 mod sources;
 mod setup;
 
+use std::path::PathBuf;
+
+use clap::Args;
+use log::info;
+
 fn main() {
+    logging::init_logging(&PathBuf::from("."), log::LevelFilter::Debug);
+    info!("Logging initialized");
+
     // Basic workflow:
     //  1. Generate the list of `DataSource` instances; this will need to be semi-dynamic (i.e. read from the multiggg file)
     //  2. Get the list of available dimensions from these instances, and ensure there are no duplicates
