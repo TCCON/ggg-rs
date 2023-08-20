@@ -15,7 +15,13 @@ itertools = "0.11.0"
 log = "0.4.20"
 log4rs = "1.2.0"
 ndarray = "0.15"
-netcdf = "0.8"
+# netcdf = "0.8"
+# TODO: open an issue on the netCDF repo with the change suggested for add_variable_with_type:
+# for some reason, the lifetime bounds are defined differently, which means passing a GroupMut
+# into a function without lifetime bounds (`&'f mut netcdf::GroupMut<'g> where f': g'`) won't 
+# work with add_variable_with type. Worse, putting those type bounds prevents using the group
+# reference multiple times in a for loop.
+netcdf = {git = "https://github.com/joshua-laughner/netcdf-rs.git", branch = "suggested-lifetime-bounds-change"}
 # Could move behind a feature
 plotly = { version = "0.8.3", features = ["kaleido"], optional=true }
 regex = "1.9.3"

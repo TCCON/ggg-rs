@@ -7,6 +7,7 @@ use crate::error::HeaderError;
 use crate::utils::{get_nhead_ncol, FileBuf};
 
 
+static PROGRAM_VERSION_REGEX: OnceLock<regex::Regex> = OnceLock::new();
 static INPUT_MD5_REGEX: OnceLock<regex::Regex> = OnceLock::new();
 
 pub struct ColInputData {
@@ -30,9 +31,10 @@ impl FromStr for ColInputData {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let re = INPUT_MD5_REGEX.get_or_init(|| {
-            regex::Regex::new("(?<md5>0-9a-fA-F{32})  (?<path>.+)").unwrap()
+            regex::Regex::new("(?<md5>[0-9a-fA-F]{32})  (?<path>.+)").unwrap()
         });
 
+        let s = s.trim();
         let caps = re.captures(s)
             .ok_or_else(|| HeaderError::ParseError { 
                 location: s.into(), 
@@ -57,22 +59,24 @@ impl FromStr for ProgramVersion {
     type Err = HeaderError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let (program, version, date, authors) = s.split_whitespace()
-            .collect_tuple()
-            .ok_or_else(|| HeaderError::ParseError {location: s.into(), cause: "Expected 4 space-delimited strings".to_string()})?;
+        let re = PROGRAM_VERSION_REGEX.get_or_init(|| 
+            regex::Regex::new(r"(?<program>\w+)\s+(?<version>[Vv][Ee][Rr][Ss][Ii][Oo][Nn]\s+[\d\.]+)\s+(?<date>[\d\-]+)\s+(?<authors>[\w\,]+)")
+                .expect("Could not compile program version regex")
+        );
 
-        // This takes something like "Version 5.26" and converts to just "5.26"
-        let version = if version.to_ascii_lowercase().contains("version") {
-            version.to_ascii_lowercase().replace("version", "")
-        } else {
-            version.to_string()
-        }.trim().to_string();
+        let s = s.trim();
+
+        let caps = re.captures(s)
+            .ok_or_else(|| HeaderError::ParseError { 
+                location: s.into(), 
+                cause: "Did not match expected format of program name, version, date, and authors".to_string()
+            })?;
 
         Ok(Self { 
-            program: program.trim().to_string(),
-            version, 
-            date: date.to_string(),
-            authors: authors.to_string() 
+            program: caps["program"].to_string(),
+            version: caps["version"].to_owned(), 
+            date: caps["date"].to_string(),
+            authors: caps["authors"].to_string()
         })
     }
 }
