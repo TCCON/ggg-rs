@@ -90,12 +90,13 @@ impl RunlogDataRec {
         self.file_line_num
     }
 
-    pub fn zpd_time(&self) -> Option<chrono::NaiveDateTime> {
+    pub fn zpd_time(&self) -> Option<chrono::DateTime<chrono::Utc>> {
         let h = self.hour.floor();
         let m = (self.hour.fract() * 60.0).floor();
         let s = (self.hour.fract() * 60.0 - m).floor() * 60.0;
-        chrono::NaiveDate::from_yo_opt(self.year, self.day as u32)?
-            .and_hms_opt(h as u32, m as u32, s as u32)
+        let dt = chrono::NaiveDate::from_yo_opt(self.year, self.day as u32)?
+            .and_hms_opt(h as u32, m as u32, s as u32)?;
+        Some(chrono::DateTime::from_utc(dt, chrono::Utc))
     }
 }
 
@@ -141,13 +142,13 @@ impl RunlogDataRec {
 /// ```
 /// 
 /// Alternatively, use a [`FallibleRunlog`] instead.
-pub struct Runlog<'p> {
+pub struct Runlog {
     pub header: utils::CommonHeader,
-    rl_handle: utils::FileBuf<'p, BufReader<File>>,
+    rl_handle: utils::FileBuf<BufReader<File>>,
     data_line_index: usize
 }
 
-impl<'p> Runlog<'p> {
+impl Runlog {
     /// Open a runlog file as a `Runlog` instance.
     /// 
     /// # Parameters
@@ -160,7 +161,7 @@ impl<'p> Runlog<'p> {
     /// * the file could not be opened,
     /// * the header could not be parsed,
     /// * the number of columns specified in the header does not match the expected number, [`NUM_RUNLOG_COLS`]
-    pub fn open(runlog: &'p Path) -> Result<Runlog<'p>, GggError> {
+    pub fn open(runlog: &Path) -> Result<Runlog, GggError> {
         let mut rl = utils::FileBuf::open(runlog)?;
         let header = utils::read_common_header(&mut rl)?;
         if header.ncol != NUM_RUNLOG_COLS {
@@ -193,7 +194,7 @@ impl<'p> Runlog<'p> {
     /// * the number of elements in the line does not match the number of columns,
     /// * any of the elements in the line could not be converted to the proper Rust type
     pub fn next_data_record(&mut self) -> Result<Option<RunlogDataRec>, GggError> {
-        fn parse<'r, T: FromStr>(rl: &mut Runlog<'r>, s: &str, field: &str) -> Result<T, GggError> {
+        fn parse<'r, T: FromStr>(rl: &mut Runlog, s: &str, field: &str) -> Result<T, GggError> {
             match s.parse::<T>() {
                 Ok(v) => Ok(v),
                 Err(_) => {
@@ -267,7 +268,7 @@ impl<'p> Runlog<'p> {
     }
 }
 
-impl<'p> Iterator for Runlog<'p> {
+impl Iterator for Runlog {
     type Item = RunlogDataRec;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -302,33 +303,33 @@ impl<'p> Iterator for Runlog<'p> {
 ///     }
 /// }
 /// ```
-pub struct FallibleRunlog<'p> {
-    runlog: Runlog<'p>
+pub struct FallibleRunlog {
+    runlog: Runlog
 }
 
-impl<'p> FallibleRunlog<'p> {
+impl FallibleRunlog {
     /// Open a runlog file as a `FallibleRunlog` iterator.
     /// 
     /// # Returns
     /// A [`Result`] containing the `FallibleRunlog` iterator. An error is returned for the same
     /// reasons as [`Runlog::open`].
-    pub fn open(runlog: &'p Path) -> Result<FallibleRunlog<'p>, GggError> {
+    pub fn open(runlog: &Path) -> Result<FallibleRunlog, GggError> {
         let rl = Runlog::open(runlog)?;
         Ok(Self { runlog: rl })
     }
 
-    pub fn into_line_iter(self) -> FallibleRunlogLineIter<'p> {
+    pub fn into_line_iter(self) -> FallibleRunlogLineIter {
         FallibleRunlogLineIter { runlog: self.runlog }
     }
 }
 
-impl<'p> From<Runlog<'p>> for FallibleRunlog<'p> {
-    fn from(rl: Runlog<'p>) -> Self {
+impl<'p> From<Runlog> for FallibleRunlog {
+    fn from(rl: Runlog) -> Self {
         Self { runlog: rl }
     }
 }
 
-impl<'p> Iterator for FallibleRunlog<'p> {
+impl Iterator for FallibleRunlog {
     type Item = Result<RunlogDataRec, GggError>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -337,11 +338,11 @@ impl<'p> Iterator for FallibleRunlog<'p> {
 }
 
 
-pub struct FallibleRunlogLineIter<'p> {
-    runlog: Runlog<'p>
+pub struct FallibleRunlogLineIter {
+    runlog: Runlog
 }
 
-impl <'p> Iterator for FallibleRunlogLineIter<'p> {
+impl Iterator for FallibleRunlogLineIter {
     type Item = (usize, Result<RunlogDataRec, GggError>);
 
     fn next(&mut self) -> Option<Self::Item> {

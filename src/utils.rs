@@ -9,6 +9,7 @@ use std::path::{PathBuf, Path};
 use std::str::FromStr;
 
 use chrono::TimeZone;
+use error_stack::IntoReport;
 
 
 /// Standard error type for all GGG functions
@@ -41,6 +42,7 @@ pub enum GggError {
     NotImplemented(String)
 }
 
+// TODO: break into smaller errors
 impl Display for GggError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -245,12 +247,12 @@ pub fn get_ggg_path() -> Result<PathBuf, GggError> {
 /// 
 /// This struct also implements dereferencing to the contained [`BufRead`] object. This means that you can call
 /// any [`BufRead`] methods, such as `read_line` directly on this struct if desired.
-pub struct FileBuf<'p, F: BufRead> {
+pub struct FileBuf<F: BufRead> {
     reader: F,
-    pub path: &'p Path
+    pub path: PathBuf
 }
 
-impl<'p> FileBuf<'p, BufReader<File>> {
+impl FileBuf<BufReader<File>> {
     /// Open a file in buffered mode.
     /// 
     /// This will create a `FileBuf` that uses a [`BufReader<File>`] internally.
@@ -259,15 +261,16 @@ impl<'p> FileBuf<'p, BufReader<File>> {
     /// A [`Result`] with the `FileBuf` instance. An error is returned if the file could
     /// not be opened by `std::fs::File::open`. The error from that method will be displayed
     /// as the `cause` string in the returned [`GggError::CouldNotOpen`].
-    pub fn open(file: &'p Path) -> Result<Self, GggError> {
-        let f = File::open(file)
-            .or_else(|e|  Err(GggError::CouldNotOpen { descr: "file".to_owned(), path: file.to_owned(), reason: e.to_string() }))?;
+    pub fn open<P: AsRef<Path>>(file: P) -> Result<Self, GggError> {
+        let path = file.as_ref();
+        let f = File::open(path)
+            .or_else(|e|  Err(GggError::CouldNotOpen { descr: "file".to_owned(), path: path.to_owned(), reason: e.to_string() }))?;
         let r = BufReader::new(f);
-        Ok(Self { reader: r, path: file })
+        Ok(Self { reader: r, path: path.to_owned() })
     }
 }
 
-impl <'p, F: BufRead> FileBuf<'p, F> {
+impl <F: BufRead> FileBuf<F> {
     /// Read and return one line from the header of a GGG file.
     /// 
     /// # Returns
@@ -310,7 +313,7 @@ impl <'p, F: BufRead> FileBuf<'p, F> {
     }
 }
 
-impl<'p, F: BufRead> Deref for FileBuf<'p, F> {
+impl<F: BufRead> Deref for FileBuf<F> {
     type Target = F;
 
     fn deref(&self) -> &Self::Target {
@@ -318,7 +321,7 @@ impl<'p, F: BufRead> Deref for FileBuf<'p, F> {
     }
 }
 
-impl <'p, F: BufRead> DerefMut for FileBuf<'p, F> {
+impl <F: BufRead> DerefMut for FileBuf<F> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.reader
     }
@@ -374,7 +377,7 @@ pub struct CommonHeader {
 /// # See also
 /// * [`get_nhead_ncol`] - shortcut to get the first two numbers (number of header lines and number of data columns)
 /// * [`get_nhead`] - shortcut to get the first numbers (number of header lines)
-pub fn get_file_shape_info<'p, F: BufRead>(f: &mut FileBuf<'p, F>, min_numbers: usize) -> Result<Vec<usize>, GggError> {
+pub fn get_file_shape_info<F: BufRead>(f: &mut FileBuf<F>, min_numbers: usize) -> Result<Vec<usize>, GggError> {
     let mut buf = String::new();
     f.read_line(&mut buf)
         .or_else(|e| Err(GggError::CouldNotRead { path: f.path.to_owned(), reason: e.to_string() }))?;
@@ -412,7 +415,7 @@ pub fn get_file_shape_info<'p, F: BufRead>(f: &mut FileBuf<'p, F>, min_numbers: 
 /// # See also
 /// * [`get_file_shape_info`] - get an arbitrary count of numbers parsed from the first line of a file
 /// * [`get_nhead`] - shortcut to get the first numbers (number of header lines)
-pub fn get_nhead_ncol<'p, F: BufRead>(f: &mut FileBuf<'p, F>) -> Result<(usize, usize), GggError> {
+pub fn get_nhead_ncol<F: BufRead>(f: &mut FileBuf<F>) -> Result<(usize, usize), GggError> {
     let nums = get_file_shape_info(f, 2)?;
     // Because get_file_shape_info checks the length of nums, we know there's at least two values
     Ok((nums[0], nums[1]))
@@ -436,7 +439,7 @@ pub fn get_nhead_ncol<'p, F: BufRead>(f: &mut FileBuf<'p, F>) -> Result<(usize, 
 /// # See also
 /// * [`get_file_shape_info`] - get an arbitrary count of numbers parsed from the first line of a file
 /// * [`get_nhead_ncol`] - shortcut to get the first two numbers (number of header lines and number of data columns)
-pub fn get_nhead<'p, F: BufRead>(f: &mut FileBuf<'p, F>) -> Result<usize, GggError> {
+pub fn get_nhead<F: BufRead>(f: &mut FileBuf<F>) -> Result<usize, GggError> {
     let nums = get_file_shape_info(f, 1)?;
     // Because get_file_shape_info checks the length of nums, we know there's at least one value
     Ok(nums[0])
@@ -464,7 +467,7 @@ pub fn get_nhead<'p, F: BufRead>(f: &mut FileBuf<'p, F>) -> Result<usize, GggErr
 /// (error variant = [`GggError::HeaderError`])
 /// * The number of column names does not match the number of columns listed in the first line (error variant = 
 /// [`GggError::HeaderError`])
-pub fn read_common_header<'p, F: BufRead>(f: &mut FileBuf<'p, F>) -> Result<CommonHeader, GggError> {
+pub fn read_common_header<F: BufRead>(f: &mut FileBuf<F>) -> Result<CommonHeader, GggError> {
     let (mut nhead, ncol) = get_nhead_ncol(f)?;
     // We've already read one header line
     nhead -= 1;
@@ -591,7 +594,9 @@ pub fn find_spectrum_result(spectrum_name: &str) -> Result<PathBuf, GggError> {
 /// day of year accounts for leap years (i.e. Mar 1 is DOY 60 on non-leap years and DOY 61 on leap years)
 /// and the UTC hour has a decimal component that provides the minutes and seconds. This function converts
 /// those values into a [`chrono::DateTime`] with the UTC timezone.
+#[deprecated = "use the zpd_time method on RunlogRecord instead"]
 pub fn runlog_ydh_to_datetime(year: i32, day_of_year: i32, utc_hour: f64) -> chrono::DateTime<chrono::Utc> {
+    // TODO: verify zpd_time on RunlogRecord gives the same output as this
     let ihours = utc_hour.floor();
     let iminutes = ((utc_hour - ihours) * 60.0).floor();
     let iseconds = (((utc_hour - ihours) * 60.0 - iminutes) * 60.0).floor();

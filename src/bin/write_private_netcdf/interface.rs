@@ -1,5 +1,8 @@
 use std::path::PathBuf;
 
+use chrono::{NaiveDateTime, DateTime, Utc};
+use ndarray::Array1;
+
 #[derive(Debug, thiserror::Error)]
 pub enum TranscriptionError {
     #[error("Error reading file {}: {cause}", file.display())]
@@ -20,8 +23,8 @@ pub enum TranscriptionError {
 /// possibility of an error. However, it may error while transcribing the
 /// data from 
 pub trait DataSource {
-    fn provided_dimensions(&self) -> &[Dimension];
-    fn required_dimensions(&self) -> &[&str];
+    fn provided_dimensions(&self) -> &[DimensionWithValues];
+    fn required_dimensions(&self) -> &[Dimension];
     fn required_groups(&self) -> &[DataGroup];
     fn variable_names(&self) -> &[String];
     fn write_variables(&mut self, nc_grp: &mut netcdf::GroupMut, group: DataGroup) -> Result<(), TranscriptionError>;
@@ -67,97 +70,56 @@ impl DataGroup {
 
 #[derive(Debug, thiserror::Error)]
 pub enum DimensionError {
-    #[error("Source file provided the wrong type for dimension '{dimname}', expected {expected}, got {got}")]
-    WrongType{dimname: String, expected: DimensionType, got: DimensionType},
+    
 }
 
-pub struct Dimension {
-    /// The name to give the dimension and its corresponding variable
-    name: String,
-
-    /// The array of values that make up this dimension
-    values: DimensionValues,
-
-    /// The list of attributes to write to this dimension's variable
-    attributes: Vec<(String, netcdf::AttrValue)>,
-
-    /// Whether this dimension should be written at the start of the netCDF
-    /// file (if it is needed) or wait until the first time it is required
-    write_at_start: bool,
-
-    /// Whether this dimension has been written to the netCDF file yet
-    written: bool,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Dimension {
+    Time,
+    PriorTime,
+    PriorAltitude,
+    CellIndex,
+    SpectrumNameLength,
+    AkAltitude,
+    AkSlantXgasBin,
+    StringLength(usize)
 }
 
-impl Dimension {
-    pub fn new(name: String, values: DimensionValues, attributes: Vec<(String, netcdf::AttrValue)>, write_at_start: bool) -> Self {
-        Self { name, values, attributes, write_at_start, written: false }
-    }
+pub enum DimensionWithValues {
+    Time(Array1<DateTime<Utc>>, Array1<String>), 
+    PriorTime(Array1<NaiveDateTime>),
+    PriorAltitude(Array1<f32>),
+    CellIndex,
+    SpectrumNameLength(usize),
+    AkAltitude(Array1<f32>),
+    AkSlantXgasBin,
+    StringLength(usize)
+}
 
-    pub fn new_time(name: String, values: DimensionValues, write_at_start: bool) -> Self {
-        if values.is_datetime() {
-            let attributes = vec![
-                ("units".to_string(), netcdf::AttrValue::Str("seconds since 1970-01-01 00:00:00".to_string())),
-                ("calendar".to_string(), netcdf::AttrValue::Str("gregorian".to_string()))
-            ];
-
-            Self { 
-                name,
-                values,
-                attributes,
-                write_at_start,
-                written: false
-            }
-        } else {
-            panic!("Cannot call Dimension::new_time with values not of variant DimensionValue::DateTime")
+impl DimensionWithValues {
+    pub fn len(&self) -> usize {
+        match self {
+            DimensionWithValues::Time(t, _) => t.len(),
+            DimensionWithValues::PriorTime(t) => t.len(),
+            DimensionWithValues::PriorAltitude(alt) => alt.len(),
+            DimensionWithValues::CellIndex => 2,
+            DimensionWithValues::SpectrumNameLength(n) => *n,
+            DimensionWithValues::AkAltitude(alt) => alt.len(),
+            DimensionWithValues::AkSlantXgasBin => 15,
+            DimensionWithValues::StringLength(n) => *n,
         }
     }
-    /// Returns the indices to copy from a data source along the dimension
-    /// 
-    /// This is used to match up data from a source file to a defined dimension in the
-    /// netCDF file, e.g. spectrum name. Given the values of the dimension in the source
-    /// file, the returned `Vec` contains the indices for that dimension in the order the
-    /// should be copied to the netCDF file. An index may be `None`, indicating that no
-    /// value in `file_dim_values` matched the value for that position, and writing to
-    /// that position should be skipped.
-    pub fn indices_to_copy(&self, file_dim_values: &DimensionValues) -> Result<Vec<Option<usize>>, DimensionError> {
-        todo!()
-    }
 
-    /// Write the dimension's values to the provided netCDF variable
-    pub fn write_values(&self, nc_var: &mut netcdf::VariableMut) -> Result<(), DimensionError> {
-        todo!()
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, strum::Display)]
-pub enum DimensionType {
-    UInt32,
-    UInt64,
-    Int32,
-    Int64,
-    Float32,
-    Float64,
-    String,
-}
-
-pub enum DimensionValues {
-    UInt32(ndarray::Array1<u32>),
-    UInt64(ndarray::Array1<u64>),
-    Int32(ndarray::Array1<i32>),
-    Int64(ndarray::Array1<i64>),
-    Float32(ndarray::Array1<f32>),
-    Float64(ndarray::Array1<f32>),
-    String(ndarray::Array1<String>),
-    DateTime(ndarray::Array1<chrono::NaiveDateTime>)
-}
-
-impl DimensionValues {
-    fn is_datetime(&self) -> bool {
-        if let Self::DateTime(_) = self {
-            true
-        } else {
-            false
+    pub fn name(&self) -> String {
+        match self {
+            DimensionWithValues::Time(_, _) => "time".to_string(),
+            DimensionWithValues::PriorTime(_) => "prior_time".to_string(),
+            DimensionWithValues::PriorAltitude(_) => "prior_altitude".to_string(),
+            DimensionWithValues::CellIndex => "cell_index".to_string(),
+            DimensionWithValues::SpectrumNameLength(_) => "specname".to_string(),
+            DimensionWithValues::AkAltitude(_) => "ak_altitude".to_string(),
+            DimensionWithValues::AkSlantXgasBin => "ak_slant_xgas_bin".to_string(),
+            DimensionWithValues::StringLength(n) => format!("a{n}"),
         }
     }
 }
