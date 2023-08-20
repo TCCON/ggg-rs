@@ -10,6 +10,7 @@ use std::str::FromStr;
 
 use chrono::TimeZone;
 
+use crate::error::HeaderError;
 
 /// Standard error type for all GGG functions
 #[derive(Debug)]
@@ -33,7 +34,7 @@ pub enum GggError {
     /// properly *or* there is some inconsistency (e.g. different number of columns given in the first line of the
     /// file from the number of columns actually in the file). `path` must be the path to the problematic file and
     /// `cause` a desciption of the problem.
-    HeaderError{path: PathBuf, cause: String},
+    HeaderError(HeaderError), // TODO: replace instances of this with error_stack reports? Or is this better in a library?
     /// Used for problems with the format of the data in a file, usually meaning that it could not be converted
     /// to the proper type. `path` must be the path to the problematic file and `cause` a description of the problem.
     DataError{path: PathBuf, cause: String},
@@ -59,8 +60,8 @@ impl Display for GggError {
             Self::CouldNotWrite {path, reason} => {
                 write!(f, "Could not write to {} because: {reason}", path.display())
             },
-            Self::HeaderError { path, cause } => {
-                write!(f, "Error in header format of {}: {cause}", path.display())
+            Self::HeaderError(err) => {
+                write!(f, "{err}")
             },
             Self::DataError { path, cause } => {
                 write!(f, "Error in data format of {}: {cause}", path.display())
@@ -69,6 +70,12 @@ impl Display for GggError {
                 write!(f, "Not implemented: {case}")
             }
         }
+    }
+}
+
+impl From<HeaderError> for GggError {
+    fn from(value: HeaderError) -> Self {
+        Self::HeaderError(value)
     }
 }
 
@@ -91,6 +98,7 @@ impl GggError {
     ///     |e| Err(e.with_path(path))
     /// ).unwrap_err();
     /// ```
+    #[deprecated = "if with_path is needed, consider using error_stack Reports instead"]
     pub fn with_path(self, new_path: PathBuf) -> Self {
         match self {
             Self::CouldNotOpen { descr, path: _, reason } => {
@@ -98,9 +106,6 @@ impl GggError {
             },
             Self::CouldNotRead { path: _, reason } => {
                 Self::CouldNotRead { path: new_path, reason }
-            },
-            Self::HeaderError { path: _, cause } => {
-                Self::HeaderError { path: new_path, cause }
             },
             Self::DataError { path: _, cause } => {
                 Self::DataError { path: new_path, cause }
@@ -273,10 +278,10 @@ impl <'p, F: BufRead> FileBuf<'p, F> {
     /// # Returns
     /// A [`Result`] with the line as an owned [`String`]. If an error occured, the error
     /// message will indicate that it occurred while reading a header line.
-    pub fn read_header_line(&mut self) -> Result<String, GggError> {
+    pub fn read_header_line(&mut self) -> Result<String, HeaderError> {
         let mut buf = String::new();
         self.read_line(&mut buf)
-            .or_else(|e| Err(GggError::CouldNotRead { path: self.path.to_owned(), reason: format!("{e} (while reading the header)") }))?;
+            .or_else(|e| Err(HeaderError::CouldNotRead { location: self.path.into(), cause: e.to_string() }))?;
         Ok(buf)
     }
 
@@ -374,20 +379,22 @@ pub struct CommonHeader {
 /// # See also
 /// * [`get_nhead_ncol`] - shortcut to get the first two numbers (number of header lines and number of data columns)
 /// * [`get_nhead`] - shortcut to get the first numbers (number of header lines)
-pub fn get_file_shape_info<'p, F: BufRead>(f: &mut FileBuf<'p, F>, min_numbers: usize) -> Result<Vec<usize>, GggError> {
+pub fn get_file_shape_info<'p, F: BufRead>(f: &mut FileBuf<'p, F>, min_numbers: usize) -> Result<Vec<usize>, HeaderError> {
     let mut buf = String::new();
     f.read_line(&mut buf)
-        .or_else(|e| Err(GggError::CouldNotRead { path: f.path.to_owned(), reason: e.to_string() }))?;
+        .or_else(|e| Err(HeaderError::CouldNotRead { location: f.path.into(), cause: e.to_string() }))?;
 
     let mut numbers = vec![];
     for (i, s) in buf.trim().split_whitespace().enumerate() {
-        numbers.push(
-            s.parse::<usize>().or_else(|_| Err(GggError::HeaderError { path: f.path.to_owned(), cause: format!("Could not parse number at position {}: {s}", i+1) }))?
-        )
+        let val: usize = s.parse().map_err(|_| {
+            // let loc = FileLocation::new(Some(f.path), None, None);
+            HeaderError::ParseError { location: f.path.into(), cause: format!("Could not parse number at position {}: {s}", i+1) }
+        })?;
+        numbers.push(val);
     }
 
     if numbers.len() < min_numbers {
-        return Err(GggError::HeaderError { path: f.path.to_owned(), cause: format!("Expected at least {min_numbers} numbers, found {}", numbers.len()) })
+        return Err(HeaderError::ParseError { location: f.path.into(), cause: format!("Expected at least {min_numbers} numbers, found {}", numbers.len()) });
     }
 
     Ok(numbers)
@@ -412,7 +419,7 @@ pub fn get_file_shape_info<'p, F: BufRead>(f: &mut FileBuf<'p, F>, min_numbers: 
 /// # See also
 /// * [`get_file_shape_info`] - get an arbitrary count of numbers parsed from the first line of a file
 /// * [`get_nhead`] - shortcut to get the first numbers (number of header lines)
-pub fn get_nhead_ncol<'p, F: BufRead>(f: &mut FileBuf<'p, F>) -> Result<(usize, usize), GggError> {
+pub fn get_nhead_ncol<'p, F: BufRead>(f: &mut FileBuf<'p, F>) -> Result<(usize, usize), HeaderError> {
     let nums = get_file_shape_info(f, 2)?;
     // Because get_file_shape_info checks the length of nums, we know there's at least two values
     Ok((nums[0], nums[1]))
@@ -429,14 +436,14 @@ pub fn get_nhead_ncol<'p, F: BufRead>(f: &mut FileBuf<'p, F>) -> Result<(usize, 
 /// # Returns
 /// A [`Result`] containing the number of header lines. An `Err` will be returned in a number of cases.
 /// 
-/// * The file could not be read (error variant = [`GggError::CouldNotRead`])
-/// * The first line could not be parsed entirely as space-separated numbers (error variant = [`GggError::HeaderError`])
-/// * The first line did not contain at least one number (error variant = [`GggError::HeaderError`])
+/// * The file could not be read (error variant = [`HeaderError::CouldNotRead`])
+/// * The first line could not be parsed entirely as space-separated numbers (error variant = [`HeaderError::ParseError`])
+/// * The first line did not contain at least one number (error variant = [`HeaderError::ParseError`])
 /// 
 /// # See also
 /// * [`get_file_shape_info`] - get an arbitrary count of numbers parsed from the first line of a file
 /// * [`get_nhead_ncol`] - shortcut to get the first two numbers (number of header lines and number of data columns)
-pub fn get_nhead<'p, F: BufRead>(f: &mut FileBuf<'p, F>) -> Result<usize, GggError> {
+pub fn get_nhead<'p, F: BufRead>(f: &mut FileBuf<'p, F>) -> Result<usize, HeaderError> {
     let nums = get_file_shape_info(f, 1)?;
     // Because get_file_shape_info checks the length of nums, we know there's at least one value
     Ok(nums[0])
@@ -464,7 +471,7 @@ pub fn get_nhead<'p, F: BufRead>(f: &mut FileBuf<'p, F>) -> Result<usize, GggErr
 /// (error variant = [`GggError::HeaderError`])
 /// * The number of column names does not match the number of columns listed in the first line (error variant = 
 /// [`GggError::HeaderError`])
-pub fn read_common_header<'p, F: BufRead>(f: &mut FileBuf<'p, F>) -> Result<CommonHeader, GggError> {
+pub fn read_common_header<'p, F: BufRead>(f: &mut FileBuf<'p, F>) -> Result<CommonHeader, HeaderError> {
     let (mut nhead, ncol) = get_nhead_ncol(f)?;
     // We've already read one header line
     nhead -= 1;
@@ -480,7 +487,7 @@ pub fn read_common_header<'p, F: BufRead>(f: &mut FileBuf<'p, F>) -> Result<Comm
             let missing_str = missing_str.trim();
             missing = Some(
                 missing_str.parse::<f64>()
-                .or_else(|_| Err(GggError::HeaderError { path: f.path.to_owned(), cause: format!("Expecting a real number following 'missing:', got {missing_str}") }))?
+                .map_err(|_| HeaderError::ParseError { location: f.path.into(), cause: format!("Expecting a real number following 'missing:', got {missing_str}") })?
             );
         }
         nhead -= 1;
@@ -495,7 +502,7 @@ pub fn read_common_header<'p, F: BufRead>(f: &mut FileBuf<'p, F>) -> Result<Comm
     if column_names.len() != ncol {
         let nnames = column_names.len();
         let reason = format!("number of column names ({nnames}) does not equal the number of columns listed in the first line of the header ({ncol})");
-        return Err(GggError::HeaderError { path: f.path.to_owned(), cause: reason });
+        return Err(HeaderError::ParseError { location: f.path.into(), cause: reason });
     }
 
     Ok(CommonHeader { nhead, ncol, missing, format_str, column_names })

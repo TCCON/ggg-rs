@@ -1,7 +1,7 @@
 use std::{collections::{HashMap,HashSet}, path::{Path, PathBuf}, str::FromStr, io::BufRead, convert::Infallible, borrow::Borrow, hash::Hash};
 use clap::Parser;
 use plotly::{Plot, Scatter, ImageFormat, common::{Line, Mode, Title}, Layout, layout::Axis};
-use ggg_rs::utils::{self, GggError};
+use ggg_rs::{utils::{self, GggError}, error::HeaderError};
 
 
 struct SptData {
@@ -25,29 +25,29 @@ struct SptHeader {
 }
 
 impl SptHeader {
-    fn from_header_line(line: &str) -> Result<SptHeader, GggError> {
-        fn parse_field<T: FromStr>(s: &str, i: usize) -> Result<T, GggError> {
+    fn from_header_line(line: &str) -> Result<SptHeader, HeaderError> {
+        fn parse_field<T: FromStr>(s: &str, i: usize, full_line: &str) -> Result<T, HeaderError> {
             s.parse::<T>()
-                .map_err(|_| GggError::HeaderError { path: PathBuf::new(), cause: format!("Could not parse {}th element {} as a number", i+1, s) })
+                .map_err(|_| HeaderError::ParseError { location: full_line.into(), cause: format!("Could not parse {}th element {} as a number", i+1, s) })
         }
 
         let split: Vec<&str> = line.trim().split_ascii_whitespace().collect();
         if split.len() < 11 {
-            return Err(GggError::HeaderError { path: PathBuf::new(), cause: format!("Spectral fit file had too few elements in the second header line (expected {}, found {})", 11, split.len() )});
+            return Err(HeaderError::ParseError { location: line.into(), cause: format!("Spectral fit file had too few elements in the second header line (expected {}, found {})", 11, split.len() )});
         }
         
         Ok(Self {
-            _first_freq: parse_field(split[0], 0)?,
-            _last_freq: parse_field(split[1], 1)?,
-            _num_freq: parse_field(split[2], 2)?,
-            _effective_spec_resolution: parse_field(split[3], 3)?,
-            _sza: parse_field(split[4], 4)?,
-            _obs_alt: parse_field(split[5], 5)?,
-            _zmin: parse_field(split[6], 6)?,
-            _fit_rms: parse_field(split[7], 7)?,
-            _effective_pressure: parse_field(split[8], 8)?,
-            _solar_disk_frac_obs: parse_field(split[9], 9)?,
-            zero_offset: parse_field(split[10], 10)?,
+            _first_freq: parse_field(split[0], 0, line)?,
+            _last_freq: parse_field(split[1], 1, line)?,
+            _num_freq: parse_field(split[2], 2, line)?,
+            _effective_spec_resolution: parse_field(split[3], 3, line)?,
+            _sza: parse_field(split[4], 4, line)?,
+            _obs_alt: parse_field(split[5], 5, line)?,
+            _zmin: parse_field(split[6], 6, line)?,
+            _fit_rms: parse_field(split[7], 7, line)?,
+            _effective_pressure: parse_field(split[8], 8, line)?,
+            _solar_disk_frac_obs: parse_field(split[9], 9, line)?,
+            zero_offset: parse_field(split[10], 10, line)?,
         })
     }
 }
@@ -69,7 +69,7 @@ fn read_spt_file(spt_file: &Path) -> Result<SptData, GggError> {
 
     let col_names: Vec<&str> = col_names.trim().split_ascii_whitespace().collect();
     if col_names.len() != ncol {
-        return Err(GggError::HeaderError { path: spt_file.to_owned(), cause: format!("Number of column names ({}) is not equal to the number of columns specified in the first line ({})", col_names.len(), ncol) });
+        return Err(HeaderError::NumColMismatch { location: spt_file.into(), got: col_names.len(), expected: ncol }.into());
     }
 
     let mut data: Vec<Vec<f32>> = Vec::with_capacity(ncol);
