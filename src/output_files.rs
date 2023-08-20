@@ -1,39 +1,28 @@
-use std::{path::PathBuf, str::FromStr, sync::OnceLock, io::BufRead, fmt::Display};
+use std::{path::PathBuf, str::FromStr, sync::OnceLock, io::BufRead};
 
-use chrono::NaiveDate;
-use error_stack::{IntoReport, ResultExt, Report};
+use error_stack::{IntoReport, ResultExt};
 use itertools::Itertools;
 
-use crate::utils::{get_nhead_ncol, FileBuf, GggError};
+use crate::error::HeaderError;
+use crate::utils::{get_nhead_ncol, FileBuf};
 
 
 static INPUT_MD5_REGEX: OnceLock<regex::Regex> = OnceLock::new();
 
-#[derive(Debug, thiserror::Error)]
-pub enum HeaderError {
-    ParseError{header_line: Option<String>, cause: String},
-    NumLinesMismatch{expected: usize, got: usize},
+pub struct ColInputData {
+    pub path: PathBuf,
+    pub md5sum: String,
 }
 
-impl Display for HeaderError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::ParseError { header_line: Some(line), cause } => {
-                write!(f, "Could not parse header line '{line}': {cause}")
-            },
-            Self::ParseError { header_line: None, cause } => {
-                write!(f, "Error parsing header line: {cause}")
-            },
-            Self::NumLinesMismatch { expected, got } => {
-                write!(f, "Expected {expected} header lines, nhead indicates {got}")
-            }
+impl ColInputData {
+    pub fn from_str_opt(s: &str) -> Result<Option<Self>, HeaderError> {
+        let me = Self::from_str(s)?;
+        if me.path.to_string_lossy() == "-" {
+            Ok(None)
+        } else {
+            Ok(Some(me))
         }
     }
-}
-
-pub struct ColInputData {
-    path: PathBuf,
-    md5sum: String,
 }
 
 impl FromStr for ColInputData {
@@ -46,7 +35,7 @@ impl FromStr for ColInputData {
 
         let caps = re.captures(s)
             .ok_or_else(|| HeaderError::ParseError { 
-                header_line: Some(s.to_string()), 
+                location: s.into(), 
                 cause: "Did not match expected format of 32 hex digit checksum, two spaces, then a path".to_string()
             })?;
 
@@ -70,7 +59,7 @@ impl FromStr for ProgramVersion {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let (program, version, date, authors) = s.split_whitespace()
             .collect_tuple()
-            .ok_or_else(|| HeaderError::ParseError {header_line: Some(s.to_string()), cause: "Expected 4 space-delimited strings".to_string()})?;
+            .ok_or_else(|| HeaderError::ParseError {location: s.into(), cause: "Expected 4 space-delimited strings".to_string()})?;
 
         // This takes something like "Version 5.26" and converts to just "5.26"
         let version = if version.to_ascii_lowercase().contains("version") {
@@ -89,35 +78,35 @@ impl FromStr for ProgramVersion {
 }
 
 pub struct ColFileHeader {
-    nhead: usize,
-    ncol: usize,
-    gfit_version: ProgramVersion,
-    gsetup_version: ProgramVersion,
-    data_partition_file: ColInputData,
-    apriori_file: ColInputData,
-    runlog_file: ColInputData,
-    levels_file: ColInputData,
-    models_dir: PathBuf,
-    vmrs_dir: PathBuf,
-    mav_file: ColInputData,
-    ray_file: ColInputData,
-    isotopologs_file: ColInputData,
-    windows_file: ColInputData,
-    telluric_linelists_md5_file: ColInputData,
-    solar_linelist_file: Option<ColInputData>,
-    ak_prefix: PathBuf,
-    spt_prefix: PathBuf,
-    col_file: PathBuf,
-    format: String,
-    command_line: String,
-    column_names: Vec<String>
+    pub nhead: usize,
+    pub ncol: usize,
+    pub gfit_version: ProgramVersion,
+    pub gsetup_version: ProgramVersion,
+    pub data_partition_file: ColInputData,
+    pub apriori_file: ColInputData,
+    pub runlog_file: ColInputData,
+    pub levels_file: ColInputData,
+    pub models_dir: PathBuf,
+    pub vmrs_dir: PathBuf,
+    pub mav_file: ColInputData,
+    pub ray_file: ColInputData,
+    pub isotopologs_file: ColInputData,
+    pub windows_file: ColInputData,
+    pub telluric_linelists_md5_file: ColInputData,
+    pub solar_linelist_file: Option<ColInputData>,
+    pub ak_prefix: PathBuf,
+    pub spt_prefix: PathBuf,
+    pub col_file: PathBuf,
+    pub format: String,
+    pub command_line: String,
+    pub column_names: Vec<String>
 }
 
 pub fn read_col_file_header<F: BufRead>(file: &mut FileBuf<F>) -> error_stack::Result<ColFileHeader, HeaderError> {
     let (nhead, ncol) = get_nhead_ncol(file)
         .into_report()
         .change_context_lazy(|| HeaderError::ParseError {
-            header_line: None, 
+            location: file.path.as_path().into(), 
             cause: "Could not parse number of header lines and data columns".to_string() 
         })?;
 
@@ -125,7 +114,28 @@ pub fn read_col_file_header<F: BufRead>(file: &mut FileBuf<F>) -> error_stack::R
         error_stack::bail!(HeaderError::NumLinesMismatch { expected: 21, got: nhead });
     }
 
-    let gfit_version = ProgramVersion::from_str(&file.read_header_line()?)?;
-
-    todo!()
+    Ok(ColFileHeader { 
+        nhead, 
+        ncol,
+        gfit_version: ProgramVersion::from_str(&file.read_header_line()?)?, 
+        gsetup_version: ProgramVersion::from_str(&file.read_header_line()?)?,
+        data_partition_file: ColInputData::from_str(&file.read_header_line()?)?,
+        apriori_file: ColInputData::from_str(&file.read_header_line()?)?,
+        runlog_file: ColInputData::from_str(&file.read_header_line()?)?,
+        levels_file: ColInputData::from_str(&file.read_header_line()?)?,
+        models_dir: PathBuf::from(&file.read_header_line()?),
+        vmrs_dir: PathBuf::from(&file.read_header_line()?),
+        mav_file: ColInputData::from_str(&file.read_header_line()?)?,
+        ray_file: ColInputData::from_str(&file.read_header_line()?)?,
+        isotopologs_file: ColInputData::from_str(&file.read_header_line()?)?,
+        windows_file: ColInputData::from_str(&file.read_header_line()?)?,
+        telluric_linelists_md5_file: ColInputData::from_str(&file.read_header_line()?)?,
+        solar_linelist_file: ColInputData::from_str_opt(&file.read_header_line()?)?,
+        ak_prefix: PathBuf::from(&file.read_header_line()?),
+        spt_prefix: PathBuf::from(&file.read_header_line()?),
+        col_file: PathBuf::from(&file.read_header_line()?),
+        format: file.read_header_line()?.trim().to_string(),
+        command_line: file.read_header_line()?.trim().to_string(),
+        column_names: file.read_header_line()?.split_whitespace().map(|s| s.to_string()).collect_vec()
+    })
 }

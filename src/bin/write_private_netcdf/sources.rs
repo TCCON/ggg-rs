@@ -7,6 +7,21 @@ use ndarray::Array1;
 
 use crate::interface::{DataSource, Dimension, DataGroup, TranscriptionError, DimensionWithValues};
 
+pub(crate) struct DataSourceList(Vec<Box<dyn DataSource>>);
+
+impl DataSourceList {
+    pub(crate) fn add_source<T: DataSource + 'static>(&mut self, source: T) {
+        let boxed = Box::new(source);
+        self.0.push(boxed);
+    }
+}
+
+impl Default for DataSourceList {
+    fn default() -> Self {
+        Self(Default::default())
+    }
+}
+
 pub struct TcconRunlog {
     runlog: PathBuf,
     variables: Vec<String>,

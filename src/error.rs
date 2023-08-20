@@ -1,6 +1,6 @@
 use std::{path::{PathBuf, Path}, fmt::Display, error::Error};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Default, Clone)]
 pub struct FileLocation {
     path: Option<PathBuf>,
     line_num: Option<usize>,
@@ -16,6 +16,7 @@ impl FileLocation {
         }
     }
 }
+
 
 impl From<&Path> for FileLocation {
     fn from(value: &Path) -> Self {

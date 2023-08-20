@@ -284,7 +284,7 @@ impl <F: BufRead> FileBuf<F> {
     pub fn read_header_line(&mut self) -> Result<String, HeaderError> {
         let mut buf = String::new();
         self.read_line(&mut buf)
-            .or_else(|e| Err(HeaderError::CouldNotRead { location: self.path.into(), cause: e.to_string() }))?;
+            .or_else(|e| Err(HeaderError::CouldNotRead { location: self.path.as_path().into(), cause: e.to_string() }))?;
         Ok(buf)
     }
 
@@ -385,19 +385,19 @@ pub struct CommonHeader {
 pub fn get_file_shape_info<F: BufRead>(f: &mut FileBuf<F>, min_numbers: usize) -> Result<Vec<usize>, HeaderError> {
     let mut buf = String::new();
     f.read_line(&mut buf)
-        .or_else(|e| Err(HeaderError::CouldNotRead { location: f.path.into(), cause: e.to_string() }))?;
+        .or_else(|e| Err(HeaderError::CouldNotRead { location: f.path.as_path().into(), cause: e.to_string() }))?;
 
     let mut numbers = vec![];
     for (i, s) in buf.trim().split_whitespace().enumerate() {
         let val: usize = s.parse().map_err(|_| {
             // let loc = FileLocation::new(Some(f.path), None, None);
-            HeaderError::ParseError { location: f.path.into(), cause: format!("Could not parse number at position {}: {s}", i+1) }
+            HeaderError::ParseError { location: f.path.as_path().into(), cause: format!("Could not parse number at position {}: {s}", i+1) }
         })?;
         numbers.push(val);
     }
 
     if numbers.len() < min_numbers {
-        return Err(HeaderError::ParseError { location: f.path.into(), cause: format!("Expected at least {min_numbers} numbers, found {}", numbers.len()) });
+        return Err(HeaderError::ParseError { location: f.path.as_path().into(), cause: format!("Expected at least {min_numbers} numbers, found {}", numbers.len()) });
     }
 
     Ok(numbers)
@@ -490,7 +490,7 @@ pub fn read_common_header<F: BufRead>(f: &mut FileBuf<F>) -> Result<CommonHeader
             let missing_str = missing_str.trim();
             missing = Some(
                 missing_str.parse::<f64>()
-                .map_err(|_| HeaderError::ParseError { location: f.path.into(), cause: format!("Expecting a real number following 'missing:', got {missing_str}") })?
+                .map_err(|_| HeaderError::ParseError { location: f.path.as_path().into(), cause: format!("Expecting a real number following 'missing:', got {missing_str}") })?
             );
         }
         nhead -= 1;
@@ -505,7 +505,7 @@ pub fn read_common_header<F: BufRead>(f: &mut FileBuf<F>) -> Result<CommonHeader
     if column_names.len() != ncol {
         let nnames = column_names.len();
         let reason = format!("number of column names ({nnames}) does not equal the number of columns listed in the first line of the header ({ncol})");
-        return Err(HeaderError::ParseError { location: f.path.into(), cause: reason });
+        return Err(HeaderError::ParseError { location: f.path.as_path().into(), cause: reason });
     }
 
     Ok(CommonHeader { nhead, ncol, missing, format_str, column_names })
