@@ -4,7 +4,7 @@ use chrono::{DateTime, Utc};
 use error_stack::{IntoReport, ResultExt};
 use itertools::Itertools;
 use log::{debug, info};
-use ndarray::{Array1, ArrayView1, Array2, ArrayView2};
+use ndarray::{Array1, ArrayView1, Array2};
 
 use crate::sources::DataSourceList;
 

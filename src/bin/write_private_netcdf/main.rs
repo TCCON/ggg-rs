@@ -45,7 +45,14 @@ struct WritNcCli {
     /// For the output file name, use the runlog name instead of deriving the
     /// name from the site ID and date range of the data. NOTE: this option
     /// may not be used to submit standard TCCON data to the Caltech repository.
-    keep_runlog_name: bool
+    #[clap(short = 'k', long)]
+    keep_runlog_name: bool,
+
+    /// Set this flag to generate a netCDF4 file with experimental/non-standard 
+    /// TCCON products placed in subgroups, rather than the root group with
+    /// suffixes appended to the variable names
+    #[clap(short = 'g', long)]
+    hierachical_file: bool,
 }
 
 fn cleanup<E: Debug>(err: E) {
