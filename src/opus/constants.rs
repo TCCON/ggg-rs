@@ -143,6 +143,14 @@ pub mod bruker {
                 _ => false
             }
         }
+
+        pub fn is_directory_block(&self) -> bool {
+            if let Self::Directory = self {
+                true
+            } else {
+                false
+            }
+        }
     }
 
     pub enum BrukerParType {

@@ -289,7 +289,10 @@ impl HeaderByteReader {
         f.read_exact(&mut buf)?;
         // Big/little endian should only affect the order of the bytes in the word, not the bits
         // in the byte. Since we're dealing with 1 byte characters, endianness shouldn't matter.
-        let s = String::from_utf8(buf)?;
+        // However, these are null-terminated strings so we need to cut them off at the first
+        // byte == 0
+        let inull = buf.iter().position(|&b| b == 0).unwrap_or_else(|| buf.len());
+        let s = String::from_utf8(buf[..inull].to_vec())?;
         Ok(s.trim_end_matches(char::from(0)).to_string())
     }
 
@@ -404,8 +407,9 @@ impl IgramHeader {
         let mut block_values = HashMap::new();
 
         for block_definition in header_metadata.blocks.iter() {
-            if block_definition.itype.is_data_block() {
+            if block_definition.itype.is_data_block() || block_definition.itype.is_directory_block() {
                 // skip the data blocks for now, we just want header information
+                // also skip directory block; we don't use it and it's a lot of data that clutters up printing the struct.
                 continue;
             }
 
@@ -422,12 +426,17 @@ impl IgramHeader {
     fn read_param_block(header_def: &HeaderBlockDef<constants::bruker::BrukerBlockType>, reader: &HeaderByteReader, f: &mut std::fs::File) -> OpusResult<HashMap<String, BrukerParValue>> {
         let mut parameters = HashMap::new();
         f.seek(std::io::SeekFrom::Start(header_def.ipoint as u64))?;
-        let mut bytes_read = 0;
-        while bytes_read < header_def.ilen {
-            let (param_key, param_val, nbytes) = Self::read_param(reader, f)?;
-            parameters.insert(param_key, param_val);
-            bytes_read += nbytes;
+        loop {
+            // One would think that the length parameter given in the directory entry for each block is how many bytes
+            // that block consists of, but comparing with the Perl OpusHdr, stopping after reading that many bytes resulted
+            // in fewer parameters from this function than the Perl output. Looking back at i2s, it only stops searching for
+            // parameters when the next *parameter length* is 0, so that's what we do here.
+            match Self::read_param(reader, f)? {
+                Some((param_key, param_val, _)) => { parameters.insert(param_key, param_val); },
+                None => break,
+            }
         }
+
         Ok(parameters)
     }
 
@@ -440,18 +449,31 @@ impl IgramHeader {
     /// 
     /// # Outputs
     /// - The parameter name (any null characters are trimmed)
-    fn read_param(reader: &HeaderByteReader, f: &mut std::fs::File) -> OpusResult<(String, BrukerParValue, usize)> {
+    /// - The parameter value
+    /// - The number of bytes read
+    /// 
+    /// If the parameter size was 0, then this returns `Ok(None)` to indicate that we've reached the
+    /// end of valid parameters in an Opus header block.
+    fn read_param(reader: &HeaderByteReader, f: &mut std::fs::File) -> OpusResult<Option<(String, BrukerParValue, usize)>> {
         // Each Bruker parameter should consist of:
         //  - 4 bytes for the parameter name
         //  - 2 bytes for the parameter type
         //  - 2 bytes for the number of two-byte units making up the value
         //  - the value itself
 
-        // TODO: debug this - I'm getting parameter names and values that match the output from OpusHdr, but it looks like
-        //  OpusHdr is reading more parameters in each section.
         let param_key = reader.read_string(f, 4)?;
-        let param_type: BrukerParType = reader.read_i16(f)?.into();
+        let param_type = reader.read_i16(f)?;
         let param_nbytes = reader.read_i16(f)? as usize * 2;
+        if param_nbytes == 0 {
+            // This function may be called on a parameter that doesn't actually exist, which is when the number of bytes = 0.
+            // Indicate that by returning a None.
+            return Ok(None)
+        }
+
+        // TODO: Enums might still need debugging; in the IgramSecondaryStatus block, which I think matches up to the 
+        // "Data Parameters IgSm/2.Chn." output of OpusHdr, my code has DXU = WN, but OpusHdr has DXU2 = PNT. Except - 
+        // there's a *second* "Data Parameters IgSm/2.Chn." block output from OpusHdr which *does* have DXU2 = WN - what!?
+        let param_type: BrukerParType = param_type.into();
         param_type.check_par_length(param_nbytes)?;
         let param_value = match param_type {
             BrukerParType::Integer => BrukerParValue::Integer(reader.read_i32(f)?),
@@ -462,7 +484,7 @@ impl IgramHeader {
             BrukerParType::Unknown(i) => BrukerParValue::Unknown(reader.read_bytes(f, param_nbytes)?, i),
         };
         
-        Ok((param_key, param_value, 4 + 2 + 2 + param_nbytes))
+        Ok(Some((param_key, param_value, 4 + 2 + 2 + param_nbytes)))
     }
 
     pub fn read_slices_header(slices: &[&Path]) {
@@ -546,7 +568,7 @@ mod tests {
         // TODO: need context for header errors (which block/parameter). Need to decide if going to use error-stack/eyre 
         //  or build this into the OpusError type. Could do a struct which holds an OpusError plus the block and param name.
         let header = IgramHeader::read_full_igram_header(&wg).unwrap();
-        println!("{:#?}", header.metadata);
+        println!("{:#?}", header);
         assert!(false, "This test is not complete yet");
     }
 }
