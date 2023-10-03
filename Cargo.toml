@@ -10,10 +10,13 @@ resolver = "2"
 approx = "0.5.1"
 chrono = "0.4.23"
 clap = {version = "4", features = ["derive"]}
+itertools = "0.11.0"
 ndarray = "0.15"
 netcdf = "0.8"
+num-traits = "0.2.16"
 # Could move behind a feature
 plotly = { version = "0.8.3", features = ["kaleido"], optional=true }
+tabled = "0.14.0"
 thiserror = "1.0.48"
 
 [features]
