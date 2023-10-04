@@ -3,7 +3,7 @@ use std::{env, f64};
 use std::error::Error;
 use std::fmt::Display;
 use std::fs::File;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Read};
 use std::ops::{Deref, DerefMut};
 use std::path::{PathBuf, Path};
 use std::str::FromStr;
@@ -601,4 +601,86 @@ pub fn runlog_ydh_to_datetime(year: i32, day_of_year: i32, utc_hour: f64) -> chr
     + chrono::Duration::hours(ihours as i64)
     + chrono::Duration::minutes(iminutes as i64)
     + chrono::Duration::seconds(iseconds as i64)
+}
+
+
+#[derive(Debug, thiserror::Error)]
+pub enum EncodingError {
+    #[error("IO error: {0}")]
+    IoError(#[from] std::io::Error),
+    #[error("Could not convert file contents to UTF-8: {0}")]
+    Utf8ConversionError(#[from] std::string::FromUtf8Error),
+    #[error("Could not convert file contents to UTF-16: {0}")]
+    Utf16ConversionError(#[from] std::string::FromUtf16Error),
+}
+
+
+pub fn read_utf_8_or_16_file<P: AsRef<Path>>(filepath: P) -> Result<String, EncodingError> {
+    //
+    let encoding = guess_utf_encoding(filepath.as_ref())?;
+
+    let mut f = std::fs::File::open(filepath)?;
+    let mut buf = vec![];
+    f.read_to_end(&mut buf)?;
+
+    let bytes_to_word = match encoding {
+        UtfEncoding::Utf8 => {
+            // Simplest case, so just read the contents as a string
+            return Ok(String::from_utf8(buf)?);
+        },
+        UtfEncoding::Utf16LE => u16::from_le_bytes,
+        UtfEncoding::Utf16BE => u16::from_be_bytes,
+    };
+
+    // For UTF-16, our guess function requires that it start with two bytes used to
+    // indicate endianness, so we skip those.
+    let mut buf16 = vec![];
+    // for i in (2..buf.len()).step_by(2) {
+    for bytes in buf[2..].chunks(2) {
+        if bytes.len() != 2 {
+            // TODO: error or log as a wraning?
+            break;
+        }
+        let bytes: [u8; 2] = bytes.try_into().expect("Should always be able to convert a 2-length slices into a 2-byte array");
+        buf16.push(bytes_to_word(bytes));
+    }
+
+    Ok(String::from_utf16(buf16.as_slice())?)
+}
+
+
+enum UtfEncoding {
+    Utf8,
+    Utf16LE,
+    Utf16BE
+}
+
+/// Infer the encoding of a text file, between UTF-8 and UTF-16 (big and little endian).
+/// # Returns
+/// If the UTF encoding cannot be determined reliably, this will return an error
+/// with `std::io::ErrorKind::Other`. Note that UTF-16 files may still be misinterpreted as
+/// UTF-8 if they do not start with the byte order indicator (0xFEFF) but do have initial
+/// bytes that constitute valid UTF-8.
+fn guess_utf_encoding(filepath: &Path) -> std::io::Result<UtfEncoding> {
+    let mut bytes = [0, 0];
+    let mut f = std::fs::File::open(filepath)?;
+    f.read_exact(&mut bytes)?;
+
+    // If the first two bytes are 0xFEFF (= 65279 in decimal), this is a UTF-16 encoded file
+    // in little endian. If the first two bytes are 0xFFFE (= 65534 in decimal), it is still
+    // UTF-16 encoded but big endian. If the first two bytes are valid UTF-8, assume the file
+    // is in UTF-8.
+    let check = u16::from_le_bytes(bytes);
+    if check == 65279 {
+        return Ok(UtfEncoding::Utf16LE)
+    } else if check == 65534 {
+        return Ok(UtfEncoding::Utf16BE)
+    }
+
+    if String::from_utf8(Vec::from_iter(bytes.into_iter())).is_ok() {
+        return Ok(UtfEncoding::Utf8)
+    } else {
+        let err = std::io::Error::from(std::io::ErrorKind::Other);
+        return Err(err);
+    }
 }
