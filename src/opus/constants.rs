@@ -221,23 +221,31 @@ pub mod bruker {
     }
 
     impl BrukerParValue {
-        pub fn into_integer(self) -> Result<i32, OpusTypeError> {
+        pub fn as_integer(&self) -> Result<i32, OpusTypeError> {
             if let Self::Integer(i) = self {
-                Ok(i)
+                Ok(*i)
             } else {
                 Err(OpusTypeError::ValueIntoError { expected: BrukerParType::Integer.to_string(), actual: self.opus_type().to_string() })
             }
         }
 
-        pub fn into_float(self) -> Result<f64, OpusTypeError> {
+        pub fn as_float(&self) -> Result<f64, OpusTypeError> {
             if let Self::Float(f) = self {
-                Ok(f)
+                Ok(*f)
             } else {
                 Err(OpusTypeError::ValueIntoError { expected: BrukerParType::Float.to_string(), actual: self.opus_type().to_string() })
             }
         }
 
         pub fn into_string(self) -> Result<String, OpusTypeError> {
+            if let Self::String(s) = self {
+                Ok(s)
+            } else {
+                Err(OpusTypeError::ValueIntoError { expected: BrukerParType::String.to_string(), actual: self.opus_type().to_string() })
+            }
+        }
+
+        pub fn as_str(&self) -> Result<&str, OpusTypeError> {
             if let Self::String(s) = self {
                 Ok(s)
             } else {

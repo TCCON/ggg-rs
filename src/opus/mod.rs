@@ -1,11 +1,11 @@
-use std::{path::{Path, PathBuf}, fs::File, io::{Seek, Read}, str::FromStr, slice::ChunksExact, fmt::Debug, collections::HashMap};
+use std::{path::{Path, PathBuf}, fs::File, io::{Seek, Read}, str::FromStr, slice::ChunksExact, fmt::{Debug, Display}, collections::HashMap};
 
 use ndarray::Array1;
 use crate::{runlogs, utils::{self,GggError}, opus::constants::bruker::BrukerParType};
 
 use self::constants::bruker::{BrukerParValue, BrukerBlockType};
 
-mod constants;
+pub mod constants;
 
 pub type OpusResult<T> = Result<T, OpusError>;
 
@@ -38,6 +38,25 @@ pub enum OpusTypeError {
     #[error("Could not convert Opus generic value into {expected}, was {actual}")]
     ValueIntoError{expected: String, actual: String}
 }
+
+#[derive(Debug)]
+pub struct MissingOpusParameterError {
+    block: BrukerBlockType,
+    parameter: String,
+    block_missing: bool
+}
+
+impl Display for MissingOpusParameterError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.block_missing {
+            write!(f, "Requested block {:?} missing from Opus header", self.block)
+        } else {
+            write!(f, "Requested parameter {} from block {:?} missing from Opus header", self.parameter, self.block)
+        }
+    }
+}
+
+impl std::error::Error for MissingOpusParameterError {}
 
 pub struct Spectrum {
     pub freq: Array1<f32>,
@@ -496,6 +515,14 @@ impl IgramHeader {
         // In get_opus_xx.f's get_opus_i4 documentation, it states that it checks the parameter value matches
         // all following slices (if `slicecnt` is > 1). So this should also scan all slices.
         todo!()
+    }
+
+    pub fn get_value(&self, block: constants::bruker::BrukerBlockType, parameter: &str) -> Result<&BrukerParValue, MissingOpusParameterError> {
+        self.parameter_blocks
+            .get(&block)
+            .ok_or_else(|| MissingOpusParameterError{ block, parameter: parameter.to_string(), block_missing: true})?
+            .get(parameter)
+            .ok_or_else(|| MissingOpusParameterError { block, parameter: parameter.to_string(), block_missing: false })
     }
 }
 

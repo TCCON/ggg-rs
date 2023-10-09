@@ -4,3 +4,4 @@ pub mod interpolation;
 // pub mod fformat;
 pub mod runlogs;
 pub mod opus;
+pub mod i2s;
