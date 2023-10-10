@@ -21,7 +21,7 @@ tabled = "0.14.0"
 thiserror = "1.0.48"
 
 [features]
-default = ["plotting"]
+default = []
 static = ["netcdf/static"]
 plotting = ["dep:plotly"]
 
