@@ -1,15 +1,16 @@
-use std::{path::{PathBuf, Path}, collections::HashMap, hash::Hash, fmt::Display};
+use std::{path::{PathBuf, Path}, fmt::Display};
 
 use clap::Parser;
 
 fn main() {
     let args = Cli::parse();
-    let spectra_names = get_spectrum_names(&args.spectra)
+    let mut spectra_names = get_spectrum_names(&args.spectra)
         .expect("Was not able to extract the base names of all given spectra");
 
-    let grouped_spectra = SpectraLists::from_names(&spectra_names)
-        .expect("Was not able to group spectra by detector");
-    grouped_spectra.print_list();
+    spectra_names.sort_unstable();
+    for name in spectra_names {
+        println!("{name}");
+    }
 }
 
 /// Print spectrum names in the correct order to pass to create_sunrun
@@ -35,7 +36,8 @@ fn main() {
 /// them.
 #[derive(Debug, Parser)]
 struct Cli {
-    /// The spectra to pr
+    /// The spectra to print in order. May be full paths to spectra, only the names
+    /// will be printed.
     spectra: Vec<PathBuf>
 }
 
@@ -49,7 +51,7 @@ enum NameError<'p> {
     TooShort(&'p str)
 }
 
-fn get_spectrum_names(paths: &[PathBuf]) -> Result<Vec<&str>, NameError> {
+fn get_spectrum_names(paths: &[PathBuf]) -> Result<Vec<SortingSpec>, NameError> {
     let mut names = vec![];
 
     for path in paths {
@@ -57,117 +59,71 @@ fn get_spectrum_names(paths: &[PathBuf]) -> Result<Vec<&str>, NameError> {
             .ok_or_else(|| NameError::NoBaseName(&path))?
             .to_str()
             .ok_or_else(|| NameError::NonUnicodeName(&path))?;
-        names.push(this_name);
+        names.push(SortingSpec::new(this_name)?);
     }
 
     Ok(names)
 }
 
-struct SpectrumKey<'n>(&'n str);
+#[derive(Debug, PartialEq, Eq)]
+struct SortingSpec<'s> {
+    head: &'s str,
+    detector: char,
+    tail: &'s str,
+}
 
-impl<'n> SpectrumKey<'n> {
-    fn new(name: &'n str) -> Result<Self, NameError> {
-        if name.len() < 20 {
-            Err(NameError::TooShort(name))
-        } else {
-            Ok(Self(name))
-        }
-    }
+impl<'s> SortingSpec<'s> {
+    fn new(spectrum_name: &'s str) -> Result<Self, NameError> {
+        let (i, detector) = spectrum_name.char_indices().nth(15)
+            .ok_or_else(|| NameError::TooShort(spectrum_name))?;
+        // The detector should be an ASCII character, so we assume it is one byte in the string
+        let head = &spectrum_name[..i];
+        let tail = &spectrum_name[i+1..];
 
-    fn detector(&self) -> char {
-        self.0.chars().nth(15).unwrap()
-    }
-
-    fn display_with_detector(&self, detector: char) -> SpecKeyDisplay {
-        SpecKeyDisplay { key: self, det: detector }
+        Ok(Self { head, detector, tail })
     }
 }
 
-
-impl<'n> Hash for SpectrumKey<'n> {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        for (i, c) in self.0.chars().enumerate() {
-            // Don't include the detector in the hash so that different spectra for the same detector
-            // map to the same key
-            if i != 15 {
-                c.hash(state);
-            }
-        }
-    }
-}
-
-impl<'n> PartialEq for SpectrumKey<'n> {
-    fn eq(&self, other: &Self) -> bool {
-        for (i, (c1, c2)) in self.0.chars().zip(other.0.chars()).enumerate() {
-            if i != 15 && c1 != c2 {
-                return false;
-            }
-        }
-
-        true
-    }
-}
-
-impl<'n> Eq for SpectrumKey<'n> {}
-
-struct SpecKeyDisplay<'k> {
-    key: &'k SpectrumKey<'k>,
-    det: char
-}
-
-impl<'k> Display for SpecKeyDisplay<'k> {
+impl<'s> Display for SortingSpec<'s> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // Because the SpectrumKey that this comes from checks the length of the spectrum
-        // name, we know we're safe to index the first 15 characters.
-        write!(f, "{}", &self.key.0[..15])?;
-        write!(f, "{}", self.det)?;
-        write!(f, "{}", &self.key.0[16..])?;
-        Ok(())
+        write!(f, "{}{}{}", self.head, self.detector, self.tail)
     }
 }
 
-struct SpectraLists<'k> {
-    detectors: HashMap<SpectrumKey<'k>, Vec<char>>,
-    primary_spectra_ordered: Vec<&'k str>
+impl<'s> PartialOrd for SortingSpec<'s> {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        // Because we're most often dealing with spectra from the same site, which
+        // will have the same head, we can do a small optimization by comparing the
+        // tail first (which will be the run number). 
+
+        match self.tail.partial_cmp(&other.tail) {
+            Some(core::cmp::Ordering::Equal) => {}
+            ord => return ord,
+        }
+        match self.head.partial_cmp(&other.head) {
+            Some(core::cmp::Ordering::Equal) => {}
+            ord => return ord,
+        }
+        self.detector.partial_cmp(&other.detector)
+    }
 }
 
-impl<'k> SpectraLists<'k> {
-    fn from_names(names: &[&'k str]) -> Result<Self, NameError<'k>> {
-        let mut detectors: HashMap<SpectrumKey<'_>, Vec<char>> = HashMap::new();
-        let mut primary = Vec::new();
+impl<'s> Ord for SortingSpec<'s> {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        // Because we're most often dealing with spectra from the same site, which
+        // will have the same head, we can do a small optimization by comparing the
+        // tail first (which will be the run number). 
 
-        for name in names {
-            let key = SpectrumKey::new(name)?;
-            let det = key.detector();
-
-            detectors.entry(key)
-                .and_modify(|v| v.push(det))
-                .or_insert(vec![det]);
-
-            if det == 'a' {
-                primary.push(*name);
-            }
+        match self.tail.cmp(&other.tail) {
+            core::cmp::Ordering::Equal => {},
+            ord => return ord
         }
 
-        primary.sort_unstable();
-        Ok(Self { detectors, primary_spectra_ordered: primary })
-    }
-
-    fn print_list(mut self) {
-        for spectrum in self.primary_spectra_ordered {
-            let key = SpectrumKey::new(spectrum)
-                .expect("Only valid spectrum names should be retained at this point");
-            let mut detectors = self.detectors.remove(&key)
-                .expect("All spectra listed in the ordered vector should be a key in the detector map");
-            detectors.sort_unstable();
-
-            for det in detectors {
-                println!("{}", key.display_with_detector(det));
-            }
+        match self.head.cmp(&other.head) {
+            core::cmp::Ordering::Equal => {},
+            ord => return ord
         }
 
-        if !self.detectors.is_empty() {
-            eprintln!("WARNING: there were {} scans that had spectra from one or more secondary detectors but not a primary detector", self.detectors.len());
-        }
+        self.detector.cmp(&other.detector)
     }
 }
