@@ -31,6 +31,9 @@ plotting = ["dep:plotly"]
 name = "bin2nc"
 
 [[bin]]
+name = "list_spectra"
+
+[[bin]]
 name = "plot_spt"
 required-features = ["plotting"]
 
