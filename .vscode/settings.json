@@ -1,5 +1,6 @@
 {
     "rust-analyzer.cargo.features": [
         "static"
-    ]
+    ],
+    "rust-analyzer.showUnlinkedFileNotification": false
 }
