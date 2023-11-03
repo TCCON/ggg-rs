@@ -46,11 +46,26 @@ configured to work for the github.com domain.
 Once the repo is cloned, you can install the programs from it under your GGGPATH alongside the 
 standard Fortran programs, by running:
 
+
 ```
-cargo install --features static --path . --root $GGGPATH
+make install
 ```
 
 from the directory containing this README. This will install the programs in `$GGGPATH/bin`.
+
+### Advanced GGG-RS install
+
+If you need to activate a different set of GGG-RS features for your installation, you can set
+the `FEATURES` environmental variable before running `make install`. See [Features](#features)
+below for a list of available features. To activate multiple features, include them as a comma-separated
+list, e.g. `export FEATURES=static,plotting` in Bash.
+
+If you need more control over how the installation is done, you can call `cargo` directly.
+The following command is a starting point:
+
+```
+cargo install --features static --path . --root $GGGPATH
+```
 
 If you do not wish to install these programs alongside your standard GGG programs, you may pass a different
 argument to `--root`. Note that it will always install in the `bin` subdirectory inside the path given as
@@ -67,13 +82,15 @@ e.g. `cargo build --features static`
   We recommend using this feature in the `cargo install` command above because generally building the netCDF
   library this way gives fewer issues than trying to link to a system netCDF library. However, if you have
   a well-behaved system installation of netCDF, you can try installing without this feature.
+* `plotting` - this requires some additional dependencies, but will also compile programs that allow you to
+  plot some GGG output files. (Currently, the only plotting program is `plot-spt` for spectral fit files.)
 
 ## Compilation or runtime errors
 
 ### Any OS
 
 **Failed custom build command for hdf5-sys or netcdf-sys**: this usually means that the compiler could not find the netCDF and/or HDF5 libraries on your
-computer. This should only show up if you do not use `--features static` in the installation command. There are two solutions:
+computer. This should only show up if you do not use the `static` feature, which is included by default when you run `make install`. There are two solutions:
 
 1. Install the netCDF C library via a system package manager (e.g. `apt` on Ubuntu/Debian, `brew` on Macs with [Homebrew](https://brew.sh/) installed).
   If running on a supercomputing cluster, check if there is a netCDF module you can load.
@@ -107,5 +124,5 @@ ld: warning: directory not found for option '-L$HOME/opt/homebrew/Cellar/netcdf/
 ld: library not found for -lnetcdf
 ```
 
-then this means that somehow your netCDF library path is not set correctly. The simplest fix is usually to use `--features static` as
+this means that somehow your netCDF library path is not set correctly. The simplest fix is usually to use `--features static` as
 described in the Features section.

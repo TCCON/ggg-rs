@@ -31,7 +31,7 @@ name = "bin2nc"
 name = "add-nc-flags"
 
 [[bin]]
-name = "plot_spt"
+name = "plot-spt"
 required-features = ["plotting"]
 
 #[[bin]]
