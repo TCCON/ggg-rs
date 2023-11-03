@@ -10,10 +10,12 @@ resolver = "2"
 approx = "0.5.1"
 chrono = "0.4.23"
 clap = {version = "4", features = ["derive"]}
+error-stack = "0.4.1"
 ndarray = "0.15"
 netcdf = "0.8"
 # Could move behind a feature
 plotly = { version = "0.8.3", features = ["kaleido"], optional=true }
+thiserror = "1.0.50"
 
 [features]
 default = ["plotting"]
@@ -24,6 +26,9 @@ plotting = ["dep:plotly"]
 
 [[bin]]
 name = "bin2nc"
+
+[[bin]]
+name = "add-nc-flags"
 
 [[bin]]
 name = "plot_spt"
