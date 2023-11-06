@@ -12,13 +12,14 @@ chrono = "0.4.23"
 clap = {version = "4", features = ["derive"]}
 encoding = "0.2.33"
 itertools = "0.11.0"
+error-stack = "0.4.1"
 ndarray = "0.15"
 netcdf = "0.8"
 num-traits = "0.2.16"
 # Could move behind a feature
 plotly = { version = "0.8.3", features = ["kaleido"], optional=true }
 tabled = "0.14.0"
-thiserror = "1.0.48"
+thiserror = "1.0.50"
 
 [features]
 default = []
@@ -34,7 +35,10 @@ name = "bin2nc"
 name = "list_spectra"
 
 [[bin]]
-name = "plot_spt"
+name = "add-nc-flags"
+
+[[bin]]
+name = "plot-spt"
 required-features = ["plotting"]
 
 #[[bin]]
