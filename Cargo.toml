@@ -10,10 +10,10 @@ resolver = "2"
 approx = "0.5.1"
 chrono = "0.4.23"
 clap = {version = "4", features = ["derive"]}
-error-stack = "0.3.1"
 itertools = "0.11.0"
 log = "0.4.20"
 log4rs = "1.2.0"
+error-stack = "0.4.1"
 ndarray = "0.15"
 # netcdf = "0.8"
 # TODO: open an issue on the netCDF repo with the change suggested for add_variable_with_type:
@@ -26,7 +26,7 @@ netcdf = {git = "https://github.com/joshua-laughner/netcdf-rs.git", branch = "su
 plotly = { version = "0.8.3", features = ["kaleido"], optional=true }
 regex = "1.9.3"
 strum = { version = "0.25.0", features = ["derive"] }
-thiserror = "1.0.47"
+thiserror = "1.0.50"
 
 [features]
 default = ["plotting", "static"]
@@ -39,7 +39,10 @@ plotting = ["dep:plotly"]
 name = "bin2nc"
 
 [[bin]]
-name = "plot_spt"
+name = "add-nc-flags"
+
+[[bin]]
+name = "plot-spt"
 required-features = ["plotting"]
 
 [[bin]]
