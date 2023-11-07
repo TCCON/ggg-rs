@@ -22,13 +22,9 @@ fn main_inner() -> error_stack::Result<(), CliError> {
             return Err(CliError::UserError("Path given to --output must not be a directory".to_string()).into());
         }
 
-        // Necessary because e.g. "test.nc" has a parent of "" which doesn't exist.
-        let canon_out_file = out_file.canonicalize()
-            .change_context(CliError::IoError)
-            .attach_printable("Could not determine the canonical path for the value of --output")?;
-
-        if let Some(parent) = canon_out_file.parent() {
-            if !parent.exists() {
+        // The second check is necessary because e.g. "test.nc" has a parent of "" which doesn't exist.
+        if let Some(parent) = out_file.parent() {
+            if !parent.exists() && !parent.as_os_str().is_empty() {
                 return Err(CliError::UserError(format!(
                     "The directory part of --output ({}) must exist, i.e. for --output /home/me/test.nc, /home/me must exist.",
                     out_file.parent().map(|p| p.to_str()).flatten().unwrap_or("")
@@ -36,7 +32,7 @@ fn main_inner() -> error_stack::Result<(), CliError> {
             }
         } else {
             // We really shouldn't get here (the is_dir check should catch these cases), but just in case
-            return Err(CliError::UserError(format!("{} is not a valid path for --output (cannot be your root directory or a drive prefix)", canon_out_file.display())).into());
+            return Err(CliError::UserError(format!("{} is not a valid path for --output (cannot be your root directory or a drive prefix)", out_file.display())).into());
         }
 
     }
