@@ -22,7 +22,8 @@ fn main_inner() -> error_stack::Result<(), CliError> {
             return Err(CliError::UserError("Path given to --output must not be a directory".to_string()).into());
         }
 
-        // The second check is necessary because e.g. "test.nc" has a parent of "" which doesn't exist.
+        // The second check is necessary because e.g. "test.nc" has a parent of "" which doesn't exist,
+        // but means "." which better exist.
         if let Some(parent) = out_file.parent() {
             if !parent.exists() && !parent.as_os_str().is_empty() {
                 return Err(CliError::UserError(format!(
@@ -230,6 +231,8 @@ struct OutputCli {
     #[clap(short='o', long, required = true)]
     output: Option<PathBuf>,
 
+    /// Set this flag so that the file specified by --output is always created,
+    /// even if no changes to the flags are required.
     #[clap(long)]
     always_copy: bool,
 }
@@ -304,7 +307,7 @@ struct FilterCli {
     #[clap(long, default_value_t = Combination::And)]
     time_and_or: Combination,
 
-    /// This is a required 
+    /// This is a required argument, it is the name of the variable to filter on.
     #[clap(short='x', long)]
     filter_var: String,
 }
