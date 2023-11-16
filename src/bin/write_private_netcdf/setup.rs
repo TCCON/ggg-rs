@@ -1,7 +1,7 @@
 use std::{io::BufRead, path::PathBuf};
 
 use crate::error::SetupError;
-use error_stack::{IntoReport, ResultExt};
+use error_stack::ResultExt;
 use ggg_rs::{utils::FileBuf, error::FileLocation};
 use ggg_rs::output_files::read_col_file_header;
 use itertools::Itertools;
@@ -17,7 +17,6 @@ pub(crate) fn setup_data_sources() -> error_stack::Result<DataSourceList, SetupE
 
     let runlog_path = get_runlog(&col_file_paths)?;
     let runlog = TcconRunlog::new(runlog_path.clone())
-        .into_report()
         .change_context_lazy(|| SetupError::FileReadError { description: runlog_path.to_string_lossy().to_string() })?;
     all_sources.add_source(runlog);
 
@@ -32,7 +31,6 @@ fn get_runlog(col_files: &[PathBuf]) -> error_stack::Result<PathBuf, SetupError>
         })?;
 
     let mut file = FileBuf::open(first_col_file)
-        .into_report()
         .change_context_lazy(|| SetupError::FileReadError { description: first_col_file.to_string_lossy().to_string() })?;
     let col_header = read_col_file_header(&mut file)
         .change_context_lazy(|| SetupError::FileReadError { description: first_col_file.to_string_lossy().to_string() })?;
@@ -44,13 +42,11 @@ fn read_multiggg() -> error_stack::Result<Vec<String>, SetupError> {
     let multiggg_file = PathBuf::from("multiggg.sh");
 
     let f = ggg_rs::utils::FileBuf::open(&multiggg_file)
-        .into_report()
         .change_context_lazy(|| SetupError::FileReadError { description: "multiggg.sh".to_string() })?;
 
     let mut windows = vec![];
     for (idx, line) in f.into_reader().lines().enumerate() {
         let line = line
-            .into_report()
             .change_context_lazy(|| SetupError::FileReadError { description: "multiggg.sh".to_string() })?
             .trim()
             .to_string();

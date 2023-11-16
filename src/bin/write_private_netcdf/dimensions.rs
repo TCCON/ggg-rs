@@ -1,7 +1,7 @@
 use std::{collections::{HashSet, HashMap}, fmt::Display};
 
 use chrono::{DateTime, Utc};
-use error_stack::{IntoReport, ResultExt};
+use error_stack::ResultExt;
 use itertools::Itertools;
 use log::{debug, info};
 use ndarray::{Array1, ArrayView1, Array2};
@@ -168,7 +168,6 @@ impl DimensionWithValues {
 
         if ntimes != specnames.len() {
             return Err(netcdf::error::Error::DimensionMismatch { wanted: specnames.len(), actual: ntimes })
-                .into_report()
                 .attach_printable("Number of times in netCDF file does not match the number of spectrum names")?;
         }
 
@@ -222,7 +221,7 @@ fn identify_required_dimensions(sources: &DataSourceList) -> error_stack::Result
         for dim_vals in source.provided_dimensions() {
             let dim = dim_vals.dimension();
             if let Some((_, first_src)) = available_dims.get(&dim) {
-                return Err(DimensionError::MultiplyDefinedDimension { dim, first_src: first_src.to_string(), second_src: source.to_string() }).into_report();
+                return Err(DimensionError::MultiplyDefinedDimension { dim, first_src: first_src.to_string(), second_src: source.to_string() }.into());
 
             } else {
                 available_dims.insert(dim, (dim_vals, source.to_string()));
@@ -235,8 +234,7 @@ fn identify_required_dimensions(sources: &DataSourceList) -> error_stack::Result
             available_dims.get(d)
                 .map(|v| v.0)
                 .ok_or_else(|| DimensionError::MissingDimension(*d))
-        }).try_collect()
-        .into_report()?;
+        }).try_collect()?;
 
     Ok(dims_to_write)
 }
@@ -244,7 +242,6 @@ fn identify_required_dimensions(sources: &DataSourceList) -> error_stack::Result
 fn create_dims_in_group(nc: &mut netcdf::GroupMut, dims: &[&DimensionWithValues]) -> error_stack::Result<(), DimensionError> {
     for &dim in dims {
         nc.add_dimension(&dim.name(), dim.len())
-            .into_report()
             .change_context(DimensionError::WriteError(dim.name()))?;
         debug!("Dimension {} defined", dim.name());
     }
