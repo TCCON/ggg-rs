@@ -5,7 +5,7 @@ mod sources;
 mod setup;
 mod dimensions;
 
-use std::{path::{PathBuf, Path}, fmt::Debug, process::ExitCode};
+use std::{path::{PathBuf, Path}, fmt::Debug, process::ExitCode, ffi::OsString};
 
 use clap::Parser;
 use error_stack::ResultExt;
@@ -28,19 +28,30 @@ fn main() -> ExitCode {
     //  4. Get the unique groups required by all the data sources, if writing a hierarchical file, create those groups
     //  5. For each data source, loop through the groups it requires and pass it the `GroupMut` handle for that group
     //     (flat files will always get the root group, and append the required suffix to variable names).
-    if let Err(e) = driver(&run_dir, args) {
-        cleanup(e)
+    let finalize_result = match driver(&run_dir, args) {
+        Ok(nc_stem) => finalize(&temporary_nc_path(&run_dir), nc_stem),
+        Err(e) => return cleanup(e)
+    };
+
+    if let Err(e) = finalize_result {
+        error!("An error occurred while renaming the netCDF file to its final name. The file itself should still be complete. The error was: {e}");
+        ExitCode::from(2)
     } else {
         ExitCode::SUCCESS
     }
 }
 
-fn driver(run_dir: &Path, args: WriteNcCli) -> error_stack::Result<(), CliError> {
+fn driver(run_dir: &Path, args: WriteNcCli) -> error_stack::Result<OsString, CliError> {
     let mut nc = init_nc_file(&run_dir)
         .change_context_lazy(|| CliError::Setup)?;
 
     let all_sources = setup::setup_data_sources()
         .change_context_lazy(|| CliError::Setup)?;
+
+    let runlog_name = all_sources.get_runlog_path()
+        .ok_or_else(|| CliError::Unexpected("A runlog was not included in the sources"))?
+        .file_stem()
+        .ok_or_else(|| CliError::Unexpected("Could not get the file stem of the runlog path"))?;
 
     let mut nc_root = nc.root_mut()
         .ok_or_else(|| CliError::Unexpected("unable to get the root group in the output netCDF file"))?;
@@ -48,7 +59,12 @@ fn driver(run_dir: &Path, args: WriteNcCli) -> error_stack::Result<(), CliError>
     dimensions::write_required_dimensions(&mut nc_root, &all_sources)
         .change_context_lazy(|| CliError::Dimension)?;
 
-    Ok(())
+
+    if args.keep_runlog_name {
+        Ok(runlog_name.to_os_string())
+    } else {
+        todo!() // get the date range of the file for the name, e.g. "pa20040701_20041231"
+    }
 }
 
 
@@ -67,13 +83,23 @@ struct WriteNcCli {
     hierachical_file: bool,
 }
 
+fn finalize(nc_path: &Path, mut final_name_stem: OsString) -> Result<(), std::io::Error> {
+    final_name_stem.push(".private.nc");
+    let out_path = nc_path.with_file_name(final_name_stem);
+    std::fs::rename(nc_path, out_path)
+}
+
 fn cleanup<E: Debug>(err: E) -> ExitCode {
     error!("ERROR: {err:?}");
     ExitCode::FAILURE
 }
 
 fn init_nc_file(run_dir: &Path) -> error_stack::Result<netcdf::MutableFile, netcdf::error::Error> {
-    let nc_file = run_dir.join("temporary.private.nc");
+    let nc_file = temporary_nc_path(run_dir);
     let file = netcdf::create(nc_file)?;
     Ok(file)
+}
+
+fn temporary_nc_path(run_dir: &Path) -> PathBuf {
+    run_dir.join("temporary.private.nc")
 }

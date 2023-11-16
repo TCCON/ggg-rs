@@ -8,6 +8,12 @@ use ndarray::Array1;
 use crate::interface::{DataGroup, TranscriptionError};
 use crate::dimensions::{Dimension, DimensionWithValues};
 
+#[derive(Debug, Clone, Copy)]
+pub enum DataSourceType {
+    Runlog,
+    ColFile,
+}
+
 /// A trait representing one source of data to copy to the netCDF file
 /// 
 /// This trait may be implemented for a struct representing a single file
@@ -18,6 +24,8 @@ use crate::dimensions::{Dimension, DimensionWithValues};
 /// possibility of an error. However, it may error while transcribing the
 /// data from 
 pub trait DataSource: Display {
+    fn source_type(&self) -> DataSourceType;
+    fn file(&self) -> &Path;
     fn provided_dimensions(&self) -> &[DimensionWithValues];
     fn required_dimensions(&self) -> &[Dimension];
     fn required_groups(&self) -> &[DataGroup];
@@ -31,6 +39,16 @@ impl DataSourceList {
     pub(crate) fn add_source<T: DataSource + 'static>(&mut self, source: T) {
         let boxed = Box::new(source);
         self.0.push(boxed);
+    }
+
+    pub(crate) fn get_runlog_path(&self) -> Option<&Path> {
+        for source in self.0.iter() {
+            if let DataSourceType::Runlog = source.source_type() {
+                return Some(source.file())
+            }
+
+        }
+        None
     }
 }
 
@@ -126,6 +144,14 @@ impl TcconRunlog {
 }
 
 impl DataSource for TcconRunlog {
+    fn source_type(&self) -> DataSourceType {
+        DataSourceType::Runlog    
+    }
+
+    fn file(&self) -> &Path {
+        &self.runlog    
+    }
+
     fn provided_dimensions(&self) -> &[DimensionWithValues] {
         &self.dimensions
     }
