@@ -27,6 +27,10 @@ plotly = { version = "0.8.3", features = ["kaleido"], optional=true }
 regex = "1.9.3"
 strum = { version = "0.25.0", features = ["derive"] }
 thiserror = "1.0.50"
+toml = "0.8.8"
+serde = { version = "1.0.192", features = ["derive"] }
+pest = "2.7.5"
+pest_derive = "2.7.5"
 
 [features]
 default = ["plotting", "static"]
@@ -47,6 +51,9 @@ required-features = ["plotting"]
 
 [[bin]]
 name = "write_private_netcdf"
+
+[[bin]]
+name = "write_public_netcdf"
 
 #[[bin]]
 #name = "plot_opus_spectra"
