@@ -70,7 +70,10 @@
 // TODO: allow nesting/chaining functions e.g. either `upper(trim(name, ...))` or `trim(name,...) | upper`
 //  (I like the second one visually, but it might be harder to code.)
 // TODO: ensure that we test the strings when the config is loaded so that any errors due to regex or maps happen at a reasonable time
-
+// TODO: allow the value of the thing in the private file to be one of the identifiers OR arbitrary netCDF attributes?
+// TODO (maybe): add an `if_missing` transform that returns the first argument if it is available, the second if not. E.g. if
+//   called as `if_missing(units, map(name, 'default_units'))` it would use the variable name to figure out the default units
+//   only if there were not units in the private file.
 use std::collections::HashMap;
 
 use pest::{Parser, iterators::{Pairs, Pair}};
@@ -94,6 +97,8 @@ pub enum TokenError {
     UnknownFunction{got: String, index: usize},
     #[error("in the replacement at character {index}, the map key '{key}' is not defined in the maps section")]
     UnknownMapKey{key: String, index: usize},
+    #[error("at character {0}, cannot use 'name' in this template string")]
+    NoPrivate(usize),
     #[error("at character {0}, cannot use 'pubname' in this template string")]
     NoPublic(usize),
     #[error("expected {0} argument(s), only got {}", .0 - 1)]
@@ -125,6 +130,10 @@ impl TokenError {
         Self::UnknownMapKey { key: key.into(), index: span.start() }
     }
 
+    fn no_private(span: pest::Span) -> Self {
+        Self::NoPrivate(span.start())
+    }
+
     fn no_public(span: pest::Span) -> Self {
         Self::NoPublic(span.start())
     }
@@ -145,7 +154,7 @@ impl TokenError {
 
 pub fn apply_template_transformations(
     template_str: &str, 
-    private_name: &str, 
+    private_name: Option<&str>, 
     public_name: Option<&str>,
     all_maps: &HashMap<String, HashMap<String, String>>) -> Result<String, TokenError> {
     let parsed_str = TemplateStringParser::parse(Rule::attribute, template_str).unwrap()
@@ -169,7 +178,7 @@ pub fn apply_template_transformations(
 
 fn handle_replacement(
     replacement: Pairs<'_, Rule>, 
-    private_name: &str, 
+    private_name: Option<&str>, 
     public_name: Option<&str>, 
     all_maps: &HashMap<String, HashMap<String, String>>
 ) -> Result<String, TokenError> {
@@ -250,7 +259,7 @@ fn handle_replacement(
     unreachable!()
 }
 
-fn get_id_arg<'a>(arg: Option<Pair<'_, Rule>>, private_name: &'a str, public_name: Option<&'a str>) -> Result<&'a str, TokenError> {
+fn get_id_arg<'a>(arg: Option<Pair<'_, Rule>>, private_name: Option<&'a str>, public_name: Option<&'a str>) -> Result<&'a str, TokenError> {
     let arg = arg.ok_or_else(|| TokenError::missing_token("identifier"))?;
 
     match arg.as_rule() {
@@ -259,7 +268,7 @@ fn get_id_arg<'a>(arg: Option<Pair<'_, Rule>>, private_name: &'a str, public_nam
     }
 
     match arg.as_str() {
-        "name" => return Ok(private_name),
+        "name" => return private_name.ok_or_else(|| TokenError::no_private(arg.as_span()) ),
         "pubname" => return public_name.ok_or_else(|| TokenError::no_public( arg.as_span() ) ),
         _ => return Err(TokenError::unknown_id(arg.as_str(), arg.as_span()))
     }
@@ -329,7 +338,7 @@ mod tests {
     #[test]
     fn test_parsing_no_replacement() {
         let input = "This is a string with no replacements";
-        let s = apply_template_transformations(input, "", None, &HashMap::new()).unwrap();
+        let s = apply_template_transformations(input, Some(""), None, &HashMap::new()).unwrap();
         assert_eq!(s, input);
     }
 
@@ -337,7 +346,7 @@ mod tests {
     fn test_parsing_wrong_num_args() {
         let err = apply_template_transformations(
             "{upper(name, 'extra')}",
-            "xco2",
+            Some("xco2"),
             None,
             &HashMap::new()
         ).unwrap_err();
@@ -357,7 +366,7 @@ mod tests {
     fn test_parsing_wrong_arg_type() {
         let err = apply_template_transformations(
             "{upper('oops')}",
-            "xco2",
+            Some("xco2"),
             None,
             &HashMap::new()
         ).unwrap_err();
@@ -372,7 +381,7 @@ mod tests {
     fn test_parsing_no_public() {
         let err = apply_template_transformations(
             "{pubname}", 
-            "xco2",
+            Some("xco2"),
             None,
             &HashMap::new()
         ).unwrap_err();
@@ -388,7 +397,7 @@ mod tests {
     fn test_parsing_simple_replacements() {
         let s = apply_template_transformations(
             "This private name is {name}",
-            "xco2",
+            Some("xco2"),
             None,
             &HashMap::new()
         ).unwrap();
@@ -396,7 +405,7 @@ mod tests {
 
         let s = apply_template_transformations(
             "This public name is {pubname}",
-            "",
+            Some(""),
             Some("xch4"),
             &HashMap::new()
         ).unwrap();
@@ -404,7 +413,7 @@ mod tests {
 
         let s = apply_template_transformations(
             "This {name} is on X2007",
-            "xco2",
+            Some("xco2"),
             None,
             &HashMap::new()
         ).unwrap();
@@ -415,7 +424,7 @@ mod tests {
     fn test_parsing_uppercase() {
         let s = apply_template_transformations(
             "{upper(name)} is a column average", 
-            "xco2",
+            Some("xco2"),
             None,
             &HashMap::new()
         ).unwrap();
@@ -426,7 +435,7 @@ mod tests {
     fn test_parsing_lowercase() {
         let s = apply_template_transformations(
             "{lower(name)} is a column average",
-            "XCO2",
+            Some("XCO2"),
             None,
             &HashMap::new()
         ).unwrap();
@@ -437,7 +446,7 @@ mod tests {
     fn test_parsing_trim_replacements() {
         let s = apply_template_transformations(
             "A priori {trim(name,'prior_','')} profile",
-            "prior_co2",
+            Some("prior_co2"),
             None,
             &HashMap::new()
         ).unwrap();
@@ -445,7 +454,7 @@ mod tests {
 
         let s = apply_template_transformations(
             "Gas {trim(name,'','_vsf')} scale factor",
-            "co2_vsf",
+            Some("co2_vsf"),
             None,
             &HashMap::new()
         ).unwrap();
@@ -456,7 +465,7 @@ mod tests {
     fn test_parsing_regex_replacements() {
         let s = apply_template_transformations(
             "prior_{regex(name, 'prior_1([a-z0-9]+)_wet', '$1')}",
-            "prior_1co2_wet",
+            Some("prior_1co2_wet"),
             None,
             &HashMap::new()
         ).unwrap();
@@ -464,7 +473,7 @@ mod tests {
 
         let s = apply_template_transformations(
             "Col variable - {regex(name, '([a-z0-9]+_\\d+)_ovc_([a-z0-9]+)', '$2 original vertical column in the $1')} window",
-            "o2_7885_ovc_h2o",
+            Some("o2_7885_ovc_h2o"),
             None,
             &HashMap::new(),
         ).unwrap();
@@ -484,7 +493,7 @@ mod tests {
 
         let s = apply_template_transformations(
             "column average mole fraction of {map(name, 'species')} in parts per million",
-            "co2",
+            Some("co2"),
             None,
             &mapping
         ).unwrap();
@@ -492,7 +501,7 @@ mod tests {
 
         let s = apply_template_transformations(
             "{map(name, 'species')} in parts per billion",
-            "ch4",
+            Some("ch4"),
             None,
             &mapping
         ).unwrap();
