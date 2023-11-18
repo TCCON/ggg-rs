@@ -25,14 +25,15 @@ identifier = { ASCII_ALPHA ~ ASCII_ALPHANUMERIC* }
 // A string literal argument starts and ends with a single or double quote
 // and has any other character in it. These must be atomic to include whitespace.
 sq = _{"'"}
+dq = _{"\""}
 single_quote_str = @{ ( !"'" ~ ANY )* }
-double_quote_str = @{ "\"" ~ ( "\"" ~ ANY )* ~ "\"" }
+double_quote_str = @{ ( !"\"" ~ ANY )* }
 
 // Function args start and end with parentheses and have a sequence
 // of identifiers or strings separated by commas. There can be an 
 // extra comma at the end, that's fine.
 arg_sep = _{","}  // silent because we don't need to handle them on the parser side, just see they are there.
-arg = { identifier | sq ~ single_quote_str ~ sq | double_quote_str }
+arg = { identifier | sq ~ single_quote_str ~ sq | dq ~ double_quote_str ~ dq }
 function_args = { "(" ~ WS ~ arg ~ WS ~ (arg_sep ~ WS ~ arg ~ WS)* ~ arg_sep? ~ ")" }
 function = { identifier ~ function_args }
 

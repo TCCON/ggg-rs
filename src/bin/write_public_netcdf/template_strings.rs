@@ -89,8 +89,8 @@ struct TemplateStringParser;
 pub enum TokenError {
     #[error("expected a {expected} but did not find one")]
     MissingToken{expected: String},
-    #[error("at character {index}, expected a {expected}, got something else")]
-    WrongToken{expected: String, index: usize},
+    #[error("at character {index}, expected a {expected}, got {got} instead")]
+    WrongToken{expected: String, got: &'static str, index: usize},
     #[error("at character {index}, '{got}' is not one of the allowed identifiers")]
     UnknownId{got: String, index: usize},
     #[error("at character {index}, '{got}' is not one of the replacement functions")]
@@ -114,8 +114,10 @@ impl TokenError {
         Self::MissingToken { expected: expected.into() }
     }
 
-    fn wrong_token<E: Into<String>>(expected: E, span: pest::Span) -> Self {
-        Self::WrongToken { expected: expected.into(), index: span.start() }
+    fn wrong_token<E: Into<String>>(expected: E, token: &Pair<'_, Rule>) -> Self {
+        let got = display_rule(&token.as_rule());
+        let span = token.as_span();
+        Self::WrongToken { expected: expected.into(), got, index: span.start() }
     }
 
     fn unknown_id<S: Into<String>>(got: S, span: pest::Span) -> Self {
@@ -202,10 +204,9 @@ fn handle_replacement(
                 let mut args = if let Rule::function_args = args.as_rule() {
                     args.into_inner()
                 } else {
-                    return Err(TokenError::wrong_token("function arguments", args.as_span()));
+                    return Err(TokenError::wrong_token("function arguments", &args));
                 };
                 
-
                 match fxn_name.as_str() {
                     "upper" => {
                         let varname = get_id_arg(args.next(), private_name, public_name)?;
@@ -259,18 +260,42 @@ fn handle_replacement(
     unreachable!()
 }
 
-fn get_id_arg<'a>(arg: Option<Pair<'_, Rule>>, private_name: Option<&'a str>, public_name: Option<&'a str>) -> Result<&'a str, TokenError> {
-    let arg = arg.ok_or_else(|| TokenError::missing_token("identifier"))?;
+fn display_rule(rule: &Rule) -> &'static str {
+    match rule {
+        Rule::WS => "whitespace",
+        Rule::literal_part => "literal_part",
+        Rule::identifier => "identifier",
+        Rule::sq => "'",
+        Rule::dq => "\"",
+        Rule::single_quote_str => "single quoted string",
+        Rule::double_quote_str => "double quoted string",
+        Rule::arg_sep => ",",
+        Rule::arg => "argument",
+        Rule::function_args => "function arguments",
+        Rule::function => "function",
+        Rule::replacement => "replacement",
+        Rule::attribute => "attribute",
+    }
+}
 
-    match arg.as_rule() {
+fn get_id_arg<'a>(arg: Option<Pair<'_, Rule>>, private_name: Option<&'a str>, public_name: Option<&'a str>) -> Result<&'a str, TokenError> {
+    let arg = arg.ok_or_else(|| TokenError::missing_token("argument"))?;
+
+    let value = match arg.as_rule() {
+        Rule::arg => arg.into_inner().next().unwrap(),
+        Rule::identifier => arg,
+        _ => return Err(TokenError::wrong_token("argument", &arg))
+    };
+
+    match value.as_rule() {
         Rule::identifier => {},
-        _ => return Err(TokenError::wrong_token("identifier (e.g. name or pubname)", arg.as_span()))
+        _ => return Err(TokenError::wrong_token("identifier (e.g. name or pubname)", &value))
     }
 
-    match arg.as_str() {
-        "name" => return private_name.ok_or_else(|| TokenError::no_private(arg.as_span()) ),
-        "pubname" => return public_name.ok_or_else(|| TokenError::no_public( arg.as_span() ) ),
-        _ => return Err(TokenError::unknown_id(arg.as_str(), arg.as_span()))
+    match value.as_str() {
+        "name" => return private_name.ok_or_else(|| TokenError::no_private(value.as_span()) ),
+        "pubname" => return public_name.ok_or_else(|| TokenError::no_public( value.as_span() ) ),
+        _ => return Err(TokenError::unknown_id(value.as_str(), value.as_span()))
     }
 }
 
@@ -281,12 +306,12 @@ fn get_string_arg<'a>(arg: Option<Pair<'a, Rule>>, arg_num: usize) -> Result<&'a
     let value = if let Rule::arg = arg.as_rule() {
         arg.into_inner().next().unwrap()
     } else {
-        return Err(TokenError::wrong_token("function argument", arg.as_span()));
+        return Err(TokenError::wrong_token("function argument", &arg));
     };
 
     match value.as_rule() {
         Rule::single_quote_str | Rule::double_quote_str => Ok(value.as_str()),
-        _ => Err(TokenError::wrong_token("quoted string", value.as_span()))
+        _ => Err(TokenError::wrong_token("quoted string", &value))
     }
 }
 
@@ -371,9 +396,10 @@ mod tests {
             &HashMap::new()
         ).unwrap_err();
 
-        if let TokenError::WrongToken { expected, index } = err {
+        if let TokenError::WrongToken { expected, got, index } = err {
             assert_eq!(&expected, "identifier (e.g. name or pubname)");
-            assert_eq!(index, 7);
+            assert_eq!(got, "single quoted string");
+            assert_eq!(index, 8);
         }
     }
 
@@ -389,6 +415,7 @@ mod tests {
         if let TokenError::NoPublic(i) = err {
             assert_eq!(i, 1);
         }else {
+            dbg!(err);
             assert!(false);
         }
     }
