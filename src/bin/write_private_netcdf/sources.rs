@@ -1,7 +1,7 @@
-use std::{path::{PathBuf, Path}, str::FromStr, fmt::Display};
+use std::{path::{PathBuf, Path}, str::FromStr, fmt::Display, collections::HashMap};
 
 use chrono::{DateTime, Utc};
-use ggg_rs::{runlogs::FallibleRunlog, cit_spectrum_name::CitSpectrumName};
+use ggg_rs::{runlogs::FallibleRunlog, cit_spectrum_name::{CitSpectrumName, NoDetectorSpecName}};
 use log::warn;
 use ndarray::Array1;
 
@@ -68,27 +68,29 @@ pub struct TcconRunlog {
     runlog: PathBuf,
     variables: Vec<String>,
     dimensions: Vec<DimensionWithValues>,
+    spectrum_to_index: HashMap<NoDetectorSpecName, usize>
 }
 
 impl TcconRunlog {
     pub fn new(runlog: PathBuf) -> Result<Self, TranscriptionError> {
-        let (times, master_spectra, max_specname_len) = Self::read_dims(&runlog)?;
+        let (times, master_spectra, spectrum_to_index, max_specname_len) = Self::read_dims(&runlog)?;
         let time_dim = DimensionWithValues::Time(times, master_spectra);
         let specname_dim = DimensionWithValues::SpectrumNameLength(max_specname_len);
 
         let variables = vec![]; // TODO: define the variables we want from the runlog
-        Ok(Self { runlog, variables, dimensions: vec![time_dim, specname_dim] })
+        Ok(Self { runlog, variables, spectrum_to_index, dimensions: vec![time_dim, specname_dim] })
     }
 
-    fn read_dims(runlog: &Path) -> Result<(Array1<DateTime<Utc>>, Array1<String>, usize), TranscriptionError> {
+    fn read_dims(runlog: &Path) -> Result<(Array1<DateTime<Utc>>, Array1<String>, HashMap<NoDetectorSpecName, usize>, usize), TranscriptionError> {
         let runlog_handle = FallibleRunlog::open(runlog)
             .map_err(|e| TranscriptionError::ReadError { file: runlog.to_path_buf(), cause: e.to_string() })?;
 
-        let mut last_master_spec = None;
-        let mut last_master_time = None;
-        let mut master_detector = None;
+        let mut last_spec = None;
+        let mut last_time = None;
         let mut times = vec![];
         let mut spectra = vec![];
+        let mut time_index_mapping = HashMap::new();
+        let mut curr_time_index: usize = 0;
         let mut max_specname_length = 0;
         for (line, res) in runlog_handle.into_line_iter() {
             // Handle the case where reading & parsing the next line of the runlog fails
@@ -99,6 +101,7 @@ impl TcconRunlog {
 
             // We need information about the spectrum and ZPD time - make sure we can get that successfully
             let spectrum = CitSpectrumName::from_str(&rl_rec.spectrum_name)
+                .map(NoDetectorSpecName::from)
                 .map_err(|e| TranscriptionError::ReadErrorAtLine { 
                     file: runlog.to_path_buf(), line, cause: e.to_string()
                 })?;
@@ -108,38 +111,61 @@ impl TcconRunlog {
                     file: runlog.to_path_buf(), line, cause: "Invalid ZPD time".to_string()
                 })?;
 
-            // For the time dimension, we want to use the "master" spectra, since the secondary spectra
-            // should have the same ZPD time as the corresponding master spectrum. (We know this isn't the
-            // case, and Opus occasionally writes out incorrect ZPD times for the second detector.) In the
-            // output, any data coming from the secondary detector will be slotted into the same time index
-            // as the master detector's data.
-            if master_detector.is_none() {
-                // First time through the loop - take the detector from the first spectrum as the "master"
-                master_detector = Some(spectrum.detector());
-            }
-            
-            if master_detector == Some(spectrum.detector()) {
-                // This is one of the master spectra, add its data to the dimension arrays
-                last_master_spec = Some(rl_rec.spectrum_name.clone());
-                last_master_time = Some(zpd_time);
+            // For the time dimension, we want to use the ZPD from the first spectrum in the runlog for a
+            // given measurement This assumes that a runlog will always have the secondary detector's spectrum
+            // immediately follow the primary detector's when both are available. We can check that this is the
+            // case because we keep track of the spectra that we find, ignoring the detector. (We know that, 
+            // while both should have the same ZPD time, this isn't always the case, and Opus occasionally 
+            // writes out incorrect ZPD times for the second detector.) In the output, any data coming from the
+            // secondary detector will be slotted into the same time index as the primary detector's data if there
+            // is a pimary detector.
 
+            let is_new_obs = if let Some(ls) = &last_spec {
+                if ls != &spectrum {
+                    last_spec = Some(spectrum.to_owned());
+                    last_time = Some(zpd_time);
+                    true
+                } else {
+                    false
+                }
+            } else {
+                last_spec = Some(spectrum.to_owned());
+                last_time = Some(zpd_time);
+                true
+            };
+            
+            if is_new_obs && time_index_mapping.contains_key(&spectrum) {
+                // This should mean that a spectrum has the same name (ignoring the detector)
+                // as a spectrum we already encountered. This means the runlog is formatted in
+                // a way we don't expect. Weird runlog ordering is the root cause for a lot
+                // of errors, so reject this runlog.
+                return Err(TranscriptionError::UnexpectedEvent { 
+                    file: runlog.to_path_buf(), 
+                    problem: format!("spectrum {} occurs separately in the runlog from another spectrum that shares the same name (but with potentially a different detector). This is not allowed; all spectra for a given observation must occur together in the runlog.", 
+                                     spectrum.0.spectrum())
+                })
+            } else if is_new_obs {
+                max_specname_length = max_specname_length.max(spectrum.0.spectrum().as_bytes().len());
                 times.push(zpd_time);
-                max_specname_length = max_specname_length.max(rl_rec.spectrum_name.as_bytes().len());
-                spectra.push(rl_rec.spectrum_name);
-            } else if last_master_time != Some(zpd_time) {
-                // This is *not* a master spectrum, but it has a different ZPD time than the last master
+                spectra.push(spectrum.0.spectrum().to_string());
+                time_index_mapping.insert(spectrum, curr_time_index);
+                curr_time_index += 1;
+            } else if last_time != Some(zpd_time) {
+                // This is *not* the first spectrum for the obs, but it has a different ZPD time than the last
                 // spectrum. This happens occasionally (due to an Opus bug we think). We should be able to
                 // handle it later in the code, but this is a root cause for a lot of problems, so print a
                 // warning.
-                warn!("Spectrum {} has a different ZPD time than its corresponding master spectrum ({}) in runlog {}.",
-                      rl_rec.spectrum_name, last_master_spec.as_deref().unwrap_or("?"), runlog.display());
+                warn!("Spectrum {} has a different ZPD time than the first spectrum with the same name (ignoring the detector) ({}) in runlog {}.",
+                      rl_rec.spectrum_name, 
+                      last_spec.as_ref().map(|s| s.0.spectrum()).unwrap_or("?"), 
+                      runlog.display());
             }
         }
         
         let times = Array1::from_vec(times);
         let spectra = Array1::from_vec(spectra);
 
-        Ok((times, spectra, max_specname_length))
+        Ok((times, spectra, time_index_mapping, max_specname_length))
     }
 }
 

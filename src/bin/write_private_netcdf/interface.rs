@@ -8,6 +8,8 @@ pub enum TranscriptionError {
     ReadError{file: PathBuf, cause: String},
     #[error("Error reading file {} at line {line}: {cause}", file.display())]
     ReadErrorAtLine{file: PathBuf, line: usize, cause: String},
+    #[error("In file {}: {problem}", file.display())]
+    UnexpectedEvent{file: PathBuf, problem: String},
     #[error("Error writing variable {variable} to netCDF: {inner}")]
     WriteError{variable: String, inner: netcdf::error::Error}
 }

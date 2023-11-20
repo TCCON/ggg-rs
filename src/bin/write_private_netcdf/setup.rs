@@ -35,7 +35,13 @@ fn get_runlog(col_files: &[PathBuf]) -> error_stack::Result<PathBuf, SetupError>
     let col_header = read_col_file_header(&mut file)
         .change_context_lazy(|| SetupError::FileReadError { description: first_col_file.to_string_lossy().to_string() })?;
 
-    Ok(col_header.runlog_file.path)
+    if col_header.runlog_file.path.exists() {
+        Ok(col_header.runlog_file.path)
+    } else {
+        Err(SetupError::FileReadError { 
+            description: format!("Runlog ({}) listed in {} does not exist", col_header.runlog_file.path.display(), first_col_file.display()) 
+        }.into())
+    }
 }
 
 fn read_multiggg() -> error_stack::Result<Vec<String>, SetupError> {

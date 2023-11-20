@@ -234,6 +234,7 @@ impl From<&CitDetector> for char {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct CitSpectrumName {
     spectrum_name: String,
     date: chrono::NaiveDate,
@@ -243,6 +244,10 @@ pub struct CitSpectrumName {
 impl CitSpectrumName {
     pub fn site_id(&self) -> &str {
         &self.spectrum_name[..2]
+    }
+
+    pub fn spectrum(&self) -> &str {
+        &self.spectrum_name
     }
 
     pub fn date(&self) -> chrono::NaiveDate {
@@ -292,7 +297,8 @@ impl CitSpectrumName {
     }
 
     pub fn spectrum_name_with_detector(&self, detector: CitDetector) -> String {
-        format!("{}{}{}", &self.spectrum_name[..=14], detector, &self.spectrum_name[16..])
+        let (pre, post) = split_specname_around_detector(&self.spectrum_name);
+        format!("{pre}{detector}{post}")
     }
 }
 
@@ -371,4 +377,42 @@ impl Hash for CitSpectrumName {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.spectrum_name.hash(state);
     }
+}
+
+
+/// A wrapper around a spectrum that implements hashing and equality checks that ignore the detector.
+/// 
+/// This type should be used whenever you want to identify if two things are measurments from the same
+/// time, regardless of detector.
+#[derive(Debug, Clone)]
+pub struct NoDetectorSpecName(pub CitSpectrumName);
+
+impl From<CitSpectrumName> for NoDetectorSpecName {
+    fn from(value: CitSpectrumName) -> Self {
+        Self(value)
+    }
+}
+
+impl Hash for NoDetectorSpecName {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        let (pre, post) = split_specname_around_detector(&self.0.spectrum_name);
+        pre.hash(state);
+        post.hash(state);
+    }
+}
+
+impl PartialEq for NoDetectorSpecName {
+    fn eq(&self, other: &Self) -> bool {
+        let (my_pre, my_post) = split_specname_around_detector(&self.0.spectrum_name);
+        let (other_pre, other_post) = split_specname_around_detector(&other.0.spectrum_name);
+        my_pre == other_pre && my_post == other_post
+    }
+}
+
+impl Eq for NoDetectorSpecName {}
+
+
+/// Split a CIT spectrum name into two substrings: the parts before and after the detector character
+pub fn split_specname_around_detector(specname: &str) -> (&str, &str) {
+    (&specname[..=14], &specname[16..])
 }
