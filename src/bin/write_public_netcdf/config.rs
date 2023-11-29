@@ -1,6 +1,28 @@
+//! Configure which variables are copied from the private files
+//! 
+//! The configuration file will be a TOML file with at least one section, `variables`.
+//! There are several ways to define which variables are copied, as shown in the following
+//! example
+//! 
+//! ```toml
+//! [[variables]]
+//! private_name = "prior_altitude"
+//! public_name = "prior_altitude"
+//! 
+//! 
+//! [[variables]]
+//! private_names = ["pout", "tout", "hout"]
+//! 
+//! [[variables]]
+//! private_names = ["prior_1co2", "prior_1ch4", "prior_1co"]
+//! public_names = ["prior_co2", "prior_ch4", "prior_co"]
+//! 
+//! [[variables]]
+//! private_name_pattern = ["ak_x[a-z0-9]+"]
+//! ```
+
 use std::collections::HashMap;
 
-use regex::Regex;
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
@@ -12,45 +34,32 @@ pub(crate) struct PublicNcConfig {
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum ConfigErrorType {
-    #[error("invalid regex: {0}")]
-    Regex(#[from] regex::Error),
-    #[error("map key '{0}' is not defined")]
-    Map(String),
+    
 }
 
 #[derive(Debug, Deserialize)]
 pub(crate) enum TransferMethod {
-    Copy
-}
-
-impl Default for TransferMethod {
-    fn default() -> Self {
-        Self::Copy
-    }
+    Copy(String)
 }
 
 #[derive(Debug, Deserialize)]
 pub(crate) enum VariableDef {
-    Single(SingleVariable),
-    Group(VariableGroup)
+    Single(CopyOneVar),
+    Group(CopyManyVars)
 }
 
 /// A mapping from a single private variable to a single public variable
 #[derive(Debug, Deserialize)]
-pub(crate) struct SingleVariable {
+pub(crate) struct CopyOneVar {
     /// The name of the variable in the private files
     pub(crate) private_name: String,
 
     /// The name to give the variable in the public files
     pub(crate) public_name: String,
 
-    /// The CF-compliant standard name attribute value. This must
-    /// be given, as the private files do not include such an attribute.
-    pub(crate) standard_name: String,
-
-    /// How to create the public variables. Default is to copy them.
-    #[serde(default)]
-    pub(crate) transfer: TransferMethod,
+    /// The CF-compliant standard name attribute value. If not given,
+    /// will use the "standard_name" attribute 
+    pub(crate) standard_name: Option<String>,
 
     /// Units to assume the private file values are in when converting.
     /// If not given, will use the "units" attribute on the private variable
@@ -70,13 +79,18 @@ pub(crate) struct SingleVariable {
     #[serde(default)]
     pub(crate) long_name: Option<String>,
 
+    /// Additional attributes to copy from the private files. Specifying
+    /// any of the attributes specifically called out as fields has no effect.
+    #[serde(default)]
+    pub(crate) copy_attributes: Vec<String>,
+
     /// Additional attributes to add to this variable.
     #[serde(default)]
-    pub(crate) extra_attributes: HashMap<String, String>
+    pub(crate) add_attributes: HashMap<String, String>
 }
 
 
 #[derive(Debug, Deserialize)]
-pub(crate) struct VariableGroup {
+pub(crate) struct CopyManyVars {
 
 }
