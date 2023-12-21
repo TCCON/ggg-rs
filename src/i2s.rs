@@ -44,6 +44,15 @@ impl I2SVersion {
     }
 }
 
+impl Display for I2SVersion {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            I2SVersion::I2S2014 => write!(f, "2014"),
+            I2SVersion::I2S2020 => write!(f, "2020"),
+        }
+    }
+}
+
 /// The default I2S version, currently I2S2020.
 impl Default for I2SVersion {
     fn default() -> Self {
@@ -118,9 +127,9 @@ pub fn iter_i2s_header_params_with_number(i2s_input_file: &Path, i2s_version: I2
 /// Given a path to an I2S input file, iterate over all lines, indicating whether each one is a top line.
 /// 
 /// This is essentially a wrapper around a [`BufReader`] that also indicates whether each line returned
-/// is an top) line, i.e. one in the header. Each iteration returns a tuple `(bool, String)` where the bool
-/// will be `true`` if for all lines before the first-non header parameter. This means that all lines up
-/// to the first non-comment line in the catalog are considered header lines.
+/// is an top) line, i.e. one in the header. Each iteration returns a tuple `(I2SLineType, String)` where
+/// the first value indicates the role of the line in the input file. To determine if the line is in the
+/// header, call the `is_header_line` method on that value.
 /// 
 /// **Note:** unlike [`iter_i2s_header_params`] and [`iter_i2s_header_params_with_number`], trailing newlines
 /// and carriage returns are *not* removed from the lines yielded by this iterator.
@@ -231,14 +240,63 @@ impl<'a> Iterator for I2SParamIterWithIndex<'a> {
     }
 }
 
+/// An enum indicating the role of a line in an I2S input file
+#[derive(Debug, Clone, Copy)]
+pub enum I2SLineType {
+    /// The line is a parameter in the file header (i.e. top). The
+    /// contained value is the 1-based parameter number.
+    HeaderParam(usize),
+
+    /// Thie line is from the header but is not a parameter. This
+    /// is usually a comment or blank line.
+    HeaderLine,
+
+    /// This line is a row from the catalog that contains at least
+    /// some information. It does not guarantee that the row is 
+    /// complete.
+    CatalogRow,
+
+    /// This line is from the catalog, but does not contain any 
+    /// information for I2S. This may be a comment or blank line.
+    Other,
+}
+
+impl I2SLineType {
+    /// Returns `true` if the line is in the header of the input file.
+    /// 
+    /// All lines up to the first row of the catalog are considered in
+    /// the header, thus any comment/blank lines between the last header
+    /// parameter and first catalog row will return `true`. This cannot
+    /// distinguish between a real comment and a commented-out catalog
+    /// row before any real catalog rows.
+    pub fn is_header_line(&self) -> bool {
+        match self {
+            I2SLineType::HeaderParam(_) => true,
+            I2SLineType::HeaderLine => true,
+            I2SLineType::CatalogRow => false,
+            I2SLineType::Other => false,
+        }
+    }
+
+    /// Get the header parameter number for this line. If this line is
+    /// not a header parameter, returns `None`.
+    pub fn header_param(&self) -> Option<usize> {
+        if let Self::HeaderParam(i) = self {
+            Some(*i)
+        } else {
+            None
+        }
+    }
+}
+
 /// An iterator over all lines in an I2S input file.
 /// 
 /// This is normally constructed by calling [`iter_i2s_lines`], only construct
 /// this directly if you need more control over the iteration. **Note:** unlike
 /// [`I2SParamIter`] and [`I2SParamIterWithIndex`], trailing newlines/carriage returns
 /// are *not* stripped from the lines yielded by this iterator. The iterator will
-/// yield tuples of `(bool, String)`, where the boolean is `true` for lines in the
-/// header.
+/// yield tuples of `(I2SLineType, String)`, where the first value indicates what
+/// role the line plays in the input file.
 pub struct I2SLineIter<'a> {
     file: FileBuf<'a, BufReader<File>>,
     curr_param: usize,
@@ -257,7 +315,7 @@ impl<'a> I2SLineIter<'a> {
 }
 
 impl<'a> Iterator for I2SLineIter<'a> {
-    type Item = std::io::Result<(bool, String)>;
+    type Item = std::io::Result<(I2SLineType, String)>;
 
     fn next(&mut self) -> Option<Self::Item> {
         let (is_param, line) = match iter_i2s_lines_inner(&mut self.file, self.curr_param, None) {
@@ -271,7 +329,17 @@ impl<'a> Iterator for I2SLineIter<'a> {
         }
 
         let is_header_line = self.curr_param <= self.header_n_param;
-        Some(Ok((is_header_line, line)))
+        let line_type = if is_param && is_header_line {
+            I2SLineType::HeaderParam(self.curr_param)
+        } else if is_header_line {
+            I2SLineType::HeaderLine
+        } else if is_param {
+            I2SLineType::CatalogRow
+        } else {
+            I2SLineType::Other
+        };
+
+        Some(Ok((line_type, line)))
     }
 }
 
@@ -295,6 +363,73 @@ fn iter_i2s_lines_inner(file: &mut FileBuf<'_, BufReader<File>>, curr_param: usi
     let value = remove_comment(&buf);
     let is_param_line = !value.trim().is_empty();
     Some(Ok((is_param_line, buf)))
+}
+
+
+// ------------------ //
+// INPUT MODIFICATION //
+// ------------------ //
+
+/// A structure representing edits to make to an I2S input file
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub struct I2SInputModifcations {
+    /// The list of changes to make to header parameters
+    pub header: Vec<I2SHeaderEdit>,
+}
+
+impl I2SInputModifcations {
+    /// Given a line type, return `Some(_)` with the new line if that line should
+    /// be replaced, `None` otherwise.
+    /// 
+    /// This is intended for use with [`iter_i2s_lines`], such that you can use
+    /// the iterator over lines to get `line_type`, pass in the `line_type` and
+    /// use the optional return of this function to decide whether to write
+    /// the new line or existing line.
+    pub fn change_line_opt(&self, line_type: I2SLineType) -> Option<&str> {
+        match line_type {
+            I2SLineType::HeaderParam(param) => {
+                for edit in self.header.iter() {
+                    if edit.parameter == param {
+                        return Some(&edit.value)
+                    }
+                }
+
+                None
+            },
+            I2SLineType::HeaderLine => None,
+            I2SLineType::CatalogRow => None,
+            I2SLineType::Other => None,
+        }
+    }
+
+    /// Create an example JSON string.
+    /// 
+    /// Usually used to print out as an example for users to learn from.
+    pub fn example_json_string(pretty: bool) -> String {
+        let example = Self {
+            header: vec![
+                I2SHeaderEdit{ parameter: 1, value: "./igms".to_string() },
+                I2SHeaderEdit{ parameter: 2, value: "./spectra".to_string() },
+                I2SHeaderEdit{ parameter: 7, value: "1 1".to_string() },
+            ]
+        };
+
+        if pretty {
+            serde_json::to_string_pretty(&example).unwrap()
+        } else {
+            serde_json::to_string(&example).unwrap()
+        }
+    }
+}
+
+/// A structure representing a single change to an I2S input file header
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub struct I2SHeaderEdit {
+    /// The 1-based parameter number that this corresponds to
+    pub parameter: usize,
+
+    /// The new value for this parameter
+    pub value: String
 }
 
 // ----------------- //

@@ -4,7 +4,8 @@ use std::path::{PathBuf, Path};
 use std::str::FromStr;
 
 use error_stack::ResultExt;
-use ggg_rs::i2s::{I2SVersion, iter_i2s_header_params_with_number, iter_i2s_lines};
+use ggg_rs::i2s::{I2SVersion, iter_i2s_header_params_with_number, iter_i2s_lines, I2SInputModifcations};
+use ggg_rs::utils::{read_input_file_or_stdin, OptInplaceWriter};
 use itertools::Itertools;
 
 use crate::CliError;
@@ -14,10 +15,33 @@ pub(crate) fn driver(
     output_file: &Path,
     i2s_version: I2SVersion,
     whitespace_method: ParamWhitespaceEq, 
-    skip_check_params: &[usize]
+    mut skip_check_params: Vec<usize>,
+    edits_json: Option<&Path>
 ) -> error_stack::Result<(), CliError> {
-    check_inputs_match(input_files, i2s_version, whitespace_method, skip_check_params)?;
+    let edits = if let Some(json_path) = edits_json {
+        // Load the edits if requested. Go ahead and add the parameters to be modified to the list
+        // of those to skip checking b/c it doesn't matter if they differ across files - we replace
+        // them at the end anyway.
+        let json_bytes = read_input_file_or_stdin(json_path)
+            .change_context_lazy(|| CliError::ReadError(json_path.to_path_buf()))?;
+        let edits: I2SInputModifcations = serde_json::from_slice(&json_bytes)
+            .change_context_lazy(|| CliError::BadInput("Could not parse JSON edits file".to_string()))?;
 
+        for param in edits.header.iter() {
+            if !skip_check_params.contains(&param.parameter) {
+                skip_check_params.push(param.parameter);
+            }
+        }
+
+        Some(edits)
+    } else {
+        None
+    };
+
+    // Verify that all the input files have the same top parameters, except those we've said are okay to differ
+    check_inputs_match(input_files, i2s_version, whitespace_method, &skip_check_params)?;
+
+    // Copy the header from the first file and the catalogs from all the files
     let mut outf = std::fs::File::create(output_file)
         .change_context_lazy(|| CliError::WriteError(output_file.to_path_buf()))?;
 
@@ -26,11 +50,20 @@ pub(crate) fn driver(
             .change_context_lazy(|| CliError::ReadError(input_path.to_path_buf()))?;
 
         for line in line_iter {
-            let (is_header, line) = line.change_context_lazy(|| CliError::ReadError(input_path.to_path_buf()))?;
-            if !is_header || ifile == 0 {
+            let (line_type, line) = line.change_context_lazy(|| CliError::ReadError(input_path.to_path_buf()))?;
+            if !line_type.is_header_line() || ifile == 0 {
                 write!(outf, "{line}").change_context_lazy(|| CliError::WriteError(output_file.to_path_buf()))?;
             }
         }
+    }
+
+    // If edits were requested, make them now.
+    outf.flush().change_context_lazy(|| CliError::WriteError(output_file.to_path_buf()))?;
+
+    if let Some(edits) = edits {
+        let writer = OptInplaceWriter::new_in_place(output_file.to_path_buf())
+            .change_context_lazy(|| CliError::WriteError(output_file.to_path_buf()))?;
+        crate::modify_input::edit_i2s_input_file(&output_file, writer, i2s_version, edits)?;
     }
     Ok(())
 }
