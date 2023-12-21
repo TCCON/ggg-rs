@@ -1,6 +1,5 @@
 //! General GGG utilities, not particular to any program or I/O step.
 use std::ffi::OsString;
-use std::rc::Rc;
 use std::{env, f64};
 use std::error::Error;
 use std::fmt::Display;
@@ -11,7 +10,6 @@ use std::path::{PathBuf, Path};
 use std::str::FromStr;
 
 use chrono::TimeZone;
-use itertools::Itertools;
 
 
 /// Standard error type for all GGG functions
@@ -328,82 +326,25 @@ impl <'p, F: BufRead> DerefMut for FileBuf<'p, F> {
 }
 
 
-/// An interface to use when you may or may not need to modify a file in-place
+/// A structure to use in command line interfaces when output may be to a new file or modifying one in place
 /// 
-/// When modifying a file in place, it's easiest to read its contents into memory
-/// then write them out again with some changes. This struct allows you to handle
-/// the case of reading from a file on disk line by line, or reading in all the lines
-/// at once (the latter for in-place modification).
+/// The intention is you would incorporate this into a [`clap`] Derive-based parsers
+/// like so:
 /// 
-/// To use, you would open the file with either the `as_buf_file` method or the
-/// `as_lines_in_mem` method, then use the returned instance as an iterator
-/// over the lines. Note that the lines will be returned as `Rc<String>` instances
-/// rather than `String` or `&str` as a concession to minimize string copies where
-/// possible.
-pub enum FileOrLines {
-    File(BufReader<File>),
-    Lines((Vec<Rc<String>>, usize))
-}
-
-impl FileOrLines {
-    /// Open the file at path `p` as a buffered reader.
-    /// 
-    /// The `FileOrLines` instance returned by this method
-    /// will read lines from the file on disk as needed. This
-    /// is more memory efficient than `as_lines_in_mem`, but
-    /// cannot be used if the file will be written back to
-    /// while iterating over lines.
-    pub fn as_buf_file(p: &Path) -> std::io::Result<Self> {
-        let file = std::fs::File::open(p)?;
-        let rdr = BufReader::new(file);
-        Ok(Self::File(rdr))
-    }
-
-    /// Read the file at path `p` into memory.
-    /// 
-    /// The `FileOrLines` instance returned by this method
-    /// will hold the contents of that file in memory. Thus
-    /// it is safe to write back out to that file while
-    /// iterating over lines.
-    pub fn as_lines_in_mem(p: &Path) -> std::io::Result<Self> {
-        let file = std::fs::File::open(p)?;
-        let rdr = BufReader::new(file);
-        let lines: Vec<Rc<String>> = rdr.lines()
-            .map(|res| {
-                res.map(|line| Rc::new(line))
-            }).try_collect()?;
-        Ok(Self::Lines((lines, 0)))
-    }
-}
-
-impl Iterator for FileOrLines {
-    type Item = std::io::Result<Rc<String>>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        match self {
-            FileOrLines::File(rdr) => {
-                let mut buf = String::new();
-                let nbytes = match rdr.read_line(&mut buf) {
-                    Ok(n) => n,
-                    Err(e) => return Some(Err(e))
-                };
-
-                if nbytes == 0 {
-                    return None;
-                } else {
-                    return Some(Ok(Rc::new(buf)))
-                }
-            },
-            FileOrLines::Lines((v, i)) => {
-                *i += 1;
-                return v.get(*i-1)
-                    .map(|el| Ok(Rc::clone(el)));
-            },
-        }
-    }
-}
-
-
+/// ```no_run
+/// # use std::path::PathBuf;
+/// # use ggg_rs::utils::OutputOptCli;
+/// #[derive(Debug, clap::Parser)]
+/// struct Cli {
+///     input_file: PathBuf,
+///     #[clap(flatten)]
+///     output: OutputOptCli
+/// }
+/// ```
+/// 
+/// This will put the arguments `--in-place` and `-o`/`--output-file` into your CLI.
+/// Then, you can use the `setup_output` method to get an [`OptInplaceWriter`] which
+/// will help with writing to the correct output file.
 #[derive(Debug, clap::Args)]
 #[group(required=true)]
 pub struct OutputOptCli {
@@ -414,6 +355,7 @@ pub struct OutputOptCli {
 }
 
 impl OutputOptCli {
+    /// Given the user input, return an [`OptInplaceWriter`] to handle modifying a file in place or writing to a new file.
     pub fn setup_output<'a>(&'a self, input_file: &'a Path) -> std::io::Result<OptInplaceWriter> {
         if self.in_place && self.output_file.is_some() {
             panic!("Incorrect use of OptOutputCli - in_place and output_file should never both be given");
@@ -429,6 +371,47 @@ impl OutputOptCli {
     }
 }
 
+/// A structure that helps with optionally writing to a new file or modifying one in place.
+/// 
+/// This will typically be created from the `setup_output` method of `OutputOptCli`. If needed,
+/// you can create it diretly with its `new_in_place` and `new_separate` methods, which create
+/// a writer configured to help with modifying a file in place vs. writing a separate file.
+/// 
+/// The difference is that the "in-place" modification assumes that the file given as the output
+/// path exists and is being read from, so it creates a temporary file. When you call `finalize`,
+/// it renames the temporary file to its final location. This way, you can read from the original
+/// file to copy and modify its contents into the new file, then overwrite the original only if
+/// the new file is successfully completed:
+/// 
+/// ```no_run
+/// # use std::path::PathBuf;
+/// # use ggg_rs::utils::OptInplaceWriter;
+/// use std::io::BufRead;
+/// use std::io::Write;
+/// 
+/// let p = PathBuf::from("./example.txt");
+/// let file = std::fs::File::open(&p).unwrap();
+/// let mut reader = std::io::BufReader::new(file);
+/// let mut writer = OptInplaceWriter::new_in_place(p).unwrap();
+/// 
+/// write!(&mut writer, "new line").unwrap();
+/// let mut line = String::new();
+/// reader.read_line(&mut line).unwrap();
+/// write!(&mut writer, "{line}").unwrap();
+/// // At this point, "example.txt" is unchanged.
+/// writer.finalize().unwrap();
+/// // Now "example.txt" has "new line" as its first line
+/// // and its original first line was moved down one.
+/// ```
+/// 
+/// If not doing an in-place modification, then this writes directly to the output file
+/// as if you used `std::fs::File`.
+/// 
+/// **Note: you *must* call `finalize` for the in-place modification to complete! Otherwise
+/// the changes will only be in a hidden file.**
+/// 
+/// As shown in the above example, this implements `std::io::Write`, so you can use it with
+/// the `write!` and `writeln!` macros, as well as other standard methods to write to files.
 pub struct OptInplaceWriter {
     in_place: bool,
     out_path: PathBuf,
@@ -437,6 +420,7 @@ pub struct OptInplaceWriter {
 }
 
 impl OptInplaceWriter {
+    /// Create a new writer to defer writing to `path` until `finalize()` is called.
     pub fn new_in_place(path: PathBuf) -> std::io::Result<Self> {
         let curr_name = path.file_name()
             .ok_or_else(|| std::io::Error::other(format!("Could not get base name of {}", path.display())))?;
@@ -459,12 +443,19 @@ impl OptInplaceWriter {
         Ok(Self { in_place: true, out_path, final_path: path, file })
     }
 
+    /// Create a new writer that writes directly to `path`.
     pub fn new_separate(path: PathBuf) -> std::io::Result<Self> {
         let file = std::fs::File::create(&path)?;
         Ok(Self { in_place: false, out_path: path, final_path: PathBuf::new(), file })
     }
 
-    pub fn finalize(self) -> std::io::Result<()> {
+    /// Perform any finalization. 
+    /// 
+    /// Consumes the writer, since after this call, no further data should be written.
+    /// For all writers, this flushes any remaining data to disk. For in-place writers,
+    /// this moves the temporary file into the final output location.
+    pub fn finalize(mut self) -> std::io::Result<()> {
+        self.file.flush()?;
         if self.in_place {
             std::fs::rename(self.out_path, self.final_path)
         } else {
@@ -472,6 +463,7 @@ impl OptInplaceWriter {
         }
     }
 
+    /// Get a reference to the final output path.
     pub fn output_path(&self) -> &Path {
         &self.out_path
     }
@@ -487,6 +479,11 @@ impl Write for OptInplaceWriter {
     }
 }
 
+/// Read the contents of input from a file or stdin.
+/// 
+/// If `input_path` is just "-", then this reads from stdin. Otherwise, it
+/// reads the contents of `input_path`. Note that the stdin read is blocking;
+/// if the user provides no input, the program may hang indefinitely.
 pub fn read_input_file_or_stdin(input_path: &Path) -> std::io::Result<Vec<u8>> {
     let mut buf = Vec::new();
     if input_path.to_string_lossy() == "-" {
