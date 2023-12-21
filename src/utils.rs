@@ -3,7 +3,7 @@ use std::{env, f64};
 use std::error::Error;
 use std::fmt::Display;
 use std::fs::File;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Read};
 use std::ops::{Deref, DerefMut};
 use std::path::{PathBuf, Path};
 use std::str::FromStr;
@@ -601,4 +601,27 @@ pub fn runlog_ydh_to_datetime(year: i32, day_of_year: i32, utc_hour: f64) -> chr
     + chrono::Duration::hours(ihours as i64)
     + chrono::Duration::minutes(iminutes as i64)
     + chrono::Duration::seconds(iseconds as i64)
+}
+
+
+#[derive(Debug, thiserror::Error)]
+pub enum EncodingError {
+    #[error("IO error: {0}")]
+    IoError(#[from] std::io::Error),
+    #[error("Could not convert file contents: {0}")]
+    ConversionError(String),
+}
+
+
+pub fn read_unknown_encoding_file<P: AsRef<Path>>(filepath: P) -> Result<String, EncodingError> {
+    let mut f = std::fs::File::open(filepath)?;
+    let mut buf = vec![];
+    f.read_to_end(&mut buf)?;
+    let (content_result, _) = encoding::types::decode(
+        &buf,
+        encoding::types::DecoderTrap::Strict,
+        encoding::all::UTF_8
+    );
+
+    content_result.map_err(|e| EncodingError::ConversionError(e.into_owned()))
 }

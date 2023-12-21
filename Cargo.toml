@@ -10,15 +10,19 @@ resolver = "2"
 approx = "0.5.1"
 chrono = "0.4.23"
 clap = {version = "4", features = ["derive"]}
+encoding = "0.2.33"
+itertools = "0.11.0"
 error-stack = "0.4.1"
 ndarray = "0.15"
 netcdf = "0.8"
+num-traits = "0.2.16"
 # Could move behind a feature
 plotly = { version = "0.8.3", features = ["kaleido"], optional=true }
+tabled = "0.14.0"
 thiserror = "1.0.50"
 
 [features]
-default = ["plotting"]
+default = []
 static = ["netcdf/static"]
 plotting = ["dep:plotly"]
 
@@ -26,6 +30,9 @@ plotting = ["dep:plotly"]
 
 [[bin]]
 name = "bin2nc"
+
+[[bin]]
+name = "list_spectra"
 
 [[bin]]
 name = "add-nc-flags"
