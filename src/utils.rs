@@ -625,3 +625,15 @@ pub fn read_unknown_encoding_file<P: AsRef<Path>>(filepath: P) -> Result<String,
 
     content_result.map_err(|e| EncodingError::ConversionError(e.into_owned()))
 }
+
+/// Remove a comment from a line
+/// 
+/// GGG often (though not always) considers anything after a
+/// colon in a line to be a comment. This function will return
+/// everything in `value` up to the first colon. If there is not
+/// a colon in `value`, the the full string is returned.
+pub fn remove_comment(value: &str) -> &str {
+    value.split_once(":")
+        .map(|(a, _)| a)
+        .unwrap_or(value)
+}

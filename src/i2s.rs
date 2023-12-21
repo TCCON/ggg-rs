@@ -1,8 +1,67 @@
+use std::{io::{BufReader, BufRead}, fs::File, path::Path, str::FromStr, fmt::Display};
+
 use chrono::NaiveDate;
 use tabled::Tabled;
 
+use crate::utils::{FileBuf, remove_comment, GggError};
+
 pub type CatalogueEntryResult<T> = Result<T, CatalogueEntryError>;
 
+/// Number of header parameters in an I2S 2014 file
+pub const I2S2014_NUM_HEADER_PARAMS: usize = 27;
+/// Number of header parameters in an I2S 2020 file
+pub const I2S2020_NUM_HEADER_PARAMS: usize = 28;
+
+
+/// Error indicating an unknown I2S version
+#[derive(Debug)]
+pub struct I2SVersionError {
+    given: String,
+}
+
+impl Display for I2SVersionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Unknown I2S version, '{}'. Available versions are: '2014', '2020'.", self.given)
+    }
+}
+
+impl std::error::Error for I2SVersionError {}
+
+/// A representation of which I2S version is in use.
+#[derive(Debug, Clone, Copy)]
+pub enum I2SVersion {
+    I2S2014,
+    I2S2020,
+}
+
+impl I2SVersion {
+    /// Return the number of header parameters in an I2S input file for this version of I2S.
+    pub fn num_header_params(&self) -> usize {
+        match self {
+            I2SVersion::I2S2014 => I2S2014_NUM_HEADER_PARAMS,
+            I2SVersion::I2S2020 => I2S2020_NUM_HEADER_PARAMS,
+        }
+    }
+}
+
+/// The default I2S version, currently I2S2020.
+impl Default for I2SVersion {
+    fn default() -> Self {
+        Self::I2S2020
+    }
+}
+
+impl FromStr for I2SVersion {
+    type Err = I2SVersionError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "2014" => Ok(Self::I2S2014),
+            "2020" => Ok(Self::I2S2020),
+            _ => Err(I2SVersionError { given: s.to_string() })
+        }
+    }
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum CatalogueEntryError {
@@ -12,6 +71,235 @@ pub enum CatalogueEntryError {
     MissingRequiredField(&'static str)
 }
 
+// ------------------------ //
+// I2S INPUT FILE ITERATORS //
+// ------------------------ //
+
+/// Given a path to an I2S input file, provide an iterator over the header (top) values.
+/// 
+/// Each parameter will be returned as a string with any inline comment, trailing newline,
+/// or trailing carriage return removed. The I2S version must be passed as `i2s_version`
+/// to indicate how many header parameters there are. For more control over the iteration, 
+/// construct the [`I2SParamIter`] directly.
+/// 
+/// # Errors
+/// 
+/// This function itself will return an error if it cannot open `i2s_input_file`.
+/// The iterator may also return an error if reading a line from that file fails.
+/// 
+/// # See also
+/// - [`iter_i2s_header_params_with_number`] if parameter numbers are required.
+/// - [`iter_i2s_lines`] if all lines (including comments) from an input file are required.
+pub fn iter_i2s_header_params(i2s_input_file: &Path, i2s_version: I2SVersion) -> Result<I2SParamIter, GggError> {
+    let file = FileBuf::open(i2s_input_file)?;
+    let max_param = i2s_version.num_header_params();
+    Ok(I2SParamIter::new(file, Some(max_param)))
+}
+
+/// Given a path to an I2S input file, provide an iterator over the header (top) values and their parameter numbers.
+/// 
+/// Like [`iter_i2s_header_params`], the iterator will return each top value as a string with
+/// any inline comment removed and trailing newlines/carriage returns trimmed. This iterator will
+/// also include the I2S parameter number (1-based) as the first element of each iterated value.
+/// For more control of the iteration, construct the [`I2SParamIterWithIndex`] directly.
+/// 
+/// # Errors
+/// 
+/// Same as [`iter_i2s_header_params`].
+/// 
+/// # See also
+/// - [`iter_i2s_header_params`] if parameter numbers are not required.
+/// - [`iter_i2s_lines`] if all lines (including comments) from an input file are required.
+pub fn iter_i2s_header_params_with_number(i2s_input_file: &Path, i2s_version: I2SVersion) -> Result<I2SParamIterWithIndex, GggError> {
+    let inner = iter_i2s_header_params(i2s_input_file, i2s_version)?;
+    Ok(I2SParamIterWithIndex(inner))
+}
+
+/// Given a path to an I2S input file, iterate over all lines, indicating whether each one is a top line.
+/// 
+/// This is essentially a wrapper around a [`BufReader`] that also indicates whether each line returned
+/// is an top) line, i.e. one in the header. Each iteration returns a tuple `(bool, String)` where the bool
+/// will be `true`` if for all lines before the first-non header parameter. This means that all lines up
+/// to the first non-comment line in the catalog are considered header lines.
+/// 
+/// **Note:** unlike [`iter_i2s_header_params`] and [`iter_i2s_header_params_with_number`], trailing newlines
+/// and carriage returns are *not* removed from the lines yielded by this iterator.
+/// 
+/// # Errors
+/// 
+/// Same as [`iter_i2s_header_params`].
+/// 
+/// # See also
+/// - [`iter_i2s_header_params`] to iterate only over header parameter values.
+/// - [`iter_i2s_header_params_with_number`] to iterate over header parameter values with the parameter numbers included.
+pub fn iter_i2s_lines(i2s_input_file: &Path, i2s_version: I2SVersion) -> Result<I2SLineIter, GggError> {
+    let file = FileBuf::open(i2s_input_file)?;
+    let header_n_param = i2s_version.num_header_params();
+    Ok(I2SLineIter::new(file, header_n_param))
+}
+
+/// An iterator over I2S parameters.
+/// 
+/// This is normally created by calling the [`iter_i2s_header_params`] function, but can be constructed
+/// directly for more control. Note that this iterator considers any line of an I2S input file with
+/// non-whitespace and characters before a colon (i.e. not commented) to be a parameter. Thus, uncommented
+/// catalog rows will be yielded as "parameters". The values yielded by this iterator will have any
+/// inline comments, trailing newlines, and trailing carriage returns stripped.
+pub struct I2SParamIter<'a> {
+    file: FileBuf<'a, BufReader<File>>,
+    curr_param: usize,
+    max_n_param: Option<usize>,
+}
+
+impl<'a> I2SParamIter<'a> {
+    /// Create a new instance of the iterator.
+    /// 
+    /// Pass a [`FileBuf`] reader around an I2S input file and the maximum number of parameters
+    /// to read before the iterator stops. If `max_n_param` is `None`, then the iterator will continue
+    /// until all lines in the reader are exhausted. Otherwise, it will stop after returning that
+    /// many parameters. (This is usually used to get only the top parameters.) 
+    pub fn new(i2s_reader: FileBuf<'a, BufReader<File>>, max_n_param: Option<usize>) -> Self {
+        Self { file: i2s_reader, curr_param: 0, max_n_param }
+    }
+
+    /// Construct an instance from a path to the I2S input file.
+    /// 
+    /// This creates an iterator with no limit on the number of parameters it will yield.
+    /// Note that the path reference must live as long as the iterator.
+    pub fn from_path(path: &'a Path) -> Result<Self, GggError> {
+        let file: FileBuf<'_, BufReader<File>> = FileBuf::open(path)?;
+        Ok(Self::new(file, None))
+    }
+}
+
+
+impl<'a> Iterator for I2SParamIter<'a> {
+    type Item = std::io::Result<String>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            let (is_param, param) = match iter_i2s_lines_inner(&mut self.file, self.curr_param, self.max_n_param) {
+                Some(Ok(line)) => line,
+                Some(Err(e)) => return Some(Err(e)),
+                None => return None,
+            };
+
+            if is_param {
+                self.curr_param += 1;
+                let value = remove_comment(&param)
+                    .trim_end_matches("\n")
+                    .trim_end_matches("\r")
+                    .to_string();
+                return Some(Ok(value))
+            }
+        }
+    }
+}
+
+/// An iterator over I2S parameters that includes the parameter number.
+/// 
+/// This is almost identical to [`I2SParamIter`] except that the values
+/// yielded by the iterator will be tuples of `(usize, String)` that are
+/// the 1-based parameter number and its value, rather than just the value.
+/// 
+/// This iterator is normally constructed by calling the [`iter_i2s_header_params_with_number`];
+/// only construct it directly if you need more control over the iteration.
+pub struct I2SParamIterWithIndex<'a>(I2SParamIter<'a>);
+
+impl<'a> I2SParamIterWithIndex<'a> {
+    /// Create a new instance of the iterator.
+    /// 
+    /// Pass a [`FileBuf`] reader around an I2S input file and the maximum number of parameters
+    /// to read before the iterator stops. If `max_n_param` is `None`, then the iterator will continue
+    /// until all lines in the reader are exhausted. Otherwise, it will stop after returning that
+    /// many parameters. (This is usually used to get only the top parameters.) 
+    pub fn new(i2s_reader: FileBuf<'a, BufReader<File>>, max_n_param: Option<usize>) -> Self {
+        let inner = I2SParamIter::new(i2s_reader, max_n_param);
+        Self(inner)
+    }
+}
+
+impl<'a> Iterator for I2SParamIterWithIndex<'a> {
+    type Item = std::io::Result<(usize, String)>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self.0.next() {
+            Some(Ok(v)) => Some(Ok((self.0.curr_param, v))),
+            Some(Err(e)) => Some(Err(e)),
+            None => None,
+        }
+    }
+}
+
+/// An iterator over all lines in an I2S input file.
+/// 
+/// This is normally constructed by calling [`iter_i2s_lines`], only construct
+/// this directly if you need more control over the iteration. **Note:** unlike
+/// [`I2SParamIter`] and [`I2SParamIterWithIndex`], trailing newlines/carriage returns
+/// are *not* stripped from the lines yielded by this iterator. The iterator will
+/// yield tuples of `(bool, String)`, where the boolean is `true` for lines in the
+/// header.
+pub struct I2SLineIter<'a> {
+    file: FileBuf<'a, BufReader<File>>,
+    curr_param: usize,
+    header_n_param: usize,
+}
+
+impl<'a> I2SLineIter<'a> {
+    /// Create a new instance of the iterator.
+    /// 
+    /// Pass a [`FileBuf`] reader around an I2S input file and the number of parameters in 
+    /// the header. The number of header parameters determines when the lines yielded
+    /// are no longer in the header.
+    pub fn new(i2s_reader: FileBuf<'a, BufReader<File>>, header_n_param: usize) -> Self {
+        Self { file: i2s_reader, curr_param: 0, header_n_param }
+    }
+}
+
+impl<'a> Iterator for I2SLineIter<'a> {
+    type Item = std::io::Result<(bool, String)>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let (is_param, line) = match iter_i2s_lines_inner(&mut self.file, self.curr_param, None) {
+            Some(Ok(v)) => v,
+            Some(Err(e)) => return Some(Err(e)),
+            None => return None,
+        };
+
+        if is_param {
+            self.curr_param += 1;
+        }
+
+        let is_header_line = self.curr_param <= self.header_n_param;
+        Some(Ok((is_header_line, line)))
+    }
+}
+
+fn iter_i2s_lines_inner(file: &mut FileBuf<'_, BufReader<File>>, curr_param: usize, max_n_param: Option<usize>) -> Option<std::io::Result<(bool, String)>> {
+    if let Some(max) = max_n_param {
+        if curr_param >= max {
+            return None;
+        }
+    }
+
+    // The I2S input format is that each line that has any non-whitespace and non-commented
+    // characters is a parameter.
+    let mut buf = String::new();
+    
+    match file.read_line(&mut buf) {
+        Ok(0) => return None,
+        Err(e) => return Some(Err(e)),
+        Ok(_) => {},
+    }
+
+    let value = remove_comment(&buf);
+    let is_param_line = !value.trim().is_empty();
+    Some(Ok((is_param_line, buf)))
+}
+
+// ----------------- //
+// CATALOG FUNCTIONS //
+// ----------------- //
 
 /// Write out a list of catalogue entries plus the header to a stream
 /// 

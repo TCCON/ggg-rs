@@ -41,6 +41,9 @@ name = "add-nc-flags"
 name = "plot-spt"
 required-features = ["plotting"]
 
+[[bin]]
+name = "i2s-setup"
+
 #[[bin]]
 #name = "plot_opus_spectra"
 #required-features = ["plotting"]
