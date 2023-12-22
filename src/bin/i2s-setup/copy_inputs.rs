@@ -60,7 +60,6 @@ pub(crate) fn driver(src_file: &Path, dest_file: &Path, output_cfg: utils::Outpu
     let mut writer = output_cfg.setup_output(dest_file)
         .change_context_lazy(|| CliError::WriteError(dest_file.to_path_buf()))?;
     let out_file = writer.output_path().to_path_buf();
-    dbg!((dest_file, &out_file));
     let copy_params = load_params_to_copy(src_file, top_params, src_i2s_version, dest_i2s_version)?;
 
     let dest_iter = iter_i2s_lines(dest_file, dest_i2s_version)
@@ -83,12 +82,9 @@ pub(crate) fn driver(src_file: &Path, dest_file: &Path, output_cfg: utils::Outpu
             }
         };
 
-        dbg!((line_type, new_line));
-
         if let Some(new_line) = new_line {
             write!(&mut writer, "{new_line}").change_context_lazy(|| CliError::WriteError(out_file.clone()))?;
         } else {
-            println!("Writing original line");
             write!(&mut writer, "{orig_line}").change_context_lazy(|| CliError::WriteError(out_file.clone()))?;
         }
     }

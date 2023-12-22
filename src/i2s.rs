@@ -405,6 +405,12 @@ fn iter_i2s_lines_inner(file: &mut FileBuf<'_, BufReader<File>>, curr_param: usi
         if is_param_line {
             is_param = true;
             n_param_lines_read += 1;
+        } else if n_param_lines_read == 0 {
+            // If this is the first line we read and it wasn't a parameter,
+            // then this is a comment and should be returned as it's own line.
+            // We only need to return multi-line parameters as a unit to allow them
+            // to be copied or replaced correctly.
+            break;
         }
     }
     Some(Ok((is_param, full_buf)))
