@@ -813,3 +813,14 @@ pub fn remove_comment(value: &str) -> &str {
         .map(|(a, _)| a)
         .unwrap_or(value)
 }
+
+pub fn remove_comment_multiple_lines(value: &str) -> String {
+    let mut out = String::new();
+    for line in value.split("\n") {
+        let value = remove_comment(line);
+        if !value.trim().is_empty() {
+            out.push_str(value);
+        }
+    }
+    out
+}
