@@ -6,6 +6,7 @@ use merge_inputs::ParamWhitespaceEq;
 
 mod merge_inputs;
 mod modify_input;
+mod copy_inputs;
 
 fn main() -> ExitCode {
     let clargs = Cli::parse();
@@ -25,6 +26,22 @@ fn main() -> ExitCode {
                 args.edits_json,
                 args.outputs,
                 args.i2s_version
+            )
+        },
+
+        Commands::CopyInputs(args) => {
+            if args.top_param.is_empty() {
+                eprintln!("Warning: --top-param never specified. Output will be an unchanged DEST_FILE.");
+            }
+
+            copy_inputs::driver(
+                &args.src_file,
+                &args.dest_file, 
+                args.outputs, 
+                &args.top_param, 
+                args.src_i2s_version,
+                args.dest_i2s_version,
+                args.copy_catalog
             )
         },
 
@@ -53,9 +70,12 @@ struct Cli {
 enum Commands {
     MergeInputs(MergeInputsCli),
     ModifyInput(ModifyInputCli),
+    CopyInputs(CopyInputsCli),
+    /// Print an example of the JSON format used by modify-input
     EditJsonExample,
 }
 
+/// Merge multiple I2S input files.
 #[derive(Debug, Args)]
 struct MergeInputsCli {
     /// The I2S inputs files to merge.
@@ -91,6 +111,7 @@ struct MergeInputsCli {
     edits_json: Option<PathBuf>,
 }
 
+/// Modify parameters in an I2S input file.
 #[derive(Debug, Args)]
 struct ModifyInputCli {
     input_file: PathBuf,
@@ -102,6 +123,44 @@ struct ModifyInputCli {
     i2s_version: I2SVersion,
     #[clap(flatten)]
     outputs: utils::OutputOptCli,
+}
+
+/// Copy parameters from one I2S input file to another
+#[derive(Debug, Args)]
+struct CopyInputsCli {
+    /// File to copy parameters from
+    src_file: PathBuf,
+
+    /// File to copy parameters to. Note that if you
+    /// want to modify this directly, you must specify
+    /// --in-place.
+    dest_file: PathBuf,
+
+    /// I2S version of SRC_FILE
+    #[clap(short, long, default_value_t=I2SVersion::default())]
+    src_i2s_version: I2SVersion,
+
+    /// I2S version of DEST_FILE
+    #[clap(short, long, default_value_t=I2SVersion::default())]
+    dest_i2s_version: I2SVersion,
+
+    #[clap(flatten)]
+    outputs: utils::OutputOptCli,
+
+    /// An argument specifying a header (i.e. top) parameter to
+    /// copy from SRC_FILE to DEST_FILE. This has the format
+    /// FROM,TO where FROM is the parameter number in SRC_FILE
+    /// to copy and TO is the parameter number in DEST_FILE to
+    /// replace. For example, "1,1" will copy parameter #1 from
+    /// SRC_FILE to parameter #1 in DEST_FILE, while "27,28"
+    /// would copy parameter #27 to #28. This argument can be
+    /// repeated for each top parameter to copy.
+    #[clap(short, long, action=clap::ArgAction::Append)]
+    top_param: Vec<copy_inputs::ParamMap>,
+
+    /// Set this flag to copy the whole catalog from SRC_FILE to DEST_FILE
+    #[clap(short, long)]
+    copy_catalog: bool,
 }
 
 #[derive(Debug, thiserror::Error)]

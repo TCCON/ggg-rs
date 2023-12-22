@@ -348,8 +348,13 @@ impl <'p, F: BufRead> DerefMut for FileBuf<'p, F> {
 #[derive(Debug, clap::Args)]
 #[group(required=true)]
 pub struct OutputOptCli {
+    /// Provide this flag to modify the output/destination file directly.
+    /// Mutually exclusive with --output-file, but one of this and --output-file
+    /// must be given.
     #[clap(long)]
     in_place: bool,
+    /// Provide this argument with the path to write the output to. Mutually
+    /// exclusive with --in-place, but one of this and --in-place must be given.
     #[clap(short, long)]
     output_file: Option<PathBuf>,
 }

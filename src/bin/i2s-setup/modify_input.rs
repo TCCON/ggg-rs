@@ -7,7 +7,7 @@ use ggg_rs::{utils::{OutputOptCli, read_input_file_or_stdin, OptInplaceWriter}, 
 use crate::CliError;
 
 pub(crate) fn driver(input_file: PathBuf, edits_json: PathBuf, output_cfg: OutputOptCli, i2s_version: I2SVersion) -> error_stack::Result<(), CliError> {
-    let mut writer = output_cfg.setup_output(&input_file)
+    let writer = output_cfg.setup_output(&input_file)
         .change_context_lazy(|| CliError::IoError)?;
 
     let json_bytes = read_input_file_or_stdin(&edits_json)
