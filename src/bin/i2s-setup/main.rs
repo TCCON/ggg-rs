@@ -17,13 +17,15 @@ fn main() -> ExitCode {
             args.i2s_version,
             args.whitespace_eq,
             args.skip_param_check,
-            args.edits_json.as_deref()
+            args.edits_json.as_deref(),
+            args.top_edit
         ),
 
         Commands::ModifyInput(args) => {
             modify_input::driver(
                 args.input_file,
                 args.edits_json,
+                args.top_edit,
                 args.outputs,
                 args.i2s_version
             )
@@ -109,20 +111,41 @@ struct MergeInputsCli {
     /// read from stdin.
     #[clap(long)]
     edits_json: Option<PathBuf>,
+
+    /// An alternate way to specify edits, give the parameter number
+    /// and value as a comma-separated pair, e.g. "1,./igms". 
+    /// Repeat this argument to specify multiple edits. These will
+    /// take precedence over the JSON values from --edits-json.
+    #[clap(long, action=clap::ArgAction::Append)]
+    top_edit: Vec<modify_input::HeaderEditCli>,
 }
 
 /// Modify parameters in an I2S input file.
 #[derive(Debug, Args)]
 struct ModifyInputCli {
     input_file: PathBuf,
-    edits_json: PathBuf,
+
     /// Which I2S version these input files are for (needed to
     /// determine the number of header parameters). Options are
     /// '2014' or '2020'; '2020' is the default.
     #[clap(short, long, default_value_t=I2SVersion::default())]
     i2s_version: I2SVersion,
+
     #[clap(flatten)]
     outputs: utils::OutputOptCli,
+
+    /// A path to a JSON file specifying edits to make to the header
+    /// parameters in the output file. Use - to tell this program to
+    /// read from stdin.
+    #[clap(long)]
+    edits_json: Option<PathBuf>,
+
+    /// An alternate way to specify edits, give the parameter number
+    /// and value as a comma-separated pair, e.g. "1,./igms". 
+    /// Repeat this argument to specify multiple edits. These will
+    /// take precedence over the JSON values from --edits-json.
+    #[clap(long, action=clap::ArgAction::Append)]
+    top_edit: Vec<modify_input::HeaderEditCli>,
 }
 
 /// Copy parameters from one I2S input file to another

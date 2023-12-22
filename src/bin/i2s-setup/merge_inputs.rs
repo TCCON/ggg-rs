@@ -4,8 +4,8 @@ use std::path::{PathBuf, Path};
 use std::str::FromStr;
 
 use error_stack::ResultExt;
-use ggg_rs::i2s::{I2SVersion, iter_i2s_header_params_with_number, iter_i2s_lines, I2SInputModifcations};
-use ggg_rs::utils::{read_input_file_or_stdin, OptInplaceWriter};
+use ggg_rs::i2s::{I2SVersion, iter_i2s_header_params_with_number, iter_i2s_lines};
+use ggg_rs::utils::OptInplaceWriter;
 use itertools::Itertools;
 
 use crate::CliError;
@@ -16,27 +16,19 @@ pub(crate) fn driver(
     i2s_version: I2SVersion,
     whitespace_method: ParamWhitespaceEq, 
     mut skip_check_params: Vec<usize>,
-    edits_json: Option<&Path>
+    edits_json: Option<&Path>,
+    cli_edits: Vec<crate::modify_input::HeaderEditCli>,
 ) -> error_stack::Result<(), CliError> {
-    let edits = if let Some(json_path) = edits_json {
-        // Load the edits if requested. Go ahead and add the parameters to be modified to the list
-        // of those to skip checking b/c it doesn't matter if they differ across files - we replace
-        // them at the end anyway.
-        let json_bytes = read_input_file_or_stdin(json_path)
-            .change_context_lazy(|| CliError::ReadError(json_path.to_path_buf()))?;
-        let edits: I2SInputModifcations = serde_json::from_slice(&json_bytes)
-            .change_context_lazy(|| CliError::BadInput("Could not parse JSON edits file".to_string()))?;
+    let edits = crate::modify_input::edits_from_json_and_cli(edits_json, cli_edits)
+        .change_context_lazy(|| CliError::BadInput("Could not set up input file edits".to_string()))?;
 
-        for param in edits.header.iter() {
-            if !skip_check_params.contains(&param.parameter) {
-                skip_check_params.push(param.parameter);
-            }
+    // Add any parameters to be edited to the list to skip checking - since they'll be modified at the end anyway,
+    // they don't need to be the same across all the original inputs.
+    for param in edits.header.iter() {
+        if !skip_check_params.contains(&param.parameter) {
+            skip_check_params.push(param.parameter);
         }
-
-        Some(edits)
-    } else {
-        None
-    };
+    }
 
     // Verify that all the input files have the same top parameters, except those we've said are okay to differ
     check_inputs_match(input_files, i2s_version, whitespace_method, &skip_check_params)?;
@@ -60,7 +52,7 @@ pub(crate) fn driver(
     // If edits were requested, make them now.
     outf.flush().change_context_lazy(|| CliError::WriteError(output_file.to_path_buf()))?;
 
-    if let Some(edits) = edits {
+    if edits.has_changes() {
         let writer = OptInplaceWriter::new_in_place(output_file.to_path_buf())
             .change_context_lazy(|| CliError::WriteError(output_file.to_path_buf()))?;
         crate::modify_input::edit_i2s_input_file(&output_file, writer, i2s_version, edits)?;

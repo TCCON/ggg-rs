@@ -422,7 +422,7 @@ fn iter_i2s_lines_inner(file: &mut FileBuf<'_, BufReader<File>>, curr_param: usi
 // ------------------ //
 
 /// A structure representing edits to make to an I2S input file
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct I2SInputModifcations {
     /// The list of changes to make to header parameters
     pub header: Vec<I2SHeaderEdit>,
@@ -451,6 +451,21 @@ impl I2SInputModifcations {
             I2SLineType::CatalogRow => None,
             I2SLineType::Other => None,
         }
+    }
+
+    pub fn set_parameter_change(&mut self, param_num: usize, new_value: String) {
+        for edit in self.header.iter_mut() {
+            if edit.parameter == param_num {
+                edit.value = new_value;
+                return;
+            }
+        }
+
+        self.header.push(I2SHeaderEdit { parameter: param_num, value: new_value });
+    }
+
+    pub fn has_changes(&self) -> bool {
+        !self.header.is_empty()
     }
 
     /// Create an example JSON string.
