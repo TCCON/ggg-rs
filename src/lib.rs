@@ -1,3 +1,4 @@
+pub mod error;
 pub mod utils;
 pub mod interpolation;
 // TODO: implement parser for fortran format strings.

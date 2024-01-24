@@ -1,5 +1,6 @@
 //! General GGG utilities, not particular to any program or I/O step.
 use std::ffi::OsString;
+use std::num::NonZeroU8;
 use std::{env, f64};
 use std::error::Error;
 use std::fmt::Display;
@@ -9,7 +10,9 @@ use std::ops::{Deref, DerefMut};
 use std::path::{PathBuf, Path};
 use std::str::FromStr;
 
-use chrono::TimeZone;
+use chrono::{Datelike, TimeZone};
+
+use crate::error::DateTimeError;
 
 
 /// Standard error type for all GGG functions
@@ -823,4 +826,143 @@ pub fn remove_comment_multiple_lines(value: &str) -> String {
         }
     }
     out
+}
+
+
+pub fn is_usa_dst(datetime: chrono::NaiveDateTime) -> Result<bool, DateTimeError> {
+    // Based on the rules listed on Wikipedia as of 2023-01-23 (https://en.wikipedia.org/wiki/Daylight_saving_time_in_the_United_States#1975%E2%80%931986:_Extension_of_daylight_saving_time),
+    // 1987 to 2006 use daylight savings time between the first Sunday of April to the last Sunday of October
+    // Starting in 2007, it became second Sunday of March to first Sunday of November
+    if datetime.year() < 1987 {
+        unimplemented!("USA daylight savings time before 1987 not implemented");
+    }
+
+    let (start, end) = if datetime.year() < 2007 {
+        let start = nth_day_of_week(datetime.year(), 4, chrono::Weekday::Sun, 1.into())
+            .expect("Should be able to find the first Sunday in April");
+        let end = nth_day_of_week(datetime.year(), 10, chrono::Weekday::Sun, Nth::Last)
+            .expect("Should be able to find the last Sunday in October");
+        (start, end)
+    } else {
+        let start = nth_day_of_week(datetime.year(), 3, chrono::Weekday::Sun, 2.into())
+            .expect("Should be able to get the second Sunday of March");
+        let end = nth_day_of_week(datetime.year(), 11, chrono::Weekday::Sun, 1.into())
+            .expect("Should be able to get the first Sunday in November");
+        (start, end)
+    };
+
+    let start = start.and_hms_opt(2, 59, 59).unwrap();
+    let end_ambiguous = end.and_hms_opt(2, 0, 0).unwrap();
+    let end = end.and_hms_opt(1, 0, 0).unwrap();
+    // The case we can't tell is if the time is between 1a and 2a on the date when
+    // we "fall back", so anything in that time range is an error
+    if datetime >= end && datetime <= end_ambiguous {
+        return Err(DateTimeError::AmbiguousDst(datetime));
+    }
+
+    let is_dst = datetime >= start && datetime <= end;
+    Ok(is_dst)
+}
+
+enum Nth {
+    N(NonZeroU8),
+    Last
+}
+
+impl From<u8> for Nth {
+    fn from(value: u8) -> Self {
+        Self::N(NonZeroU8::new(value).unwrap())
+    }
+}
+
+fn nth_day_of_week(year: i32, month: u32, weekday: chrono::Weekday, n: Nth) -> Result<chrono::NaiveDate, DateTimeError> {
+    let mut date = chrono::NaiveDate::from_ymd_opt(year, month, 1)
+        .ok_or_else(|| DateTimeError::InvalidYearMonthDay(year, month, 1))?;
+
+    let n: u8 = match n {
+        Nth::N(n) => n.into(),
+        Nth::Last => 0,
+    };
+
+    let mut m: u8 = 0;
+    loop {
+        if date.weekday() == weekday {
+            m += 1;
+        }
+
+        if n > 0 && m == n {
+            return Ok(date)
+        }
+
+        date += chrono::Duration::days(1);
+        if date.month() != month && n != 0 {
+            return Err(DateTimeError::NoNthWeekday { year, month, n, weekday })
+        } else if date.month() != month {
+            // back up to the last instance of the requested weekday in the month
+            while date.weekday() != weekday {
+                date -= chrono::Duration::days(1);
+            }
+            return Ok(date)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_nth_day_of_week() {
+        let first_sunday_apr = nth_day_of_week(2023, 4, chrono::Weekday::Sun, 1.into()).unwrap();
+        assert_eq!(first_sunday_apr, chrono::NaiveDate::from_ymd_opt(2023, 4, 2).unwrap());
+
+        let last_sunday_oct = nth_day_of_week(2023, 10, chrono::Weekday::Sun, Nth::Last).unwrap();
+        assert_eq!(last_sunday_oct, chrono::NaiveDate::from_ymd_opt(2023, 10, 29).unwrap());
+    }
+
+    #[test]
+    fn test_is_usa_dst() {
+        // Post-2007 rules
+        let b = is_usa_dst(datetime(2023, 1, 1, 0, 0)).unwrap();
+        assert_eq!(b, false);
+        let b = is_usa_dst(datetime(2023, 3, 11, 23, 59)).unwrap();
+        assert_eq!(b, false);
+        let b = is_usa_dst(datetime(2023, 3, 12, 3, 0)).unwrap();
+        assert_eq!(b, true);
+        let b = is_usa_dst(datetime(2023, 6, 1, 0, 0)).unwrap();
+        assert_eq!(b, true);
+        let b = is_usa_dst(datetime(2023, 11, 5, 0, 0)).unwrap();
+        assert_eq!(b, true);
+        let b = is_usa_dst(datetime(2023, 11, 5, 2, 1)).unwrap();
+        assert_eq!(b, false);
+        let b = is_usa_dst(datetime(2023, 12, 31, 23, 59)).unwrap();
+        assert_eq!(b, false);
+
+        let e = is_usa_dst(datetime(2023, 11, 5, 1, 30));
+        assert!(e.is_err());
+
+        // 1987 to 2006 rules
+        let b = is_usa_dst(datetime(2000, 1, 1, 0, 0)).unwrap();
+        assert_eq!(b, false);
+        let b = is_usa_dst(datetime(2000, 4, 1, 23, 59)).unwrap();
+        assert_eq!(b, false);
+        let b = is_usa_dst(datetime(2000, 4, 2, 3, 0)).unwrap();
+        assert_eq!(b, true);
+        let b = is_usa_dst(datetime(2000, 6, 1, 0, 0)).unwrap();
+        assert_eq!(b, true);
+        let b = is_usa_dst(datetime(2000, 10, 29, 0, 0)).unwrap();
+        assert_eq!(b, true);
+        let b = is_usa_dst(datetime(2000, 10, 29, 2, 1)).unwrap();
+        assert_eq!(b, false);
+        let b = is_usa_dst(datetime(2000, 12, 31, 23, 59)).unwrap();
+        assert_eq!(b, false);
+
+        let e = is_usa_dst(datetime(2000, 10, 29, 1, 30));
+        assert!(e.is_err());
+    }
+
+    fn datetime(year: i32, month: u32, day: u32, hour: u32, minute: u32) -> chrono::NaiveDateTime {
+        let d = chrono::NaiveDate::from_ymd_opt(year, month, day).unwrap();
+        d.and_hms_opt(hour, minute, 0).unwrap()
+    }
 }
