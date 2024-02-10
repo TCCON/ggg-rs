@@ -11,6 +11,8 @@ use std::path::{PathBuf, Path};
 use std::str::FromStr;
 
 use chrono::{Datelike, TimeZone};
+use fortformat::format_specs::FortFormat;
+use serde::{Deserialize, Deserializer, de::Error as DeserError};
 
 use crate::error::DateTimeError;
 
@@ -157,7 +159,7 @@ impl Display for GggPathErrorKind {
 /// * "TR" => `Triangular`
 /// 
 /// For [`FromStr`], the conversion ignores case.
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ApodizationFxn {
     BoxCar,
     WeakNortonBeer,
@@ -179,6 +181,17 @@ impl ApodizationFxn {
 
     pub fn int_map_string() -> &'static str {
         "0 = Boxcar, 1 = Weak Norton-Beer, 2 = Medium Norton-Beer, 3 = Strong Norton-Beer, 4 = Triangular"
+    }
+}
+
+impl ApodizationFxn {
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Self, D::Error> 
+    where D: Deserializer<'de>
+    {
+        let value = String::deserialize(deserializer)?;
+        Self::from_str(&value).map_err(
+            |e| D::Error::custom(e.to_string())
+        )
     }
 }
 
@@ -518,9 +531,9 @@ pub struct CommonHeader {
     /// The value used to indicate missing/invalid values in the data. Will be
     /// `None` if not found in the header.
     pub missing: Option<f64>,
-    /// The Fortran format string that describes the format of each line of data in the file.
+    /// The Fortran format that describes the format of each line of data in the file.
     /// Will be `None` if not found in the header.
-    pub format_str: Option<String>,
+    pub fformat: Option<FortFormat>,
     /// The data column names
     pub column_names: Vec<String>
 }
@@ -647,12 +660,19 @@ pub fn read_common_header<'p, F: BufRead>(f: &mut FileBuf<'p, F>) -> Result<Comm
     let (mut nhead, ncol) = get_nhead_ncol(f)?;
     // We've already read one header line
     nhead -= 1;
-    let mut format_str = None;
+    let mut fformat = None;
     let mut missing = None;
     while nhead > 1 {
         let line = f.read_header_line()?;
         if line.starts_with("format=") {
-            format_str = Some(line.replace("format=", ""));
+            let format_str = line.replace("format=", "");
+            fformat = Some(
+                FortFormat::parse(&format_str)
+                .map_err(|e| GggError::HeaderError { 
+                    path: f.path.to_path_buf(), 
+                    cause: format!("Error parsing format line: {e}") 
+                })?
+            );
         }
         if line.starts_with("missing:") {
             let missing_str = line.replace("missing:", "");
@@ -677,7 +697,7 @@ pub fn read_common_header<'p, F: BufRead>(f: &mut FileBuf<'p, F>) -> Result<Comm
         return Err(GggError::HeaderError { path: f.path.to_owned(), cause: reason });
     }
 
-    Ok(CommonHeader { nhead, ncol, missing, format_str, column_names })
+    Ok(CommonHeader { nhead, ncol, missing, fformat, column_names })
 }
 
 
