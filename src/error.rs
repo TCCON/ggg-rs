@@ -66,7 +66,7 @@ impl Display for FileLocation {
 }
 
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum HeaderError {
     ParseError{location: FileLocation, cause: String},
     NumLinesMismatch{expected: usize, got: usize},

@@ -6,3 +6,6 @@ pub mod cit_spectrum_name;
 pub mod opus;
 pub mod i2s;
 pub mod output_files;
+
+#[cfg(test)]
+mod test_utils;

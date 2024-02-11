@@ -396,20 +396,31 @@ impl Iterator for FallibleRunlog {
     }
 }
 
+pub struct FallibleRunlogLineIter {
+    runlog: Runlog
+}
+
+impl Iterator for FallibleRunlogLineIter {
+    type Item = (usize, Result<RunlogDataRec, GggError>);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let rec = self.runlog.next_data_record(false).transpose()?;
+        // TODO: verify that this returns the correct line (i.e. doesn't need to be called first)
+        let line_num = self.runlog.curr_line();
+        Some((line_num, rec))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
-
     use rstest::{rstest, fixture};
+    use crate::test_utils::test_data_dir;
     use super::*;
 
     #[fixture]
     fn benchmark_rl_path() -> PathBuf {
-        let test_data_dir = PathBuf::from(file!())
-            .parent().unwrap()
-            .parent().unwrap()
-            .join("test-data");
-        test_data_dir.join("pa_ggg_benchmark.grl")
+        test_data_dir().join("pa_ggg_benchmark.grl")
     }
 
     #[rstest]
@@ -440,21 +451,5 @@ mod tests {
             .expect("Reading first data line should not error")
             .expect("First data line should not return None");
         approx::assert_abs_diff_eq!(test_rec, data_rec_1b);
-    }
-}
-
-
-pub struct FallibleRunlogLineIter {
-    runlog: Runlog
-}
-
-impl Iterator for FallibleRunlogLineIter {
-    type Item = (usize, Result<RunlogDataRec, GggError>);
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let rec = self.runlog.next_data_record(false).transpose()?;
-        // TODO: verify that this returns the correct line (i.e. doesn't need to be called first)
-        let line_num = self.runlog.curr_line();
-        Some((line_num, rec))
     }
 }

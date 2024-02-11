@@ -83,6 +83,7 @@ struct WriteNcCli {
     hierachical_file: bool,
 }
 
+/// Finalize the netCDF file; move it from the temporary path to the final path.
 fn finalize(nc_path: &Path, mut final_name_stem: OsString) -> Result<(), std::io::Error> {
     final_name_stem.push(".private.nc");
     let out_path = nc_path.with_file_name(final_name_stem);
@@ -94,6 +95,7 @@ fn cleanup<E: Debug>(err: E) -> ExitCode {
     ExitCode::FAILURE
 }
 
+/// Create the netCDF file at the temporary location
 fn init_nc_file(run_dir: &Path) -> error_stack::Result<netcdf::FileMut, netcdf::Error> {
     let nc_file = temporary_nc_path(run_dir);
     let file = netcdf::create(nc_file)?;

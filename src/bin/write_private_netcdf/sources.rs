@@ -5,13 +5,62 @@ use ggg_rs::{runlogs::FallibleRunlog, cit_spectrum_name::{CitSpectrumName, NoDet
 use log::warn;
 use ndarray::Array1;
 
-use crate::interface::{DataGroup, TranscriptionError};
+use crate::{error::SetupError, interface::{DataGroup, TranscriptionError}};
 use crate::dimensions::{Dimension, DimensionWithValues};
 
 #[derive(Debug, Clone, Copy)]
 pub enum DataSourceType {
     Runlog,
+    PostprocFile(PostprocSourceType),
     ColFile,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum PostprocSourceType {
+    VswFile,
+    TswFile,
+    VavFile,
+    TavFile,
+    VswAdaFile,
+    VavAdaFile,
+    VavAdaAiaFile,
+}
+
+impl Display for PostprocSourceType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PostprocSourceType::VswFile => write!(f, ".vsw file"),
+            PostprocSourceType::TswFile => write!(f, ".tsw file"),
+            PostprocSourceType::VavFile => write!(f, ".vav file"),
+            PostprocSourceType::TavFile => write!(f, ".tav file"),
+            PostprocSourceType::VswAdaFile => write!(f, ".vsw.ada file"),
+            PostprocSourceType::VavAdaFile => write!(f, ".vav.ada file"),
+            PostprocSourceType::VavAdaAiaFile => write!(f, ".vav.ada.aia file"),
+        }
+    }
+}
+
+impl TryFrom<&Path> for PostprocSourceType {
+    type Error = SetupError;
+
+    fn try_from(value: &Path) -> Result<Self, Self::Error> {
+        let name = value.file_name()
+            .map(|n| n.to_string_lossy())
+            .unwrap_or_else(|| "".into());
+
+        if name.ends_with(".vav.ada.aia") { return Ok(Self::VavAdaAiaFile); }
+        if name.ends_with(".vav.ada") { return Ok(Self::VavAdaFile); }
+        if name.ends_with(".vsw.ada") { return Ok(Self::VswAdaFile); }
+        if name.ends_with(".tav") { return Ok(Self::TavFile); }
+        if name.ends_with(".vav") { return Ok(Self::VavFile); }
+        if name.ends_with(".tsw") { return Ok(Self::TswFile); }
+        if name.ends_with(".vsw") { return Ok(Self::VswFile); }
+
+        Err(SetupError::FileKindError { 
+            path: value.to_path_buf(), 
+            kind: "post-processing" 
+        })
+    }
 }
 
 /// A trait representing one source of data to copy to the netCDF file
@@ -194,8 +243,8 @@ impl DataSource for TcconRunlog {
         &self.variables
     }
 
-    fn write_variables(&mut self, nc_grp: &mut netcdf::GroupMut, group: crate::interface::DataGroup) -> Result<(), crate::interface::TranscriptionError> {
-        todo!()
+    fn write_variables(&mut self, _nc_grp: &mut netcdf::GroupMut, _group: crate::interface::DataGroup) -> Result<(), crate::interface::TranscriptionError> {
+        Ok(())
     }
 }
 
@@ -208,5 +257,55 @@ impl Display for TcconRunlog {
         };
 
         write!(f, "runlog ({filename})")
+    }
+}
+
+
+pub struct PostprocFile {
+    file: PathBuf,
+    file_type: PostprocSourceType,
+    groups_included: Vec<DataGroup>,
+    variables: Vec<String>,
+}
+
+impl Display for PostprocFile {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let filename = if let Some(name) = self.file.file_name() {
+            name.to_string_lossy()
+        } else {
+            self.file.to_string_lossy()
+        };
+
+        write!(f, "{} ({filename})", self.file_type)
+    }
+}
+
+impl DataSource for PostprocFile {
+    fn source_type(&self) -> DataSourceType {
+        DataSourceType::PostprocFile(self.file_type)
+    }
+
+    fn file(&self) -> &Path {
+        &self.file
+    }
+
+    fn provided_dimensions(&self) -> &[DimensionWithValues] {
+        &[]
+    }
+
+    fn required_dimensions(&self) -> &[Dimension] {
+        &[Dimension::Time]
+    }
+
+    fn required_groups(&self) -> &[DataGroup] {
+        &self.groups_included
+    }
+
+    fn variable_names(&self) -> &[String] {
+        &self.variables
+    }
+
+    fn write_variables(&mut self, nc_grp: &mut netcdf::GroupMut, group: DataGroup) -> Result<(), TranscriptionError> {
+        todo!()
     }
 }
