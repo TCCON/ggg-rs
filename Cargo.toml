@@ -10,10 +10,12 @@ resolver = "2"
 approx = "0.5.1"
 chrono = "0.4.23"
 clap = {version = "4", features = ["derive"]}
-itertools = "0.11.0"
 log = "0.4.20"
 log4rs = "1.2.0"
+encoding = "0.2.33"
 error-stack = "0.4.1"
+fortformat = {git = "https://github.com/joshua-laughner/fortformat", features = ["serde"]}
+itertools = "0.11.0"
 ndarray = "0.15"
 # netcdf = "0.8"
 # TODO: open an issue on the netCDF repo with the change suggested for add_variable_with_type:
@@ -22,18 +24,23 @@ ndarray = "0.15"
 # work with add_variable_with type. Worse, putting those type bounds prevents using the group
 # reference multiple times in a for loop.
 netcdf = {git = "https://github.com/joshua-laughner/netcdf-rs.git", branch = "suggested-lifetime-bounds-change"}
-# Could move behind a feature
+num-traits = "0.2.16"
 plotly = { version = "0.8.3", features = ["kaleido"], optional=true }
 regex = "1.9.3"
 strum = { version = "0.25.0", features = ["derive"] }
+tabled = "0.14.0"
 thiserror = "1.0.50"
 toml = "0.8.8"
-serde = { version = "1.0.192", features = ["derive"] }
+serde = { version = "1.0.193", features = ["derive"] }
+serde_json = "1.0.108"
 pest = "2.7.5"
 pest_derive = "2.7.5"
 
+[dev-dependencies]
+rstest = "0.18.2"
+
 [features]
-default = ["plotting", "static"]
+default = []
 static = ["netcdf/static"]
 plotting = ["dep:plotly"]
 
@@ -41,6 +48,9 @@ plotting = ["dep:plotly"]
 
 [[bin]]
 name = "bin2nc"
+
+[[bin]]
+name = "list_spectra"
 
 [[bin]]
 name = "add-nc-flags"
@@ -54,6 +64,9 @@ name = "write_private_netcdf"
 
 [[bin]]
 name = "write_public_netcdf"
+
+[[bin]]
+name = "i2s-setup"
 
 #[[bin]]
 #name = "plot_opus_spectra"

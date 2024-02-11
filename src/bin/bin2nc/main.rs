@@ -2,7 +2,7 @@ use std::{path::{PathBuf, Path}, collections::HashMap, cell::Cell};
 
 use clap::Parser;
 use ggg_rs::{self, utils::{GggError, self}, runlogs::{RunlogDataRec, Runlog}, opus::Spectrum};
-use netcdf::extent::Extents;
+use netcdf::Extents;
 
 /// Generate netCDF versions of binary TCCON spectra listed in a given runlog
 ///
@@ -217,10 +217,10 @@ impl NcWriter for IndividualNcWriter {
         var.put_value(value, Extents::All)
             .or_else(|e| Err(GggError::CouldNotWrite { path: PathBuf::new(), reason: format!("{e} (while writing value to {varname})") }))?;
 
-        var.add_attribute("units", units)
+        var.put_attribute("units", units)
             .or_else(|e| Err(GggError::CouldNotWrite { path: PathBuf::new(), reason: format!("{} (while adding 'units' attribute to {}", e, varname) }))?;
 
-        var.add_attribute("description", description)
+        var.put_attribute("description", description)
             .or_else(|e| Err(GggError::CouldNotWrite { path: PathBuf::new(), reason: format!("{} (while adding 'description' attribute to {}", e, varname) }))?;
         Ok(var)
     }
@@ -236,10 +236,10 @@ impl NcWriter for IndividualNcWriter {
         var.put_values(data_slice, Extents::All)
             .or_else(|e| Err(GggError::CouldNotWrite { path: PathBuf::new(), reason: format!("{} (while writing values to {})", e, varname) }))?;
 
-        var.add_attribute("units", units)
+        var.put_attribute("units", units)
             .or_else(|e| Err(GggError::CouldNotWrite { path: PathBuf::new(), reason: format!("{} (while adding 'units' attribute to {}", e, varname) }))?;
 
-        var.add_attribute("description", description)
+        var.put_attribute("description", description)
             .or_else(|e| Err(GggError::CouldNotWrite { path: PathBuf::new(), reason: format!("{} (while adding 'description' attribute to {}", e, varname) }))?;
 
         Ok(var)
@@ -297,7 +297,7 @@ impl SpecGroupDef {
 struct MultipleNcWriter {
     save_file: PathBuf,
     group_defs: Vec<SpecGroupDef>,
-    nc_file: netcdf::MutableFile
+    nc_file: netcdf::FileMut
 }
 
 impl MultipleNcWriter {
@@ -346,7 +346,7 @@ impl MultipleNcWriter {
         "spectrum"
     }
 
-    fn make_group_defs(runlog: Runlog, detector_mapping: &HashMap<char, String>, nc_file: &mut netcdf::MutableFile) -> Result<Vec<SpecGroupDef>, GggError> {
+    fn make_group_defs(runlog: Runlog, detector_mapping: &HashMap<char, String>, nc_file: &mut netcdf::FileMut) -> Result<Vec<SpecGroupDef>, GggError> {
         let mut groups: Vec<SpecGroupDef> = Vec::new();
 
         for data_rec in runlog {
@@ -388,7 +388,7 @@ impl MultipleNcWriter {
         }
     }
 
-    fn create_group(nc_file: &mut netcdf::MutableFile, group_def: &SpecGroupDef) -> Result<(), GggError> {
+    fn create_group(nc_file: &mut netcdf::FileMut, group_def: &SpecGroupDef) -> Result<(), GggError> {
         let nc_path = nc_file.path().unwrap_or_else(|_| PathBuf::from("?"));
         // This creates the new spectrum group, with an unlimited dimension for time so that we can append new spectra.
         let mut grp = nc_file.add_group(&group_def.group_name)
@@ -421,13 +421,13 @@ impl MultipleNcWriter {
             reason: format!("Could not create frequency variable in group '{group_name}': {e}") 
         })?;
 
-        freq_var.add_attribute("units", "cm-1")
+        freq_var.put_attribute("units", "cm-1")
         .map_err(|e| GggError::CouldNotWrite { 
             path: nc_path.to_owned(), 
             reason: format!("Could not add 'units' attribute to 'frequency' variable in group '{group_name}': {e}") 
         })?;
 
-        freq_var.add_attribute("description", "Frequency in wavenumbers of the measured intensity")
+        freq_var.put_attribute("description", "Frequency in wavenumbers of the measured intensity")
         .map_err(|e| GggError::CouldNotWrite { 
             path: nc_path.to_owned(), 
             reason: format!("Could not add 'description' attribute to 'frequency' variable in group '{group_name}': {e}") 
@@ -448,7 +448,7 @@ impl MultipleNcWriter {
                 reason: format!("Could not create string variable '{varname}' in group '{group_name}': {e}")
             })?;
 
-            v.add_attribute("description", description)
+            v.put_attribute("description", description)
             .map_err(|e| GggError::CouldNotWrite { 
                 path: PathBuf::from("?"), 
                 reason: format!("Could not add 'units' attribute to string variable '{varname}' in group '{group_name}': {e}")
@@ -508,13 +508,13 @@ impl NcWriter for MultipleNcWriter {
                 reason: format!("Could not create variable '{varname}' in group '{group_name}': {e}") 
             })?;
 
-            v.add_attribute("units", units)
+            v.put_attribute("units", units)
             .map_err(|e| GggError::CouldNotWrite { 
                 path: PathBuf::from("?"), 
                 reason: format!("Could not add 'units' attribute to variable '{varname}' in group '{group_name}': {e}")
             })?;
 
-            v.add_attribute("description", description)
+            v.put_attribute("description", description)
             .map_err(|e| GggError::CouldNotWrite { 
                 path: PathBuf::from("?"), 
                 reason: format!("Could not add 'units' attribute to variable '{varname}' in group '{group_name}': {e}")
@@ -546,13 +546,13 @@ impl NcWriter for MultipleNcWriter {
                 reason: format!("Could not create variable '{varname}' in group '{group_name}': {e}")
             })?;
 
-            v.add_attribute("units", units)
+            v.put_attribute("units", units)
             .map_err(|e| GggError::CouldNotWrite { 
                 path: PathBuf::from("?"), 
                 reason: format!("Could not add 'units' attribute to variable '{varname}' in group '{group_name}': {e}")
             })?;
 
-            v.add_attribute("description", description)
+            v.put_attribute("description", description)
             .map_err(|e| GggError::CouldNotWrite { 
                 path: PathBuf::from("?"), 
                 reason: format!("Could not add 'units' attribute to variable '{varname}' in group '{group_name}': {e}")

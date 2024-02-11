@@ -1,6 +1,6 @@
 use std::{path::PathBuf, str::FromStr, sync::OnceLock, io::BufRead};
 
-use error_stack::{IntoReport, ResultExt};
+use error_stack::ResultExt;
 use itertools::Itertools;
 
 use crate::error::HeaderError;
@@ -108,7 +108,6 @@ pub struct ColFileHeader {
 
 pub fn read_col_file_header<F: BufRead>(file: &mut FileBuf<F>) -> error_stack::Result<ColFileHeader, HeaderError> {
     let (nhead, ncol) = get_nhead_ncol(file)
-        .into_report()
         .change_context_lazy(|| HeaderError::ParseError {
             location: file.path.as_path().into(), 
             cause: "Could not parse number of header lines and data columns".to_string() 

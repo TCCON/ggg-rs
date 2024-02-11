@@ -1,15 +1,20 @@
 //! General GGG utilities, not particular to any program or I/O step.
+use std::ffi::OsString;
+use std::num::NonZeroU8;
 use std::{env, f64};
 use std::error::Error;
 use std::fmt::Display;
 use std::fs::File;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::ops::{Deref, DerefMut};
 use std::path::{PathBuf, Path};
 use std::str::FromStr;
 
-use chrono::TimeZone;
-use error_stack::IntoReport;
+use chrono::{Datelike, TimeZone};
+use fortformat::format_specs::FortFormat;
+use serde::{Deserialize, Deserializer, de::Error as DeserError};
+
+use crate::error::DateTimeError;
 
 use crate::error::HeaderError;
 
@@ -160,7 +165,7 @@ impl Display for GggPathErrorKind {
 /// * "TR" => `Triangular`
 /// 
 /// For [`FromStr`], the conversion ignores case.
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ApodizationFxn {
     BoxCar,
     WeakNortonBeer,
@@ -182,6 +187,17 @@ impl ApodizationFxn {
 
     pub fn int_map_string() -> &'static str {
         "0 = Boxcar, 1 = Weak Norton-Beer, 2 = Medium Norton-Beer, 3 = Strong Norton-Beer, 4 = Triangular"
+    }
+}
+
+impl ApodizationFxn {
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Self, D::Error> 
+    where D: Deserializer<'de>
+    {
+        let value = String::deserialize(deserializer)?;
+        Self::from_str(&value).map_err(
+            |e| D::Error::custom(e.to_string())
+        )
     }
 }
 
@@ -333,6 +349,181 @@ impl <F: BufRead> DerefMut for FileBuf<F> {
 }
 
 
+/// A structure to use in command line interfaces when output may be to a new file or modifying one in place
+/// 
+/// The intention is you would incorporate this into a [`clap`] Derive-based parsers
+/// like so:
+/// 
+/// ```no_run
+/// # use std::path::PathBuf;
+/// # use ggg_rs::utils::OutputOptCli;
+/// #[derive(Debug, clap::Parser)]
+/// struct Cli {
+///     input_file: PathBuf,
+///     #[clap(flatten)]
+///     output: OutputOptCli
+/// }
+/// ```
+/// 
+/// This will put the arguments `--in-place` and `-o`/`--output-file` into your CLI.
+/// Then, you can use the `setup_output` method to get an [`OptInplaceWriter`] which
+/// will help with writing to the correct output file.
+#[derive(Debug, clap::Args)]
+#[group(required=true)]
+pub struct OutputOptCli {
+    /// Provide this flag to modify the output/destination file directly.
+    /// Mutually exclusive with --output-file, but one of this and --output-file
+    /// must be given.
+    #[clap(long)]
+    in_place: bool,
+    /// Provide this argument with the path to write the output to. Mutually
+    /// exclusive with --in-place, but one of this and --in-place must be given.
+    #[clap(short, long)]
+    output_file: Option<PathBuf>,
+}
+
+impl OutputOptCli {
+    /// Given the user input, return an [`OptInplaceWriter`] to handle modifying a file in place or writing to a new file.
+    pub fn setup_output<'a>(&'a self, input_file: &'a Path) -> std::io::Result<OptInplaceWriter> {
+        if self.in_place && self.output_file.is_some() {
+            panic!("Incorrect use of OptOutputCli - in_place and output_file should never both be given");
+        }
+
+        let writer = if let Some(ref out_file) = self.output_file {
+            OptInplaceWriter::new_separate(out_file.to_path_buf())?
+        } else {
+            OptInplaceWriter::new_in_place(input_file.to_path_buf())?
+        };
+
+        Ok(writer)
+    }
+}
+
+/// A structure that helps with optionally writing to a new file or modifying one in place.
+/// 
+/// This will typically be created from the `setup_output` method of `OutputOptCli`. If needed,
+/// you can create it diretly with its `new_in_place` and `new_separate` methods, which create
+/// a writer configured to help with modifying a file in place vs. writing a separate file.
+/// 
+/// The difference is that the "in-place" modification assumes that the file given as the output
+/// path exists and is being read from, so it creates a temporary file. When you call `finalize`,
+/// it renames the temporary file to its final location. This way, you can read from the original
+/// file to copy and modify its contents into the new file, then overwrite the original only if
+/// the new file is successfully completed:
+/// 
+/// ```no_run
+/// # use std::path::PathBuf;
+/// # use ggg_rs::utils::OptInplaceWriter;
+/// use std::io::BufRead;
+/// use std::io::Write;
+/// 
+/// let p = PathBuf::from("./example.txt");
+/// let file = std::fs::File::open(&p).unwrap();
+/// let mut reader = std::io::BufReader::new(file);
+/// let mut writer = OptInplaceWriter::new_in_place(p).unwrap();
+/// 
+/// write!(&mut writer, "new line").unwrap();
+/// let mut line = String::new();
+/// reader.read_line(&mut line).unwrap();
+/// write!(&mut writer, "{line}").unwrap();
+/// // At this point, "example.txt" is unchanged.
+/// writer.finalize().unwrap();
+/// // Now "example.txt" has "new line" as its first line
+/// // and its original first line was moved down one.
+/// ```
+/// 
+/// If not doing an in-place modification, then this writes directly to the output file
+/// as if you used `std::fs::File`.
+/// 
+/// **Note: you *must* call `finalize` for the in-place modification to complete! Otherwise
+/// the changes will only be in a hidden file.**
+/// 
+/// As shown in the above example, this implements `std::io::Write`, so you can use it with
+/// the `write!` and `writeln!` macros, as well as other standard methods to write to files.
+pub struct OptInplaceWriter {
+    in_place: bool,
+    out_path: PathBuf,
+    final_path: PathBuf,
+    file: std::fs::File,
+}
+
+impl OptInplaceWriter {
+    /// Create a new writer to defer writing to `path` until `finalize()` is called.
+    pub fn new_in_place(path: PathBuf) -> std::io::Result<Self> {
+        let curr_name = path.file_name()
+            .ok_or_else(|| std::io::Error::other(format!("Could not get base name of {}", path.display())))?;
+
+        let tmp_name = if curr_name.to_string_lossy().starts_with(".") {
+            let mut n = OsString::new();
+            n.push(curr_name);
+            n.push(".tmp");
+            n
+        } else {
+            let mut n = OsString::new();
+            n.push(".");
+            n.push(curr_name);
+            n.push(".tmp");
+            n
+        };
+
+        let out_path = path.with_file_name(tmp_name);
+        let file = std::fs::File::create(&out_path)?;
+        Ok(Self { in_place: true, out_path, final_path: path, file })
+    }
+
+    /// Create a new writer that writes directly to `path`.
+    pub fn new_separate(path: PathBuf) -> std::io::Result<Self> {
+        let file = std::fs::File::create(&path)?;
+        Ok(Self { in_place: false, out_path: path, final_path: PathBuf::new(), file })
+    }
+
+    /// Perform any finalization. 
+    /// 
+    /// Consumes the writer, since after this call, no further data should be written.
+    /// For all writers, this flushes any remaining data to disk. For in-place writers,
+    /// this moves the temporary file into the final output location.
+    pub fn finalize(mut self) -> std::io::Result<()> {
+        self.file.flush()?;
+        if self.in_place {
+            std::fs::rename(self.out_path, self.final_path)
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Get a reference to the final output path.
+    pub fn output_path(&self) -> &Path {
+        &self.out_path
+    }
+}
+
+impl Write for OptInplaceWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.file.write(buf)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.file.flush()
+    }
+}
+
+/// Read the contents of input from a file or stdin.
+/// 
+/// If `input_path` is just "-", then this reads from stdin. Otherwise, it
+/// reads the contents of `input_path`. Note that the stdin read is blocking;
+/// if the user provides no input, the program may hang indefinitely.
+pub fn read_input_file_or_stdin(input_path: &Path) -> std::io::Result<Vec<u8>> {
+    let mut buf = Vec::new();
+    if input_path.to_string_lossy() == "-" {
+        let mut stdin = std::io::stdin().lock();
+        stdin.read_to_end(&mut buf)?;
+    } else {
+        let mut file = std::fs::File::open(input_path)?;
+        file.read_to_end(&mut buf)?;
+    }
+    Ok(buf)
+}
+
 /// A structure representing some common elements contained in GGG file headers
 /// 
 /// This is meant for files that have at least two numbers in the first line of the file,
@@ -347,9 +538,9 @@ pub struct CommonHeader {
     /// The value used to indicate missing/invalid values in the data. Will be
     /// `None` if not found in the header.
     pub missing: Option<f64>,
-    /// The Fortran format string that describes the format of each line of data in the file.
+    /// The Fortran format that describes the format of each line of data in the file.
     /// Will be `None` if not found in the header.
-    pub format_str: Option<String>,
+    pub fformat: Option<FortFormat>,
     /// The data column names
     pub column_names: Vec<String>
 }
@@ -478,12 +669,19 @@ pub fn read_common_header<F: BufRead>(f: &mut FileBuf<F>) -> Result<CommonHeader
     let (mut nhead, ncol) = get_nhead_ncol(f)?;
     // We've already read one header line
     nhead -= 1;
-    let mut format_str = None;
+    let mut fformat = None;
     let mut missing = None;
     while nhead > 1 {
         let line = f.read_header_line()?;
         if line.starts_with("format=") {
-            format_str = Some(line.replace("format=", ""));
+            let format_str = line.replace("format=", "");
+            fformat = Some(
+                FortFormat::parse(&format_str)
+                    .map_err(|e| HeaderError::ParseError {
+                        location: f.path.as_path().into(), 
+                        cause: format!("Error parsing format line: {e}") 
+                    })?
+                );
         }
         if line.starts_with("missing:") {
             let missing_str = line.replace("missing:", "");
@@ -508,7 +706,7 @@ pub fn read_common_header<F: BufRead>(f: &mut FileBuf<F>) -> Result<CommonHeader
         return Err(HeaderError::ParseError { location: f.path.as_path().into(), cause: reason });
     }
 
-    Ok(CommonHeader { nhead, ncol, missing, format_str, column_names })
+    Ok(CommonHeader { nhead, ncol, missing, fformat, column_names })
 }
 
 
@@ -613,4 +811,189 @@ pub fn runlog_ydh_to_datetime(year: i32, day_of_year: i32, utc_hour: f64) -> chr
     + chrono::Duration::hours(ihours as i64)
     + chrono::Duration::minutes(iminutes as i64)
     + chrono::Duration::seconds(iseconds as i64)
+}
+
+
+#[derive(Debug, thiserror::Error)]
+pub enum EncodingError {
+    #[error("IO error: {0}")]
+    IoError(#[from] std::io::Error),
+    #[error("Could not convert file contents: {0}")]
+    ConversionError(String),
+}
+
+
+pub fn read_unknown_encoding_file<P: AsRef<Path>>(filepath: P) -> Result<String, EncodingError> {
+    let mut f = std::fs::File::open(filepath)?;
+    let mut buf = vec![];
+    f.read_to_end(&mut buf)?;
+    let (content_result, _) = encoding::types::decode(
+        &buf,
+        encoding::types::DecoderTrap::Strict,
+        encoding::all::UTF_8
+    );
+
+    content_result.map_err(|e| EncodingError::ConversionError(e.into_owned()))
+}
+
+/// Remove a comment from a line
+/// 
+/// GGG often (though not always) considers anything after a
+/// colon in a line to be a comment. This function will return
+/// everything in `value` up to the first colon. If there is not
+/// a colon in `value`, the the full string is returned.
+pub fn remove_comment(value: &str) -> &str {
+    value.split_once(":")
+        .map(|(a, _)| a)
+        .unwrap_or(value)
+}
+
+pub fn remove_comment_multiple_lines(value: &str) -> String {
+    let mut out = String::new();
+    for line in value.split("\n") {
+        let value = remove_comment(line);
+        if !value.trim().is_empty() {
+            out.push_str(value);
+        }
+    }
+    out
+}
+
+
+pub fn is_usa_dst(datetime: chrono::NaiveDateTime) -> Result<bool, DateTimeError> {
+    // Based on the rules listed on Wikipedia as of 2023-01-23 (https://en.wikipedia.org/wiki/Daylight_saving_time_in_the_United_States#1975%E2%80%931986:_Extension_of_daylight_saving_time),
+    // 1987 to 2006 use daylight savings time between the first Sunday of April to the last Sunday of October
+    // Starting in 2007, it became second Sunday of March to first Sunday of November
+    if datetime.year() < 1987 {
+        unimplemented!("USA daylight savings time before 1987 not implemented");
+    }
+
+    let (start, end) = if datetime.year() < 2007 {
+        let start = nth_day_of_week(datetime.year(), 4, chrono::Weekday::Sun, 1.into())
+            .expect("Should be able to find the first Sunday in April");
+        let end = nth_day_of_week(datetime.year(), 10, chrono::Weekday::Sun, Nth::Last)
+            .expect("Should be able to find the last Sunday in October");
+        (start, end)
+    } else {
+        let start = nth_day_of_week(datetime.year(), 3, chrono::Weekday::Sun, 2.into())
+            .expect("Should be able to get the second Sunday of March");
+        let end = nth_day_of_week(datetime.year(), 11, chrono::Weekday::Sun, 1.into())
+            .expect("Should be able to get the first Sunday in November");
+        (start, end)
+    };
+
+    let start = start.and_hms_opt(2, 59, 59).unwrap();
+    let end_ambiguous = end.and_hms_opt(2, 0, 0).unwrap();
+    let end = end.and_hms_opt(1, 0, 0).unwrap();
+    // The case we can't tell is if the time is between 1a and 2a on the date when
+    // we "fall back", so anything in that time range is an error
+    if datetime >= end && datetime <= end_ambiguous {
+        return Err(DateTimeError::AmbiguousDst(datetime));
+    }
+
+    let is_dst = datetime >= start && datetime <= end;
+    Ok(is_dst)
+}
+
+enum Nth {
+    N(NonZeroU8),
+    Last
+}
+
+impl From<u8> for Nth {
+    fn from(value: u8) -> Self {
+        Self::N(NonZeroU8::new(value).unwrap())
+    }
+}
+
+fn nth_day_of_week(year: i32, month: u32, weekday: chrono::Weekday, n: Nth) -> Result<chrono::NaiveDate, DateTimeError> {
+    let mut date = chrono::NaiveDate::from_ymd_opt(year, month, 1)
+        .ok_or_else(|| DateTimeError::InvalidYearMonthDay(year, month, 1))?;
+
+    let n: u8 = match n {
+        Nth::N(n) => n.into(),
+        Nth::Last => 0,
+    };
+
+    let mut m: u8 = 0;
+    loop {
+        if date.weekday() == weekday {
+            m += 1;
+        }
+
+        if n > 0 && m == n {
+            return Ok(date)
+        }
+
+        date += chrono::Duration::days(1);
+        if date.month() != month && n != 0 {
+            return Err(DateTimeError::NoNthWeekday { year, month, n, weekday })
+        } else if date.month() != month {
+            // back up to the last instance of the requested weekday in the month
+            while date.weekday() != weekday {
+                date -= chrono::Duration::days(1);
+            }
+            return Ok(date)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_nth_day_of_week() {
+        let first_sunday_apr = nth_day_of_week(2023, 4, chrono::Weekday::Sun, 1.into()).unwrap();
+        assert_eq!(first_sunday_apr, chrono::NaiveDate::from_ymd_opt(2023, 4, 2).unwrap());
+
+        let last_sunday_oct = nth_day_of_week(2023, 10, chrono::Weekday::Sun, Nth::Last).unwrap();
+        assert_eq!(last_sunday_oct, chrono::NaiveDate::from_ymd_opt(2023, 10, 29).unwrap());
+    }
+
+    #[test]
+    fn test_is_usa_dst() {
+        // Post-2007 rules
+        let b = is_usa_dst(datetime(2023, 1, 1, 0, 0)).unwrap();
+        assert_eq!(b, false);
+        let b = is_usa_dst(datetime(2023, 3, 11, 23, 59)).unwrap();
+        assert_eq!(b, false);
+        let b = is_usa_dst(datetime(2023, 3, 12, 3, 0)).unwrap();
+        assert_eq!(b, true);
+        let b = is_usa_dst(datetime(2023, 6, 1, 0, 0)).unwrap();
+        assert_eq!(b, true);
+        let b = is_usa_dst(datetime(2023, 11, 5, 0, 0)).unwrap();
+        assert_eq!(b, true);
+        let b = is_usa_dst(datetime(2023, 11, 5, 2, 1)).unwrap();
+        assert_eq!(b, false);
+        let b = is_usa_dst(datetime(2023, 12, 31, 23, 59)).unwrap();
+        assert_eq!(b, false);
+
+        let e = is_usa_dst(datetime(2023, 11, 5, 1, 30));
+        assert!(e.is_err());
+
+        // 1987 to 2006 rules
+        let b = is_usa_dst(datetime(2000, 1, 1, 0, 0)).unwrap();
+        assert_eq!(b, false);
+        let b = is_usa_dst(datetime(2000, 4, 1, 23, 59)).unwrap();
+        assert_eq!(b, false);
+        let b = is_usa_dst(datetime(2000, 4, 2, 3, 0)).unwrap();
+        assert_eq!(b, true);
+        let b = is_usa_dst(datetime(2000, 6, 1, 0, 0)).unwrap();
+        assert_eq!(b, true);
+        let b = is_usa_dst(datetime(2000, 10, 29, 0, 0)).unwrap();
+        assert_eq!(b, true);
+        let b = is_usa_dst(datetime(2000, 10, 29, 2, 1)).unwrap();
+        assert_eq!(b, false);
+        let b = is_usa_dst(datetime(2000, 12, 31, 23, 59)).unwrap();
+        assert_eq!(b, false);
+
+        let e = is_usa_dst(datetime(2000, 10, 29, 1, 30));
+        assert!(e.is_err());
+    }
+
+    fn datetime(year: i32, month: u32, day: u32, hour: u32, minute: u32) -> chrono::NaiveDateTime {
+        let d = chrono::NaiveDate::from_ymd_opt(year, month, day).unwrap();
+        d.and_hms_opt(hour, minute, 0).unwrap()
+    }
 }

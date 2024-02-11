@@ -94,7 +94,7 @@ fn cleanup<E: Debug>(err: E) -> ExitCode {
     ExitCode::FAILURE
 }
 
-fn init_nc_file(run_dir: &Path) -> error_stack::Result<netcdf::MutableFile, netcdf::error::Error> {
+fn init_nc_file(run_dir: &Path) -> error_stack::Result<netcdf::FileMut, netcdf::Error> {
     let nc_file = temporary_nc_path(run_dir);
     let file = netcdf::create(nc_file)?;
     Ok(file)

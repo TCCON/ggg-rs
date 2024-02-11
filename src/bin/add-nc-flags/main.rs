@@ -22,13 +22,10 @@ fn main_inner() -> error_stack::Result<(), CliError> {
             return Err(CliError::UserError("Path given to --output must not be a directory".to_string()).into());
         }
 
-        // Necessary because e.g. "test.nc" has a parent of "" which doesn't exist.
-        let canon_out_file = out_file.canonicalize()
-            .change_context(CliError::IoError)
-            .attach_printable("Could not determine the canonical path for the value of --output")?;
-
-        if let Some(parent) = canon_out_file.parent() {
-            if !parent.exists() {
+        // The second check is necessary because e.g. "test.nc" has a parent of "" which doesn't exist,
+        // but means "." which better exist.
+        if let Some(parent) = out_file.parent() {
+            if !parent.exists() && !parent.as_os_str().is_empty() {
                 return Err(CliError::UserError(format!(
                     "The directory part of --output ({}) must exist, i.e. for --output /home/me/test.nc, /home/me must exist.",
                     out_file.parent().map(|p| p.to_str()).flatten().unwrap_or("")
@@ -36,7 +33,7 @@ fn main_inner() -> error_stack::Result<(), CliError> {
             }
         } else {
             // We really shouldn't get here (the is_dir check should catch these cases), but just in case
-            return Err(CliError::UserError(format!("{} is not a valid path for --output (cannot be your root directory or a drive prefix)", canon_out_file.display())).into());
+            return Err(CliError::UserError(format!("{} is not a valid path for --output (cannot be your root directory or a drive prefix)", out_file.display())).into());
         }
 
     }
@@ -83,7 +80,7 @@ fn main_inner() -> error_stack::Result<(), CliError> {
     let mut flags = ds.variable_mut("flag")
         .ok_or_else(|| CliError::MissingReqVariable("flag"))
         .attach_printable("This occurred while trying to get the flag variable in either the new output file or (if --in-place given) the original file")?; // this really shouldn't happen, since we read that variable in already
-    flags.put_values(data.flags.as_slice().unwrap(), netcdf::extent::Extents::All)
+    flags.put_values(data.flags.as_slice().unwrap(), netcdf::Extents::All)
         .change_context(CliError::NcError)
         .attach_printable("This occur write new flag values to either the new output file or (if --in-place given) the original file")?;
 
@@ -117,21 +114,21 @@ fn load_flags_and_data(nc_file: &Path, filter_varname: &str ) -> error_stack::Re
 
     let timestamps = ds.variable("time")
         .ok_or_else(|| CliError::MissingReqVariable("time"))?
-        .values_arr::<f64, _>(netcdf::extent::Extents::All)
+        .get::<f64, _>(netcdf::Extents::All)
         .change_context(CliError::NcError)?
         .into_dimensionality::<ndarray::Ix1>()
         .change_context_lazy(|| CliError::WrongDimension("time".to_string(), 1))?;
 
     let flags = ds.variable("flag")
         .ok_or_else(|| CliError::MissingReqVariable("flag"))?
-        .values_arr::<i16, _>(netcdf::extent::Extents::All)
+        .get::<i16, _>(netcdf::Extents::All)
         .change_context(CliError::NcError)?
         .into_dimensionality::<ndarray::Ix1>()
         .change_context_lazy(|| CliError::WrongDimension("flag".to_string(), 1))?;
 
     let filter_var = ds.variable(filter_varname)
         .ok_or_else(|| CliError::MissingFilterVariable(filter_varname.to_string()))?
-        .values_arr::<f32, _>(netcdf::extent::Extents::All)
+        .get::<f32, _>(netcdf::Extents::All)
         .change_context(CliError::NcError)
         .attach_printable("This error may be caused by trying to filter on a variable that is not of type 'float'")?
         .into_dimensionality::<ndarray::Ix1>()
@@ -234,6 +231,8 @@ struct OutputCli {
     #[clap(short='o', long, required = true)]
     output: Option<PathBuf>,
 
+    /// Set this flag so that the file specified by --output is always created,
+    /// even if no changes to the flags are required.
     #[clap(long)]
     always_copy: bool,
 }
@@ -308,7 +307,7 @@ struct FilterCli {
     #[clap(long, default_value_t = Combination::And)]
     time_and_or: Combination,
 
-    /// This is a required 
+    /// This is a required argument, it is the name of the variable to filter on.
     #[clap(short='x', long)]
     filter_var: String,
 }
