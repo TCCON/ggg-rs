@@ -24,6 +24,12 @@ struct Cli {
     /// for each spectrum. Note that this requires all spectra to have the same frequency grid.
     #[clap(short = 's', long = "single-file")]
     single_file: bool,
+
+    /// Set this flag to output the full path to each spectrum, rather than its name, as the
+    /// "spectrum" variable in a multiple-spectrum file. In a single-spectrum file, this will
+    /// be added as a root-level attribute. 
+    #[clap(short = 'f', long)]
+    full_spec_paths: bool,
 }
 
 fn main() {
@@ -32,23 +38,23 @@ fn main() {
     if clargs.single_file {
         let runlog_clone = ggg_rs::runlogs::Runlog::open(&clargs.runlog).unwrap();
         let writer = MultipleNcWriter::new_with_default_map(clargs.output, runlog_clone, true).unwrap();
-        writer_loop(writer, runlog);
+        writer_loop(writer, runlog, clargs.full_spec_paths);
     } else {
         let writer = IndividualNcWriter::new( clargs.output).unwrap();
-        writer_loop(writer, runlog);
+        writer_loop(writer, runlog, clargs.full_spec_paths);
     }
 }
 
-fn writer_loop<W: NcWriter>(mut writer: W, runlog: Runlog) {
+fn writer_loop<W: NcWriter>(mut writer: W, runlog: Runlog, full_spec_paths: bool) {
     for data_rec in runlog.into_iter() {
         let spec = ggg_rs::opus::read_spectrum_from_runlog_rec(&data_rec).unwrap();
-        writer.add_spectrum(&data_rec, &spec).unwrap();
+        writer.add_spectrum(&data_rec, &spec, full_spec_paths).unwrap();
         println!("Wrote spectrum {} as netCDF", data_rec.spectrum_name);
     }
 }
 
 trait NcWriter {
-    fn add_spectrum(&mut self, data_rec: &RunlogDataRec, spectrum: &Spectrum) -> Result<(), GggError>;
+    fn add_spectrum(&mut self, data_rec: &RunlogDataRec, spectrum: &Spectrum, full_spec_paths: bool) -> Result<(), GggError>;
     fn write_0d_var<'f, T: netcdf::NcPutGet>(nc: &'f mut netcdf::GroupMut, varname: &str, spec_idx: usize, value: T, units: &str, description: &str) 
     -> Result<netcdf::VariableMut<'f>, GggError>;
     fn write_1d_var<'f>(nc: &'f mut netcdf::GroupMut, varname: &str, spec_idx: usize, data: &ndarray::Array1<f32>, units: &str, description: &str) 
@@ -79,7 +85,7 @@ trait NcWriter {
             spec_idx,
             &spectrum.spec,
             "AU",
-            "Measured radiance intensiy in arbitrary units"
+            "Measured radiance intensity in arbitrary units"
         ).or_else(|e| Err(e.with_path(out_file.to_owned())))?;
 
         // Create the ancillary variables from the runlog that we actually care about
@@ -191,7 +197,7 @@ impl IndividualNcWriter {
 }
 
 impl NcWriter for IndividualNcWriter {
-    fn add_spectrum(&mut self, data_rec: &RunlogDataRec, spectrum: &Spectrum) -> Result<(), GggError> {
+    fn add_spectrum(&mut self, data_rec: &RunlogDataRec, spectrum: &Spectrum, full_spec_paths: bool) -> Result<(), GggError> {
         let out_file = self.save_dir.join(format!("{}.nc", data_rec.spectrum_name));
 
         let mut nc = netcdf::create(&out_file)
@@ -206,6 +212,11 @@ impl NcWriter for IndividualNcWriter {
 
         let mut root = nc.root_mut()
             .ok_or_else(|| GggError::CouldNotWrite { path: out_file.clone(), reason: "Could not get root group as mutable".to_owned()})?;
+        if full_spec_paths {
+            let spec_path = format!("{}", spectrum.path.display());
+            root.add_attribute("full_spectrum_path", spec_path.as_str())
+                .map_err(|e| GggError::CouldNotWrite { path: out_file.clone(), reason: "Could not add 'full_spectrum_path' attribute to root group".to_string() })?;
+        }
         Self::write_spectrum_values(&mut root, data_rec, spectrum, &out_file, 0, true)
     }
 
@@ -469,7 +480,7 @@ impl MultipleNcWriter {
 }
 
 impl NcWriter for MultipleNcWriter {
-    fn add_spectrum(&mut self, data_rec: &RunlogDataRec, spectrum: &Spectrum) -> Result<(), GggError> {
+    fn add_spectrum(&mut self, data_rec: &RunlogDataRec, spectrum: &Spectrum, full_spec_paths: bool) -> Result<(), GggError> {
         // For each entry, check if the spectrum can go in one of the existing groups. If we need to create a group, do so.
         // If there's an issue (i.e. the spectrum should go in a certain group based on its detector code but has a different
         // frequency grid) either crash or skip that spectrum.
@@ -488,7 +499,12 @@ impl NcWriter for MultipleNcWriter {
                 format!("Could not get netCDF group '{}' (this should not happen)", &group_name)
             ))?;
 
-        Self::write_str_var(&mut grp, "spectrum", next_idx, &data_rec.spectrum_name, "Spectrum name")?;
+        if full_spec_paths {
+            let spec_path = format!("{}", spectrum.path.display());
+            Self::write_str_var(&mut grp, "spectrum", next_idx, &spec_path, "Spectrum name")?;
+        } else {
+            Self::write_str_var(&mut grp, "spectrum", next_idx, &data_rec.spectrum_name, "Spectrum name")?;
+        }
         Self::write_spectrum_values(&mut grp, data_rec, spectrum, &self.save_file, next_idx, true)
     }
 

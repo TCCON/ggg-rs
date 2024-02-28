@@ -59,6 +59,7 @@ impl Display for MissingOpusParameterError {
 impl std::error::Error for MissingOpusParameterError {}
 
 pub struct Spectrum {
+    pub path: PathBuf,
     pub freq: Array1<f32>,
     pub spec: Array1<f32>
 }
@@ -85,7 +86,7 @@ pub fn read_spectrum_from_runlog_rec(data_rec: &runlogs::RunlogDataRec) -> Resul
     };
 
     read_spectrum(
-        &spec_file,
+        spec_file,
         data_rec.bpw, 
         data_rec.ifirst,  
         data_rec.delta_nu, 
@@ -117,8 +118,8 @@ pub fn read_spectrum_from_runlog_rec(data_rec: &runlogs::RunlogDataRec) -> Resul
 /// 
 /// # See also
 /// * [`read_spectrum_from_runlog_rec`] - read the spectrum defined by a runlog data record
-pub fn read_spectrum(spec_file: &Path, bpw: i8, ifirst: usize, delta_nu: f64, pointer: i32) -> Result<Spectrum, GggError> {
-    let mut spec_h = File::open(spec_file)
+pub fn read_spectrum(spec_file: PathBuf, bpw: i8, ifirst: usize, delta_nu: f64, pointer: i32) -> Result<Spectrum, GggError> {
+    let mut spec_h = File::open(&spec_file)
         .or_else(|e| Err(GggError::CouldNotOpen { descr: "spectrum".to_owned(), path: spec_file.to_owned(), reason: e.to_string() }))?;
 
     // For now, just seek past the header because we're not reading it
@@ -139,7 +140,7 @@ pub fn read_spectrum(spec_file: &Path, bpw: i8, ifirst: usize, delta_nu: f64, po
         freq[i] = (delta_nu as f32) * (i + ifirst) as f32;
     }
 
-    Ok(Spectrum { freq, spec })
+    Ok(Spectrum { path: spec_file, freq, spec })
 }
 
 /// A converter that handles the various Opus spectrum formats
