@@ -1,5 +1,5 @@
 //! General GGG utilities, not particular to any program or I/O step.
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::num::NonZeroU8;
 use std::{env, f64};
 use std::error::Error;
@@ -924,6 +924,40 @@ fn nth_day_of_week(year: i32, month: u32, weekday: chrono::Weekday, n: Nth) -> R
             }
             return Ok(date)
         }
+    }
+}
+
+
+/// Make a backup of a file.
+///
+/// With `increment_backup = false`, this will only append `backup_suffix` to the original filename
+/// and copy the original to that file. If that backup existed previously, it will be overwritten.
+/// With `increment_backup = true`, an additional suffix from .000 to .999 will be appended so that
+/// previous backups are not deleted. This will return an error if the suffix needs to exceed 999.
+pub fn make_backup<S: AsRef<OsStr>>(original: &Path, backup_suffix: S, increment_backup: bool) -> std::io::Result<()> {
+    let mut filename = original.file_name()
+        .ok_or_else(|| std::io::Error::other(format!("Could not get file name for original file {}", original.display())))?
+        .to_os_string();
+    
+    filename.push(backup_suffix);
+    if increment_backup {
+        let mut i = 0;
+        while i < 1000 {
+            let istr: OsString = format!(".{i:03}").into();
+            let mut this_filename = filename.clone();
+            this_filename.push(istr);
+            let this_file = original.with_file_name(this_filename);
+            if !this_file.exists() {
+                std::fs::copy(original, this_file)?;
+                return Ok(())
+            }
+            i += 1;
+        }
+        Err(std::io::Error::other("Maximum number of backups (1000) exceeded"))
+    } else {
+        let new = original.with_file_name(filename);
+        std::fs::copy(original, new)?;
+        Ok(())
     }
 }
 
