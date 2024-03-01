@@ -3,17 +3,17 @@ use std::{path::Path, io::BufReader, fs::File};
 
 use fortformat::de::from_str_with_fields;
 use itertools::Itertools;
-use serde::{Deserialize, Deserializer};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::utils::{self, GggError};
 
 pub const NUM_RUNLOG_COLS: usize = 36;
 
 /// A struct representing one line of a GGG2020 runlog.
-#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct RunlogDataRec {
     /// Whether this line was commented out in the runlog
-    #[serde(deserialize_with = "deser_comment")]
+    #[serde(deserialize_with = "deser_comment", serialize_with = "ser_comment")]
     pub commented: bool,
     /// The name of the spectrum
     #[serde(rename = "Spectrum_File_Name")]
@@ -169,6 +169,16 @@ where D: Deserializer<'de>
 {
     let s = String::deserialize(deserializer)?;
     Ok(s == ":")
+}
+
+fn ser_comment<S>(value: &bool, serializer: S) -> Result<S::Ok, S::Error>
+where S: Serializer
+{
+    if *value {
+        serializer.serialize_char(':')
+    } else {
+        serializer.serialize_char(' ')
+    }
 }
 
 /// An iterator over lines in a runlog.

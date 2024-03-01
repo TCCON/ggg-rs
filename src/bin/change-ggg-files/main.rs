@@ -21,14 +21,14 @@ fn main() -> ExitCode {
 }
 
 fn driver(args: Cli) -> error_stack::Result<(), CliError> {
-    let files_to_change = args.expand_change_targets();
+    let files_to_change = args.expand_change_targets()?;
 
     let start_time = chrono::Local::now();
     let backup_suffix = OsString::from(format!(".bak.{}", start_time.format("%Y%m%dT%H%M%S")));
 
     for file in files_to_change {
         if !args.no_backup {
-            utils::make_backup(&file, &backup_suffix, true)
+            utils::make_backup(&file, &backup_suffix, false)
                 .change_context_lazy(|| CliError::IoError)?;
         }
         modify_ggg_file(&file, &args)?;
@@ -74,20 +74,33 @@ struct Cli {
 }
 
 impl Cli {
-    fn expand_change_targets(&self) -> Vec<PathBuf> {
+    fn expand_change_targets(&self) -> error_stack::Result<Vec<PathBuf>, CliError> {
+        if self.change_targets.is_empty() {
+            return Err(CliError::UserError(
+                "Pass at least one file or directory to change".to_string()
+            ).into())
+        }
         let mut out = vec![];
         for path in self.change_targets.iter() {
             if path.is_file() {
-                // Don't worry if it is a .ggg file right now
+                // Assume it is a .ggg file, even if the extension doesn't match
                 out.push(path.clone());
             } else if path.is_dir() {
                 // Get .ggg files in this directory
+                for entry in std::fs::read_dir(path).change_context_lazy(|| CliError::IoError)? {
+                    let entry = entry.change_context_lazy(|| CliError::IoError)?;
+                    let path = entry.path();
+                    let extension = path.extension().map(|ext| ext.to_str()).flatten().unwrap_or_default();
+                    if extension == "ggg" {
+                        out.push(path);
+                    }
+                }
             } else {
                 eprintln!("WARNING: {} does not exist", path.display());
             }
         }
 
-        out
+        Ok(out)
     }
 
     fn no_op(&self) -> bool {
@@ -109,7 +122,9 @@ enum CliError {
     #[error("Problem occurred in file {}", .0.display())]
     InFile(PathBuf),
     #[error("There was a problem with an I/O operation")]
-    IoError
+    IoError,
+    #[error("{0}")]
+    UserError(String),
 }
 
 

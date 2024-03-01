@@ -12,6 +12,7 @@ use std::str::FromStr;
 
 use chrono::{Datelike, TimeZone};
 use fortformat::format_specs::FortFormat;
+use serde::Serialize;
 use serde::{Deserialize, Deserializer, de::Error as DeserError};
 
 use crate::error::DateTimeError;
@@ -159,7 +160,7 @@ impl Display for GggPathErrorKind {
 /// * "TR" => `Triangular`
 /// 
 /// For [`FromStr`], the conversion ignores case.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum ApodizationFxn {
     BoxCar,
     WeakNortonBeer,
