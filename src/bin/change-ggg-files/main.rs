@@ -185,7 +185,18 @@ fn make_output_line(window: &str, orig_line: &str, output_pattern: Option<&str>,
     };
 
     if mkdir {
-        let dir = PathBuf::from(&new_line);
+        // We need this check because GGG allows you to input a string like "./spt/co2_6220/z" to mean
+        // "write the SPT files to ./spt/co2_6220 with a prefix of z for each file."  But because GGG
+        // doesn't automatically insert a trailing /, we know that if the path ends in a /, then there
+        // is no file prefix. If not, we need to remove the file prefix from the path to avoid creating
+        // a directory named e.g. "z".
+        let dir = if new_line.trim().ends_with(std::path::MAIN_SEPARATOR_STR) {
+            PathBuf::from(&new_line)
+        } else {
+            PathBuf::from(&new_line).parent()
+                .ok_or_else(|| CliError::UserError("Could not determine SPT/AK output directory - do not pass an empty string as the directory".to_string()))?
+                .to_path_buf()
+        };
         if !dir.exists() {
             std::fs::create_dir_all(&dir)
                 .change_context_lazy(|| CliError::IoError )?;
