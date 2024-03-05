@@ -92,18 +92,16 @@ impl<'s> Display for SortingSpec<'s> {
 
 impl<'s> PartialOrd for SortingSpec<'s> {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        // Because we're most often dealing with spectra from the same site, which
-        // will have the same head, we can do a small optimization by comparing the
-        // tail first (which will be the run number). 
+        match self.head.partial_cmp(&other.head) {
+            Some(core::cmp::Ordering::Equal) => {}
+            ord => return ord,
+        }
 
         match self.tail.partial_cmp(&other.tail) {
             Some(core::cmp::Ordering::Equal) => {}
             ord => return ord,
         }
-        match self.head.partial_cmp(&other.head) {
-            Some(core::cmp::Ordering::Equal) => {}
-            ord => return ord,
-        }
+        
         self.detector.partial_cmp(&other.detector)
     }
 }
