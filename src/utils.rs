@@ -12,6 +12,7 @@ use std::str::FromStr;
 
 use chrono::{Datelike, TimeZone};
 use fortformat::format_specs::FortFormat;
+use itertools::Itertools;
 use serde::Serialize;
 use serde::{Deserialize, Deserializer, de::Error as DeserError};
 
@@ -702,86 +703,164 @@ pub fn read_common_header<'p, F: BufRead>(f: &mut FileBuf<'p, F>) -> Result<Comm
 }
 
 
-/// Find a spectrum in one of the directories listed in the data_part.lst file.
-/// 
-/// This searches each (uncommented) directory in `$GGGPATH/config/data_part.lst`
-/// until it finds a spectrum with file name `specname` or it runs out of directories.
-/// 
-/// # Returns
-/// If the spectrum was found, then an `Ok(Some(p))` is returned, where `p` is the path
-/// to the spectrum. If the spectrum was *not* found, `Ok(None)` is returned. An `Err`
-/// is returned if:
-/// 
-/// * `$GGGPATH` is not set,
-/// * `$GGGPATH/config/data_part.lst` does not exist, or
-/// * a line of `data_part.lst` could not be read.
-/// 
-/// The final condition returns an `Err` rather than silently skipping the unreadable line
-/// to avoid accidentally reading a spectrum from a later directory than it should if the
-/// `data_part.lst` file was formatted correctly.
-/// 
-/// # Difference to Fortran
-/// Unlike the Fortran subroutine that performs this task, this function does not require
-/// that the paths in `data_part.lst` end in a path separator.
-/// 
-/// # See also
-/// * [`find_spectrum_result`] - a version of this function that returns a `Result<PathBuf>`
-///   instead of `Result<Option<PathBuf>>`, making a missing spectrum an error.
-pub fn find_spectrum(specname: &str) -> Result<Option<PathBuf>, GggError> {
-    let gggpath = get_ggg_path()?;
-    let data_partition_file = gggpath.join("config/data_part.lst");
-    if !data_partition_file.exists() {
-        return Err(GggError::CouldNotOpen { descr: "data_part.lst".to_owned(), path: data_partition_file, reason: "does not exist".to_owned() });
-    }
-
-    let data_part = FileBuf::open(&data_partition_file)?;
-    for (iline, line) in data_part.into_reader().lines().enumerate() {
-        let line = match line {
-            Ok(l) => l,
-            Err(e) => {
-                return Err(GggError::CouldNotRead { 
-                    path: data_partition_file, 
-                    reason: format!("Error reading line {} was: {}", iline+1, e)
-                });
-            }
-        };
-
-        // GGG convention is that lines beginning with ":" are comments
-        if line.starts_with(":") { continue; }
-
-        // Apparently from_str cannot error, so okay to unwrap.
-        let search_path = PathBuf::from_str(&line.trim()).unwrap();
-        let spec_path = search_path.join(specname);
-        if spec_path.exists() {
-            return Ok(Some(spec_path));
-        }
-    }
-
-    return Ok(None);
+pub struct DataPartition {
+    paths: Vec<PathBuf>,
+    previous_index: std::cell::Cell<usize>,
 }
 
-/// Find a spectrum in one of the directories listed in the data_part.lst file.
-/// 
-/// This searches each (uncommented) directory in `$GGGPATH/config/data_part.lst`
-/// until it finds a spectrum with file name `specname` or it runs out of directories.
-/// 
-/// # Returns
-/// If the spectrum was found, then an `Ok(p)` is returned, where `p` is the path
-/// to the spectrum. An `Err` is returned if the spectrum is not found or if any of
-/// the error conditions in [`find_spectrum`] occur.
-/// 
-/// # See also
-/// * [`find_spectrum`] - a similar function that returns an `Ok(None)` if a spectrum
-///   could not be found, rather than an error.
-pub fn find_spectrum_result(spectrum_name: &str) -> Result<PathBuf, GggError> {
-    if let Some(f) = find_spectrum(spectrum_name)? {
-        Ok(f)
-    }else{
-        Err(GggError::CouldNotOpen { 
-            descr: "spectrum".to_owned(), 
-            path: PathBuf::from_str(spectrum_name).unwrap(), 
-            reason: "spectrum not found".to_owned()
-        })
+impl From<Vec<PathBuf>> for DataPartition {
+    /// Create a `DataPartition` from a vector of paths
+    ///
+    /// # Panics
+    ///
+    /// Will panic if any of the paths given are relative and cannot
+    /// get the current directory (due to insufficent permissions or
+    /// the current directory not existing).
+    fn from(value: Vec<PathBuf>) -> Self {
+        let paths = value.into_iter().map(|p| make_path_abs(p)).collect_vec();
+        Self { paths, previous_index: std::cell::Cell::new(0) }
+    }
+}
+
+impl DataPartition {
+    /// Create a new `DataPartition` with no paths. Use the `add_path` method to populate it.
+    pub fn new_empty() -> Self {
+        Self { paths: vec![], previous_index: std::cell::Cell::new(0) }
+    }
+
+    /// Add a new path to the data partition
+    pub fn add_path(&mut self, new_path: PathBuf) {
+        self.paths.push(make_path_abs(new_path));
+    }
+
+    /// Create a new `DataPartition` instance from the `$GGGPATH/config/data_part.lst` file
+    ///
+    /// This will store each uncommented path from the file. (Note that the GGG convention is
+    /// to use a colon to indicate a comment.) An `Err` is returned if:
+    /// 
+    /// * `$GGGPATH` is not set,
+    /// * `$GGGPATH/config/data_part.lst` does not exist, or
+    /// * a line of `data_part.lst` could not be read.
+    pub fn new_from_ggg_path() -> Result<Self, GggError> {
+        let gggpath = get_ggg_path()?;
+        let data_partition_file = gggpath.join("config/data_part.lst");
+        if !data_partition_file.exists() {
+            return Err(GggError::CouldNotOpen { descr: "data_part.lst".to_owned(), path: data_partition_file, reason: "does not exist".to_owned() });
+        }
+
+        Self::new_from_file(&data_partition_file)
+    }
+
+    /// Create a new `DataPartition` from an arbitrary data partition file.
+    ///
+    /// `data_partition_file` must point to a file that has one path per line.
+    /// That file will be read instead of the one at `$GGGPATH/config/data_part.lst`.
+    /// An `Err` is returned if:
+    ///
+    /// * `data_partition_file` does not exist, or
+    /// * a line of `data_part.lst` could not be read.
+    pub fn new_from_file(data_partition_file: &Path) -> Result<Self, GggError> {
+        let mut paths = vec![];
+        let data_part = FileBuf::open(&data_partition_file)?;
+        for (iline, line) in data_part.into_reader().lines().enumerate() {
+            let line = match line {
+                Ok(l) => l,
+                Err(e) => {
+                    return Err(GggError::CouldNotRead { 
+                        path: data_partition_file.to_path_buf(), 
+                        reason: format!("Error reading line {} was: {}", iline+1, e)
+                    });
+                }
+            };
+
+            // GGG convention is that lines beginning with ":" are comments
+            if !line.starts_with(":") {
+                let this_path = PathBuf::from(line.trim());
+                paths.push(make_path_abs(this_path));
+            }
+        }
+
+        Ok(Self { paths, previous_index: std::cell::Cell::new(0) })
+    }
+
+    /// Find a spectrum in one of the directories listed in the data_part.lst file.
+    /// 
+    /// This searches each (uncommented) directory in `$GGGPATH/config/data_part.lst`
+    /// until it finds a spectrum with file name `specname` or it runs out of directories.
+    /// 
+    /// # Returns
+    /// If the spectrum was found, then an `Some(p)` is returned, where `p` is the path
+    /// to the spectrum. If the spectrum was *not* found, `Ok(None)` is returned. An `Err`
+    /// is returned if:
+    /// 
+    /// * `$GGGPATH` is not set,
+    /// * `$GGGPATH/config/data_part.lst` does not exist, or
+    /// * a line of `data_part.lst` could not be read.
+    /// 
+    /// The final condition returns an `Err` rather than silently skipping the unreadable line
+    /// to avoid accidentally reading a spectrum from a later directory than it should if the
+    /// `data_part.lst` file was formatted correctly.
+    /// 
+    /// # Difference to Fortran
+    /// Unlike the Fortran subroutine that performs this task, this function does not require
+    /// that the paths in `data_part.lst` end in a path separator. Also, this always starts 
+    /// from the first path in the configured data partition, whereas the Fortran may resume
+    /// from its previous line.
+    pub fn find_spectrum(&self, specname: &str) -> Option<PathBuf> {
+        // Try the previous directory where we found a spectrum first - 
+        // since runlogs normally keep spectra from the same location together,
+        // each call to this function has a good chance of needing the same
+        // path as the previous.
+        let prev_idx = self.previous_index.get();
+        let search_path = self.paths.get(prev_idx)?;
+        let spec_path = search_path.join(specname);
+        if spec_path.exists() {
+            return Some(spec_path);
+        }
+
+        // Otherwise start from the first path. This may be different than
+        // how the Fortran does it - unless Geoff changed that.
+        for (path_idx, search_path) in self.paths.iter().enumerate() {
+            // Already checked the previous index
+            if path_idx == prev_idx { continue; }
+
+            let spec_path = search_path.join(specname);
+            if spec_path.exists() {
+                self.previous_index.set(path_idx);
+                return Some(spec_path)
+            }
+        }
+
+        None
+    }
+}
+
+
+#[derive(Debug, clap::Args)]
+#[group(multiple = false)]
+pub struct DataPartArgs {
+    /// Read the spectrum directories from the file given by this option,
+    /// rather than `$GGGPATH/config/data_part.lst`.
+    #[clap(long)]
+    data_part_file: Option<PathBuf>,
+
+    /// Use this option to specify spectrum directories from the command line.
+    /// This option may be repeated, e.g. --spec-dir x --spec-dir y to search
+    /// directories `x` and `y` for spectra. If this option is present,
+    /// `$GGGPATH/config/data_part.lst` is ignored.
+    #[clap(long)]
+    spec_dir: Vec<PathBuf>,
+}
+
+impl DataPartArgs {
+    pub fn get_data_partition(&self) -> Result<DataPartition, GggError> {
+        if let Some(path) = &self.data_part_file {
+            DataPartition::new_from_file(&path)
+        } else if !self.spec_dir.is_empty() {
+            Ok(DataPartition::from(self.spec_dir.to_owned()))
+        } else {
+            DataPartition::new_from_ggg_path()
+        }
     }
 }
 
@@ -959,6 +1038,16 @@ pub fn make_backup<S: AsRef<OsStr>>(original: &Path, backup_suffix: S, increment
         let new = original.with_file_name(filename);
         std::fs::copy(original, new)?;
         Ok(())
+    }
+}
+
+fn make_path_abs(p: PathBuf) -> PathBuf {
+    if p.is_absolute() {
+        p
+    } else {
+        let cwd = std::env::current_dir()
+            .expect("Could not get current working directory.");
+        cwd.join(p)
     }
 }
 

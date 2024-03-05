@@ -74,8 +74,8 @@ pub struct Spectrum {
 /// 
 /// * reading the `$GGGPATH/config/data_part.lst` file fails, or
 /// * the spectrum named cannot be found in any of the directories listed in `$GGGPATH/config/data_part.lst`.
-pub fn read_spectrum_from_runlog_rec(data_rec: &runlogs::RunlogDataRec) -> Result<Spectrum, GggError> {
-    let spec_file = if let Some(f) = utils::find_spectrum(&data_rec.spectrum_name)? {
+pub fn read_spectrum_from_runlog_rec(data_rec: &runlogs::RunlogDataRec, data_part: &utils::DataPartition) -> Result<Spectrum, GggError> {
+    let spec_file = if let Some(f) = data_part.find_spectrum(&data_rec.spectrum_name) {
         f
     }else{
         return Err(GggError::CouldNotOpen { 
@@ -230,9 +230,9 @@ impl SpecBytesToFloat {
 /// * it cannot find the spectrum,
 /// * it cannot open the spectrum file, or
 /// * it cannot get the size of the spectrum file.
-pub fn get_spectrum_num_points(spec_name: &str, pointer: i32, bytes_per_word: i8) -> Result<u64, std::io::Error> {
-    let p = utils::find_spectrum_result(spec_name)
-        .map_err(|_| std::io::Error::new(
+pub fn get_spectrum_num_points(spec_name: &str, data_part: &utils::DataPartition, pointer: i32, bytes_per_word: i8) -> Result<u64, std::io::Error> {
+    let p = data_part.find_spectrum(spec_name)
+        .ok_or_else(|| std::io::Error::new(
             std::io::ErrorKind::NotFound,
             format!("Unable to find spectrum {spec_name}")
         ))?;

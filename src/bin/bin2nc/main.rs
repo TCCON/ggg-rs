@@ -30,24 +30,31 @@ struct Cli {
     /// be added as a root-level attribute. 
     #[clap(short = 'f', long)]
     full_spec_paths: bool,
+
+    #[clap(flatten)]
+    data_part_args: utils::DataPartArgs,
 }
+
+
 
 fn main() {
     let clargs = Cli::parse();
+    let data_part = clargs.data_part_args.get_data_partition()
+        .expect("Unable to set up data partition for spectrum paths");
     let runlog = ggg_rs::runlogs::Runlog::open(&clargs.runlog).unwrap();
     if clargs.single_file {
         let runlog_clone = ggg_rs::runlogs::Runlog::open(&clargs.runlog).unwrap();
-        let writer = MultipleNcWriter::new_with_default_map(clargs.output, runlog_clone, true).unwrap();
-        writer_loop(writer, runlog, clargs.full_spec_paths);
+        let writer = MultipleNcWriter::new_with_default_map(&data_part, clargs.output, runlog_clone, true).unwrap();
+        writer_loop(writer, runlog, &data_part, clargs.full_spec_paths);
     } else {
         let writer = IndividualNcWriter::new( clargs.output).unwrap();
-        writer_loop(writer, runlog, clargs.full_spec_paths);
+        writer_loop(writer, runlog, &data_part, clargs.full_spec_paths);
     }
 }
 
-fn writer_loop<W: NcWriter>(mut writer: W, runlog: Runlog, full_spec_paths: bool) {
+fn writer_loop<W: NcWriter>(mut writer: W, runlog: Runlog, data_part: &utils::DataPartition, full_spec_paths: bool) {
     for data_rec in runlog.into_iter() {
-        let spec = ggg_rs::opus::read_spectrum_from_runlog_rec(&data_rec).unwrap();
+        let spec = ggg_rs::opus::read_spectrum_from_runlog_rec(&data_rec, data_part).unwrap();
         writer.add_spectrum(&data_rec, &spec, full_spec_paths).unwrap();
         println!("Wrote spectrum {} as netCDF", data_rec.spectrum_name);
     }
@@ -215,7 +222,7 @@ impl NcWriter for IndividualNcWriter {
         if full_spec_paths {
             let spec_path = format!("{}", spectrum.path.display());
             root.add_attribute("full_spectrum_path", spec_path.as_str())
-                .map_err(|e| GggError::CouldNotWrite { path: out_file.clone(), reason: "Could not add 'full_spectrum_path' attribute to root group".to_string() })?;
+                .map_err(|_| GggError::CouldNotWrite { path: out_file.clone(), reason: "Could not add 'full_spectrum_path' attribute to root group".to_string() })?;
         }
         Self::write_spectrum_values(&mut root, data_rec, spectrum, &out_file, 0, true)
     }
@@ -267,13 +274,13 @@ struct SpecGroupDef {
 }
 
 impl SpecGroupDef {
-    fn new(runlog_entry: &RunlogDataRec, detector_mapping: &HashMap<char, String>) -> Result<Self, GggError> {
+    fn new(runlog_entry: &RunlogDataRec, data_part: &utils::DataPartition, detector_mapping: &HashMap<char, String>) -> Result<Self, GggError> {
         let rl_det_code = Self::get_spectrum_det_code(&runlog_entry.spectrum_name)?;
         let group_name = detector_mapping
             .get(&rl_det_code)
             .and_then(|s| Some(s.to_owned()))
             .unwrap_or_else(|| rl_det_code.to_string());
-        let spec_length: usize = ggg_rs::opus::get_spectrum_num_points(&runlog_entry.spectrum_name, runlog_entry.pointer, runlog_entry.bpw)
+        let spec_length: usize = ggg_rs::opus::get_spectrum_num_points(&runlog_entry.spectrum_name, data_part, runlog_entry.pointer, runlog_entry.bpw)
             .map_err(|e| GggError::CouldNotOpen { 
                 descr: "binary spectrum".to_owned(), 
                 path: PathBuf::from(&runlog_entry.spectrum_name), 
@@ -312,7 +319,7 @@ struct MultipleNcWriter {
 }
 
 impl MultipleNcWriter {
-    fn new(detector_mapping: HashMap<char, String>, output_file: PathBuf, runlog: Runlog, clobber: bool) -> Result<Self, GggError> {
+    fn new(data_part: &utils::DataPartition, detector_mapping: HashMap<char, String>, output_file: PathBuf, runlog: Runlog, clobber: bool) -> Result<Self, GggError> {
         if output_file.is_dir() {
             return Err(GggError::CouldNotWrite { path: output_file, reason: "Expected a file, got a path to a directory".to_owned() });
         }
@@ -327,22 +334,24 @@ impl MultipleNcWriter {
                 reason: format!("Could not create netCDF file: {e}")
             })?;
 
-        let group_defs = Self::make_group_defs(runlog, &detector_mapping, &mut nc_file)?;
+        let group_defs = Self::make_group_defs(runlog, data_part, &detector_mapping, &mut nc_file)?;
 
         Ok(Self { save_file: output_file, group_defs, nc_file })
     }
 
-    fn new_with_default_map(output_file: PathBuf, runlog: Runlog, clobber: bool) -> Result<Self, GggError> {
+    fn new_with_default_map(data_part: &utils::DataPartition, output_file: PathBuf, runlog: Runlog, clobber: bool) -> Result<Self, GggError> {
         let mapping = Self::default_mapping();
-        Self::new(mapping, output_file, runlog, clobber)
+        Self::new(data_part, mapping, output_file, runlog, clobber)
     }
 
-    fn new_with_map_overrides(map_overrides: HashMap<char, String>, output_file: PathBuf, runlog: Runlog, clobber: bool) -> Result<Self, GggError> {
+    // Don't need this right now, but may in the future.
+    #[allow(dead_code)]
+    fn new_with_map_overrides(data_part: &utils::DataPartition, map_overrides: HashMap<char, String>, output_file: PathBuf, runlog: Runlog, clobber: bool) -> Result<Self, GggError> {
         let mut mapping = Self::default_mapping();
         for (k, v) in map_overrides.into_iter() {
             mapping.insert(k, v);
         }
-        Self::new(mapping, output_file, runlog, clobber)
+        Self::new(data_part, mapping, output_file, runlog, clobber)
     }
 
     fn default_mapping() -> HashMap<char, String> {
@@ -357,20 +366,20 @@ impl MultipleNcWriter {
         "spectrum"
     }
 
-    fn make_group_defs(runlog: Runlog, detector_mapping: &HashMap<char, String>, nc_file: &mut netcdf::MutableFile) -> Result<Vec<SpecGroupDef>, GggError> {
+    fn make_group_defs(runlog: Runlog, data_part: &utils::DataPartition, detector_mapping: &HashMap<char, String>, nc_file: &mut netcdf::MutableFile) -> Result<Vec<SpecGroupDef>, GggError> {
         let mut groups: Vec<SpecGroupDef> = Vec::new();
 
         for data_rec in runlog {
             let spec_grp = groups.iter_mut().find(|g| g.entry_matches_group(&data_rec).unwrap_or(false));
             if let Some(spec_grp) = spec_grp {
-                if let Ok(size) = ggg_rs::opus::get_spectrum_num_points(&data_rec.spectrum_name, data_rec.pointer, data_rec.bpw) {
+                if let Ok(size) = ggg_rs::opus::get_spectrum_num_points(&data_rec.spectrum_name, data_part, data_rec.pointer, data_rec.bpw) {
                     let size: usize = size.try_into().expect("Could not fit number of spectrum points into system usize");
                     if spec_grp.max_spec_length < size {
                         spec_grp.max_spec_length = size;
                     }
                 }
             }else{
-                let new_group = SpecGroupDef::new(&data_rec, detector_mapping)?;
+                let new_group = SpecGroupDef::new(&data_rec, data_part, detector_mapping)?;
                 groups.push(new_group);
             }
         }
