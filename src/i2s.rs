@@ -1,4 +1,4 @@
-use std::{io::{BufReader, BufRead}, fs::File, path::Path, str::FromStr, fmt::Display};
+use std::{io::{BufReader, BufRead, Read}, fs::File, path::Path, str::FromStr, fmt::Display};
 
 use chrono::NaiveDate;
 use tabled::Tabled;
@@ -155,7 +155,7 @@ pub fn iter_i2s_header_params_with_number(i2s_input_file: &Path, i2s_version: I2
 /// # See also
 /// - [`iter_i2s_header_params`] to iterate only over header parameter values.
 /// - [`iter_i2s_header_params_with_number`] to iterate over header parameter values with the parameter numbers included.
-pub fn iter_i2s_lines(i2s_input_file: &Path, i2s_version: I2SVersion) -> Result<I2SLineIter, GggError> {
+pub fn iter_i2s_lines(i2s_input_file: &Path, i2s_version: I2SVersion) -> Result<I2SLineIter<File>, GggError> {
     let file = FileBuf::open(i2s_input_file)?;
     Ok(I2SLineIter::new(file, i2s_version))
 }
@@ -316,24 +316,24 @@ impl I2SLineType {
 /// are *not* stripped from the lines yielded by this iterator. The iterator will
 /// yield tuples of `(I2SLineType, String)`, where the first value indicates what
 /// role the line plays in the input file.
-pub struct I2SLineIter<'a> {
-    file: FileBuf<'a, BufReader<File>>,
+pub struct I2SLineIter<'a, R: Read> {
+    file: FileBuf<'a, BufReader<R>>,
     curr_param: usize,
     i2s_version: I2SVersion,
 }
 
-impl<'a> I2SLineIter<'a> {
+impl<'a, R: Read> I2SLineIter<'a, R> {
     /// Create a new instance of the iterator.
     /// 
     /// Pass a [`FileBuf`] reader around an I2S input file and the number of parameters in 
     /// the header. The number of header parameters determines when the lines yielded
     /// are no longer in the header.
-    pub fn new(i2s_reader: FileBuf<'a, BufReader<File>>, i2s_version: I2SVersion) -> Self {
+    pub fn new(i2s_reader: FileBuf<'a, BufReader<R>>, i2s_version: I2SVersion) -> Self {
         Self { file: i2s_reader, curr_param: 0, i2s_version }
     }
 }
 
-impl<'a> Iterator for I2SLineIter<'a> {
+impl<'a, R: Read> Iterator for I2SLineIter<'a, R> {
     type Item = std::io::Result<(I2SLineType, String)>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -367,7 +367,7 @@ impl<'a> Iterator for I2SLineIter<'a> {
     }
 }
 
-fn iter_i2s_lines_inner(file: &mut FileBuf<'_, BufReader<File>>, curr_param: usize, param_num_lines: usize, max_n_param: Option<usize>) -> Option<std::io::Result<(bool, String)>> {
+fn iter_i2s_lines_inner<R: Read>(file: &mut FileBuf<'_, BufReader<R>>, curr_param: usize, param_num_lines: usize, max_n_param: Option<usize>) -> Option<std::io::Result<(bool, String)>> {
     if let Some(max) = max_n_param {
         if curr_param >= max {
             return None;
