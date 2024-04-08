@@ -1,0 +1,38 @@
+name: Docs for GH Pages
+on:
+  push:
+    branches:
+      - 'main'
+
+jobs:
+  build_docs:
+    name: Build docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+      - run: cargo doc --no-default-features --no-deps
+      - run: tar -czf docs.tgz .
+        working-directory: ./target/doc/ggg_rs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: github-pages
+          path: ./target/doc/ggg_rs/docs.tgz
+          if-no-files-found: error
+          retention-days: 1
+  deploy_docs:
+    needs: build_docs
+    name: Deploy docs
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }} 
+    steps:
+      - name: Deploy to Github Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
