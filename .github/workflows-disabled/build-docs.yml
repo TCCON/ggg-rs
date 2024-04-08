@@ -4,6 +4,9 @@ on:
     branches:
       - 'main'
 
+# For future reuse, only the `working-directory` line should
+# need changed to match the crate name in the last part of the
+# path.
 jobs:
   build_docs:
     name: Build docs
