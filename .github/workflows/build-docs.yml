@@ -10,16 +10,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
+      - uses: dtolnay/rust-toolchain@stable
       - run: cargo doc --no-default-features --no-deps
-      - run: tar -czf docs.tgz .
+      - run: tar -czf ../docs.tgz .
         working-directory: ./target/doc/ggg_rs
       - uses: actions/upload-artifact@v4
         with:
           name: github-pages
-          path: ./target/doc/ggg_rs/docs.tgz
+          path: ./target/doc/docs.tgz
           if-no-files-found: error
           retention-days: 1
   deploy_docs:
