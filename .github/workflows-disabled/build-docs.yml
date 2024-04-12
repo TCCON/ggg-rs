@@ -7,6 +7,10 @@ on:
 # For future reuse, only the `working-directory` line should
 # need changed to match the crate name in the last part of the
 # path.
+# Also this doesn't quite work as is; the ggg_rs subfolder of docs
+# relies on static pages in sibling directories. Will need instead to
+# to tar the entire doc directory and make an index.html file in the
+# root of doc that redirects to the ggg_rs/index.html file
 jobs:
   build_docs:
     name: Build docs
