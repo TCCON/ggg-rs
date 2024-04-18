@@ -343,6 +343,22 @@ impl <'p, F: BufRead> DerefMut for FileBuf<'p, F> {
     }
 }
 
+impl<'p, F: BufRead> std::io::Read for FileBuf<'p, F> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        self.reader.read(buf)
+    }
+}
+
+impl<'p, F: BufRead> BufRead for FileBuf<'p, F> {
+    fn fill_buf(&mut self) -> std::io::Result<&[u8]> {
+        self.reader.fill_buf()
+    }
+
+    fn consume(&mut self, amt: usize) {
+        self.reader.consume(amt)
+    }
+}
+
 
 /// A structure to use in command line interfaces when output may be to a new file or modifying one in place
 /// 
