@@ -521,20 +521,26 @@ pub fn write_opus_catalogue_table<W: std::io::Write>(writer: &mut W, entries: &[
     // at the start of the header line
     let mut builder = tabled::builder::Builder::new();
     if no_colon {
-        builder.set_header(OpusCatalogueEntry::headers());
+        builder.push_record(OpusCatalogueEntry::headers());
     } else {
         let mut headers = OpusCatalogueEntry::headers();
         headers[0] = format!(": {}", headers[0]).into();
-        builder.set_header(headers);
+        builder.push_record(headers);
     }
 
     for entry in entries {
         builder.push_record(entry.fields());
     }
 
+    // The .modify() call ensures that there isn't a blank space at the beginning of the first column,
+    // which might cause issues with the header (since the colon wouldn't be the first character in the line)
     let mut catalogue = builder.build();
     catalogue.with(tabled::settings::style::Style::blank())
-        .with(tabled::settings::Alignment::left());
+        .with(tabled::settings::Alignment::left())
+        .modify(
+            tabled::settings::object::Column::from(0),
+            tabled::settings::Padding::new(0, 1, 0, 0)
+        );
     
     write!(writer, "{catalogue}")
 }

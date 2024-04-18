@@ -19,7 +19,7 @@ netcdf = {version = "0.8", optional=true}
 num-traits = "0.2.16"
 # Could move behind a feature
 plotly = { version = "0.8.3", features = ["kaleido"], optional=true }
-tabled = "0.14.0"
+tabled = "0.15.0"
 thiserror = "1.0.50"
 serde = { version = "1.0.193", features = ["derive"] }
 serde_json = "1.0.108"
