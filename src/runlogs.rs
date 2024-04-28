@@ -201,9 +201,12 @@ impl RunlogDataRec {
 /// The former would look like:
 /// 
 /// ```no_run
-/// let runlog = Runlog::open("~/ggg/runlogs/gnd/pa_ggg_benchmark.grl").unwrap();
+/// use std::path::PathBuf;
+/// use ggg_rs::runlogs::Runlog;
+/// let runlog_path = PathBuf::from("~/ggg/runlogs/gnd/pa_ggg_benchmark.grl");
+/// let runlog = Runlog::open(&runlog_path).unwrap();
 /// for data_rec in runlog.into_iter() {
-///     ...
+///     // do things with the data record
 /// }
 /// ```
 /// 
@@ -212,15 +215,18 @@ impl RunlogDataRec {
 /// need the ability to recover from errors, use `next_data_record` instead:
 /// 
 /// ```no_run
-/// let runlog = Runlog::open("~/ggg/runlogs/gnd/pa_ggg_benchmark.grl").unwrap();
+/// use std::path::PathBuf;
+/// use ggg_rs::runlogs::Runlog;
+/// let runlog_path = PathBuf::from("~/ggg/runlogs/gnd/pa_ggg_benchmark.grl");
+/// let mut runlog = Runlog::open(&runlog_path).unwrap();
 /// loop {
 ///     // First we check if there was an error reading the data record.
-///     let opt_data_rec = if let Ok(rec) = runlog.next_data_record() {
+///     let opt_data_rec = if let Ok(rec) = runlog.next_data_record(false) {
 ///         rec
 ///     }else{
 ///         println!("Error reading line {} of the runlog, skipping", runlog.curr_line());
 ///         continue
-///     }
+///     };
 /// 
 ///     // If not, we also have to check that we actually have a data record
 ///     let data_rec = if let Some(rec) = opt_data_rec {
@@ -229,7 +235,7 @@ impl RunlogDataRec {
 ///     }else{
 ///         // No further records
 ///         break
-///     }
+///     };
 /// }
 /// ```
 /// 
@@ -352,7 +358,10 @@ impl Iterator for Runlog {
 /// recover:
 /// 
 /// ```no_run
-/// let runlog = FallibleRunlog::open("~/ggg/runlogs/gnd/pa_ggg_benchmark.grl").unwrap();
+/// use std::path::PathBuf;
+/// use ggg_rs::runlogs::FallibleRunlog;
+/// let runlog_path = PathBuf::from("~/ggg/runlogs/gnd/pa_ggg_benchmark.grl");
+/// let runlog = FallibleRunlog::open(&runlog_path).unwrap();
 /// for (irec, res_data_rec) in runlog.into_iter().enumerate() {
 ///     match res_data_rec {
 ///         Err(e) => {

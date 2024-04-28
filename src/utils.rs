@@ -98,11 +98,13 @@ impl GggError {
     /// use this to replace it:
     /// 
     /// ```
+    /// use std::path::PathBuf;
+    /// use ggg_rs::utils::GggError;
     /// fn throw() -> Result<(), GggError> {
-    ///     Err(GggError::CouldNotRead{path: PathBuf::new(), "demo".to_owned()})
+    ///     Err(GggError::CouldNotRead{path: PathBuf::new(), reason: "demo".to_owned()})
     /// }
     /// 
-    /// let path = PathBuf::from_str("~/Documents").unwrap();
+    /// let path = PathBuf::from("~/Documents");
     /// throw().or_else(
     ///     |e| Err(e.with_path(path))
     /// ).unwrap_err();
@@ -326,9 +328,11 @@ impl <F: BufRead> FileBuf<F> {
     /// a move, e.g. the `lines` method:
     /// 
     /// ```no_run
-    /// let f = FileBuf("./list.txt");
+    /// use std::io::BufRead; // needed for the .lines() method
+    /// use ggg_rs::utils::FileBuf;
+    /// let f = FileBuf::open("./list.txt").unwrap();
     /// for line in f.into_reader().lines() {
-    ///     ...
+    ///     // do things with the line
     /// }
     /// ```
     pub fn into_reader(self) -> F {
