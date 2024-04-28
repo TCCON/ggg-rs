@@ -5,7 +5,7 @@ use fortformat::de::from_str_with_fields;
 use itertools::Itertools;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-use crate::utils::{self, GggError};
+use crate::{error::{FileLocation, HeaderError}, utils::{self, GggError}};
 
 pub const NUM_RUNLOG_COLS: usize = 36;
 
@@ -181,6 +181,17 @@ where S: Serializer
     }
 }
 
+impl RunlogDataRec {
+    pub fn zpd_time(&self) -> Option<chrono::DateTime<chrono::Utc>> {
+        let h = self.hour.floor();
+        let m = (self.hour.fract() * 60.0).floor();
+        let s = (self.hour.fract() * 60.0 - m).floor() * 60.0;
+        let dt = chrono::NaiveDate::from_yo_opt(self.year, self.day as u32)?
+            .and_hms_opt(h as u32, m as u32, s as u32)?;
+        Some(chrono::DateTime::from_naive_utc_and_offset(dt, chrono::Utc))
+    }
+}
+
 /// An iterator over lines in a runlog.
 /// 
 /// Use the `open` method to create an instance of this struct. The common
@@ -223,13 +234,13 @@ where S: Serializer
 /// ```
 /// 
 /// Alternatively, use a [`FallibleRunlog`] instead.
-pub struct Runlog<'p> {
+pub struct Runlog {
     pub header: utils::CommonHeader,
-    rl_handle: utils::FileBuf<'p, BufReader<File>>,
+    rl_handle: utils::FileBuf<BufReader<File>>,
     data_line_index: usize
 }
 
-impl<'p> Runlog<'p> {
+impl Runlog {
     /// Open a runlog file as a `Runlog` instance.
     /// 
     /// # Parameters
@@ -242,22 +253,24 @@ impl<'p> Runlog<'p> {
     /// * the file could not be opened,
     /// * the header could not be parsed,
     /// * the number of columns specified in the header does not match the expected number, [`NUM_RUNLOG_COLS`]
-    pub fn open(runlog: &'p Path) -> Result<Runlog<'p>, GggError> {
+    pub fn open(runlog: &Path) -> Result<Runlog, GggError> {
         let mut rl = utils::FileBuf::open(runlog)?;
         let header = utils::read_common_header(&mut rl)?;
         if header.ncol != NUM_RUNLOG_COLS {
-            return Err(GggError::HeaderError { 
-                path: runlog.to_owned(), 
+            return Err(HeaderError::ParseError { 
+                location: runlog.into(), 
                 cause: format!("Number of columns specified in the header of runlog {} is not the expected number, {}",
                                header.ncol, NUM_RUNLOG_COLS)
-            });
+            }.into());
         }
 
         if header.fformat.is_none() {
-            return Err(GggError::HeaderError { 
-                path: runlog.to_path_buf(), 
-                cause: "No format line found in the header".to_string() 
-            });
+            return Err(GggError::HeaderError(
+                HeaderError::ParseError { 
+                    location: FileLocation::new::<_, String>(Some(runlog.to_path_buf()), None, None),
+                    cause: "No format line found in the header".to_string()
+                }
+            ))
         }
     
         // At this point, the file handle will be pointing to the first line of data in the runlog
@@ -316,7 +329,7 @@ impl<'p> Runlog<'p> {
     }
 }
 
-impl<'p> Iterator for Runlog<'p> {
+impl Iterator for Runlog {
     type Item = RunlogDataRec;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -351,31 +364,33 @@ impl<'p> Iterator for Runlog<'p> {
 ///     }
 /// }
 /// ```
-pub struct FallibleRunlog<'p> {
-    runlog: Runlog<'p>
+pub struct FallibleRunlog {
+    runlog: Runlog
 }
 
-impl<'p> FallibleRunlog<'p> {
+impl FallibleRunlog {
     /// Open a runlog file as a `FallibleRunlog` iterator.
     /// 
     /// # Returns
     /// A [`Result`] containing the `FallibleRunlog` iterator. An error is returned for the same
     /// reasons as [`Runlog::open`].
-    pub fn open(runlog: &'p Path) -> Result<FallibleRunlog<'p>, GggError> {
+    pub fn open(runlog: &Path) -> Result<FallibleRunlog, GggError> {
         let rl = Runlog::open(runlog)?;
         Ok(Self { runlog: rl })
     }
 
-    // TODO: implement a non-consuming iteration so we can use curr_line()?
+    pub fn into_line_iter(self) -> FallibleRunlogLineIter {
+        FallibleRunlogLineIter { runlog: self.runlog }
+    }
 }
 
-impl<'p> From<Runlog<'p>> for FallibleRunlog<'p> {
-    fn from(rl: Runlog<'p>) -> Self {
+impl<'p> From<Runlog> for FallibleRunlog {
+    fn from(rl: Runlog) -> Self {
         Self { runlog: rl }
     }
 }
 
-impl<'p> Iterator for FallibleRunlog<'p> {
+impl Iterator for FallibleRunlog {
     type Item = Result<RunlogDataRec, GggError>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -427,5 +442,21 @@ mod tests {
             .expect("Reading first data line should not error")
             .expect("First data line should not return None");
         approx::assert_abs_diff_eq!(test_rec, data_rec_1b);
+    }
+}
+
+
+pub struct FallibleRunlogLineIter {
+    runlog: Runlog
+}
+
+impl Iterator for FallibleRunlogLineIter {
+    type Item = (usize, Result<RunlogDataRec, GggError>);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let rec = self.runlog.next_data_record(false).transpose()?;
+        // TODO: verify that this returns the correct line (i.e. doesn't need to be called first)
+        let line_num = self.runlog.curr_line();
+        Some((line_num, rec))
     }
 }

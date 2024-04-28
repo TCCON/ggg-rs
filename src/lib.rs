@@ -6,3 +6,5 @@ pub mod interpolation;
 pub mod runlogs;
 pub mod opus;
 pub mod i2s;
+pub mod cit_spectrum_name;
+pub mod output_files;

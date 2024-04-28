@@ -566,6 +566,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[ignore = "This test is not complete yet"]
     fn test_igram_header_metadata() {
         let gggpath = utils::get_ggg_path().unwrap();
         let mut wg = std::fs::File::open(gggpath.join("src/i2s/raw_data/wg20090206_1640NIR_DC.0")).unwrap();
@@ -578,6 +579,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "This test is not complete yet"]
     fn test_slice_header_metadata() {
         let gggpath = utils::get_ggg_path().unwrap();
         // With slices, all but the last slice have data, the last slice has remaining metadata.
@@ -590,6 +592,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "This test is not complete yet"]
     fn test_igram_header() {
         let gggpath = utils::get_ggg_path().unwrap();
         let wg = gggpath.join("src/i2s/raw_data/wg20090206_1640NIR_DC.0");

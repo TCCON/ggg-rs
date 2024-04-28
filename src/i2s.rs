@@ -167,21 +167,21 @@ pub fn iter_i2s_lines(i2s_input_file: &Path, i2s_version: I2SVersion) -> Result<
 /// non-whitespace and characters before a colon (i.e. not commented) to be a parameter. Thus, uncommented
 /// catalog rows will be yielded as "parameters". The values yielded by this iterator will have any
 /// inline comments, trailing newlines, and trailing carriage returns stripped.
-pub struct I2SParamIter<'a> {
-    file: FileBuf<'a, BufReader<File>>,
+pub struct I2SParamIter {
+    file: FileBuf<BufReader<File>>,
     curr_param: usize,
     i2s_version: I2SVersion,
     all_params: bool,
 }
 
-impl<'a> I2SParamIter<'a> {
+impl I2SParamIter {
     /// Create a new instance of the iterator.
     /// 
     /// Pass a [`FileBuf`] reader around an I2S input file and the maximum number of parameters
     /// to read before the iterator stops. If `max_n_param` is `None`, then the iterator will continue
     /// until all lines in the reader are exhausted. Otherwise, it will stop after returning that
     /// many parameters. (This is usually used to get only the top parameters.) 
-    pub fn new(i2s_reader: FileBuf<'a, BufReader<File>>, i2s_version: I2SVersion, all_params: bool) -> Self {
+    pub fn new(i2s_reader: FileBuf<BufReader<File>>, i2s_version: I2SVersion, all_params: bool) -> Self {
         Self { file: i2s_reader, curr_param: 0, i2s_version, all_params }
     }
 
@@ -195,7 +195,7 @@ impl<'a> I2SParamIter<'a> {
 }
 
 
-impl<'a> Iterator for I2SParamIter<'a> {
+impl Iterator for I2SParamIter {
     type Item = std::io::Result<String>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -232,22 +232,22 @@ impl<'a> Iterator for I2SParamIter<'a> {
 /// 
 /// This iterator is normally constructed by calling the [`iter_i2s_header_params_with_number`];
 /// only construct it directly if you need more control over the iteration.
-pub struct I2SParamIterWithIndex<'a>(I2SParamIter<'a>);
+pub struct I2SParamIterWithIndex(I2SParamIter);
 
-impl<'a> I2SParamIterWithIndex<'a> {
+impl I2SParamIterWithIndex {
     /// Create a new instance of the iterator.
     /// 
     /// Pass a [`FileBuf`] reader around an I2S input file and the maximum number of parameters
     /// to read before the iterator stops. If `max_n_param` is `None`, then the iterator will continue
     /// until all lines in the reader are exhausted. Otherwise, it will stop after returning that
     /// many parameters. (This is usually used to get only the top parameters.) 
-    pub fn new(i2s_reader: FileBuf<'a, BufReader<File>>, i2s_version: I2SVersion, all_params: bool) -> Self {
+    pub fn new(i2s_reader: FileBuf<BufReader<File>>, i2s_version: I2SVersion, all_params: bool) -> Self {
         let inner = I2SParamIter::new(i2s_reader, i2s_version, all_params);
         Self(inner)
     }
 }
 
-impl<'a> Iterator for I2SParamIterWithIndex<'a> {
+impl<'a> Iterator for I2SParamIterWithIndex {
     type Item = std::io::Result<(usize, String)>;
 
     fn next(&mut self) -> Option<Self::Item> {
