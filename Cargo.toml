@@ -46,6 +46,9 @@ name = "bin2nc"
 required-features = ["netcdf"]
 
 [[bin]]
+name = "collate-tccon-results"
+
+[[bin]]
 name = "list_spectra"
 
 [[bin]]

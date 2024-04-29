@@ -107,3 +107,63 @@ impl Display for HeaderError {
 }
 
 impl Error for HeaderError {}
+
+/// Errors related to reading the body of a file (not the header, though
+/// functions that read the header to interpret the body may convert header
+/// errors to body errors).
+/// 
+/// Each variant has a similarly named function that uses generics to make
+/// it more convenient for construction.
+#[derive(Debug, thiserror::Error)]
+pub enum BodyError {
+    /// A read operation failed. This may mean that the file could not be
+    /// found, that reading the next *N* bytes from the file failed, or
+    /// that necessary information could not be obtained from the header
+    /// to continue reading.
+    #[error("Error reading {loc}: {reason}")]
+    CouldNotRead{loc: FileLocation, reason: String},
+
+    /// Some value in the file is formatted incorrectly, and therefore
+    /// cannot be interpreted.
+    #[error("Unexpected format in {loc}: {reason}")]
+    UnexpectedFormat{loc: FileLocation, reason: String}
+}
+
+impl BodyError {
+    pub fn could_not_read<R: Into<String>>(reason: R, path: Option<PathBuf>, line_num: Option<usize>, line_value: Option<String>) -> Self {
+        Self::CouldNotRead {
+            loc: FileLocation { path, line_num, line_value },
+            reason: reason.into()
+        }
+    }
+
+    pub fn unexpected_format<R: Into<String>>(reason: R, path: Option<PathBuf>, line_num: Option<usize>, line_value: Option<String>) -> Self {
+        Self::UnexpectedFormat {
+            loc: FileLocation { path, line_num, line_value },
+            reason: reason.into()
+        }
+    }
+}
+
+
+/// Errors related to writing an output file.
+/// 
+/// Each variant that requires an inner value has a similarly named
+/// function that uses generics to make it more convenient for construction.
+#[derive(Debug, thiserror::Error)]
+pub enum WriteError {
+    /// Some aspect of the value could not be properly converted to the output format.
+    #[error("Error converting value for output: {0}")]
+    ConvertError(String),
+
+    /// A general input/output error occurred. This is expected to be used in an
+    /// [`error_stack::Report`] with the actual error as another part of the stack.
+    #[error("I/O error")]
+    IoError,
+}
+
+impl WriteError {
+    pub fn convert_error<S: Into<String>>(reason: S) -> Self {
+        Self::ConvertError(reason.into())
+    }
+}

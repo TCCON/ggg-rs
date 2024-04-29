@@ -612,7 +612,7 @@ checksum = "3f9eec918d3f24069decb9af1554cad7c880e2da24a9afd88aca000531ab82c1"
 [[package]]
 name = "fortformat"
 version = "0.1.0"
-source = "git+https://github.com/joshua-laughner/fortformat#57e33ed73a176e29e85f0cf03a7b257fefdcf00d"
+source = "git+https://github.com/joshua-laughner/fortformat#59cb74b8384015639c9e2f84c1aa6697935b30b1"
 dependencies = [
  "itoa",
  "pest",

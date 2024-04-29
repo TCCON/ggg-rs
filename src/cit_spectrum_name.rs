@@ -83,6 +83,8 @@ impl Display for CitFormatError {
     }
 }
 
+impl std::error::Error for CitFormatError {}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CitSource {
     Sun,
@@ -386,6 +388,13 @@ impl Hash for CitSpectrumName {
 /// time, regardless of detector.
 #[derive(Debug, Clone)]
 pub struct NoDetectorSpecName(pub CitSpectrumName);
+
+impl NoDetectorSpecName {
+    pub fn new(spectrum: &str) -> Result<Self, CitFormatError> {
+        let inner = CitSpectrumName::from_str(spectrum)?;
+        Ok(Self(inner))
+    }
+}
 
 impl From<CitSpectrumName> for NoDetectorSpecName {
     fn from(value: CitSpectrumName) -> Self {

@@ -11,12 +11,14 @@ use std::path::{PathBuf, Path};
 use std::str::FromStr;
 
 use chrono::{Datelike, TimeZone};
+use error_stack::ResultExt;
 use fortformat::format_specs::FortFormat;
 use itertools::Itertools;
+use log::debug;
 use serde::Serialize;
 use serde::{Deserialize, Deserializer, de::Error as DeserError};
 
-use crate::error::{DateTimeError, FileLocation};
+use crate::error::{DateTimeError, FileLocation, BodyError};
 
 use crate::error::HeaderError;
 
@@ -918,6 +920,65 @@ pub fn runlog_ydh_to_datetime(year: i32, day_of_year: i32, utc_hour: f64) -> chr
     + chrono::Duration::seconds(iseconds as i64)
 }
 
+/// Get the list of windows in a `multiggg.sh` file.
+/// 
+/// With `include_runlog_name = false`, the returned strings will just be
+/// the window names, e.g. "co2_6220". With `include_runlog_name = true`, the
+/// name of the runlog will follow the window, e.g. "co2_6220.pa_ggg_benchmark".
+/// 
+/// Lines in the multiggg.sh file beginning with a ":" will be skipped. Lines
+/// beginning with a "#" are *not* skipped; this is deliberate so that you can
+/// comment out windows that need rerun and they will still be recognized as
+/// windows to include in data collation.
+pub fn get_windows_from_multiggg(multiggg_file: &Path, include_runlog_name: bool) -> error_stack::Result<Vec<String>, BodyError> {
+    let mut windows = vec![];
+    let f = std::fs::File::open(multiggg_file)
+        .change_context_lazy(|| BodyError::could_not_read(
+            "error opening file", Some(multiggg_file.to_path_buf()), None, None
+        ))?;
+    let rdr = std::io::BufReader::new(f);
+    let mut nskipped = 0;
+    for (iline, line) in rdr.lines().enumerate() {
+        let line = line.change_context_lazy(|| BodyError::could_not_read(
+            "lines iteration failed", Some(multiggg_file.to_path_buf()), Some(iline+1), None)
+        )?;
+
+        if line.starts_with(":") {
+            nskipped += 1;
+            continue;
+        }
+
+        if line.trim().is_empty() {
+            continue;
+        }
+
+        // Assume a line like "/home/jlaugh/GGG/ggg-my-devel/bin/gfit luft_6146.pa_ggg_benchmark.ggg"
+        let (_, ggg_file) = line.split_once("gfit ").ok_or_else(
+            || BodyError::unexpected_format(
+                "expected the line to contain 'gfit' followed by a space",
+                Some(multiggg_file.to_path_buf()), Some(iline+1), None)
+        )?;
+
+        let (delim, err_msg) = if include_runlog_name {
+            (".ggg", "expected a file with the .ggg extension after 'gfit'")
+        } else {
+            (".", "expected the .ggg file to have a period in it")
+        };
+
+        let (window, _) = ggg_file.split_once(delim).ok_or_else(
+            || BodyError::unexpected_format(
+                err_msg, Some(multiggg_file.to_path_buf()), Some(iline), None)
+        )?;
+
+        windows.push(window.to_string());
+    }
+
+    if nskipped > 0 {
+        debug!("{nskipped} lines in {} skipped as commented out", multiggg_file.display());
+    }
+    Ok(windows)
+}
+
 
 #[derive(Debug, thiserror::Error)]
 pub enum EncodingError {
@@ -962,6 +1023,30 @@ pub fn remove_comment_multiple_lines(value: &str) -> String {
         }
     }
     out
+}
+
+/// Returns `true` if `year` is a leap year in the Gregorian calendar, i.e.:
+/// 
+/// - it is a multiple or 400, or
+/// - it is a multiple of 4 but not a multiple of 100
+pub fn is_leap_year(year: i32) -> bool {
+    if year % 400 == 0 { return true; }
+    if year % 100 == 0 { return false; }
+    if year % 4 == 0 { return true; }
+    false
+}
+
+/// Convert an integer year, 1-based day of year, and UTC hour to a decimal year and day of year
+/// that include the smaller components, specifically:
+/// 
+/// - the first value is year plus the day and hour as a fraction of the year,
+/// - the second value is the day plus the hour as a fraction of the day, and
+/// - the third value is the hour returned unchanged.
+pub fn to_decimal_year_day_hour(year: i32, day: i32, hour: f64) -> (f64, f64, f64) {
+    let ndays = if is_leap_year(year) { 366.0 } else { 365.0 };
+    let dec_doy = day as f64 + hour / 24.0;
+    let dec_year = year as f64 + dec_doy / ndays;
+    (dec_year, dec_doy, hour)
 }
 
 
