@@ -79,6 +79,10 @@ pub enum CollationError {
     #[error("Missing column '{column}' in {path}")]
     MissingColumn{path: PathBuf, column: String},
 
+    /// A value is provided by two spectra when it should not be.
+    #[error("Spectrum {new_spec} is trying to set a value for {column} that is already present")]
+    DuplicateValue{new_spec: String, column: String},
+
     /// Some value had a different format than expected and could not be parsed.
     #[error("{0}")]
     ParsingError(String),
@@ -131,6 +135,10 @@ impl CollationError {
         Self::MissingColumn { path: path.into(), column: column.into() }
     }
 
+    pub fn duplicate_value<S: Into<String>>(new_spec: S, column: S) -> Self {
+        Self::DuplicateValue { new_spec: new_spec.into(), column: column.into() }
+    }
+
     pub fn parsing_error<S: Into<String>>(reason: S) -> Self {
         Self::ParsingError(reason.into())
     }
@@ -165,6 +173,37 @@ pub trait CollationIndexer: Sized {
     /// returns a 0, the record at 1 aligns with any spectrum which `get_row_index`
     /// returns a 1, and so on.
     fn get_runlog_data(&self) -> CollationResult<&[RunlogDataRec]>;
+
+    /// Controls when previously written values should be overwritten. 
+    /// Returning `Ok(true)` allows the value in `column_name` of the current
+    /// row to be overwritten, while `Ok(false)` keeps the current value. If
+    /// trying to overwrite a value is not allowed (i.e. it indicates a mistake),
+    /// then return `Err(_)`.
+    /// 
+    /// The default implementation returns `Ok(false)` for any column name listed
+    /// in [`AuxData::postproc_fields_str`], i.e. auxiliary data columns will always
+    /// take their value from the first spectrum from the runlog/.ray file matching
+    /// this row in the `.Xsw` file. Other columns return an `Err(CollationError::DuplicateValue)`,
+    /// as it is usually a mistake to overwrite a retrieved value.
+    /// 
+    /// Notes for implementors:
+    /// - Specific implementations of this function should also return an `Err(CollationError:DuplicateValue)`
+    ///   if trying to write a given value twice is a mistake. Other return errors can be used
+    ///   to indicate other failures, e.g. failing to parse the new spectrum name.
+    /// - `new_spectrum` will be the spectrum providing the overwriting value; if
+    ///   you want to compare to the spectrum name that provided the original value, you
+    ///   will need to store that (probably in `get_row_index`).
+    /// - For the retrieved columns, `column_name` will only ever be the value column, not the error
+    ///   (e.g. "co2_6220", never "co2_6220_error"). This is because retrieved values and their errors
+    ///   must always be taken from the same `.col` file, so it does not make sense to check each one
+    ///   separately.
+    fn do_replace_value(&self, new_spectrum: &str, column_name: &str) -> CollationResult<bool> {
+        if AuxData::postproc_fields_str().contains(&column_name) {
+            Ok(false)
+        } else {
+            Err(CollationError::duplicate_value(new_spectrum, column_name))
+        }
+    }
 }
 
 /// What data to write to the `.Xsw` file.
@@ -224,16 +263,11 @@ impl FromStr for CollationMode {
 /// be present in the same directory, and must all reference the same `.ray` file
 /// and runlog in their headers (and those files must exist as well). Other inputs:
 /// 
+/// - `indexer` is an instance of a struct that implements [`CollationIndexer`]; this
+///   controls what row of the `.Xsw` file values from the runlog, `.ray` file, and
+///   `.col` files go into.
 /// -  `mode` controls what values are written from each `.col` file.
 /// - `collate_version` specifies what program version to put in the header of the output file.
-/// 
-/// This function also needs a [`CollationIndexer`] as a type parameter. If you have
-/// a struct `TcconIndexer` that implements [`CollationIndexer`], you would call
-/// this function as:
-/// 
-/// ```ignore
-/// collate_results::<TcconIndexer>(multiggg_file, mode, collate_version)
-/// ``` 
 pub fn collate_results<I: CollationIndexer>(multiggg_file: &Path, mut indexer: I, mode: CollationMode, collate_version: ProgramVersion) -> error_stack::Result<(), CollationError> {
     let run_dir = multiggg_file.parent().ok_or_else(
         || CollationError::could_not_find(
@@ -453,6 +487,14 @@ fn get_window_sf(header: &ColFileHeader) -> Option<String> {
     sf_match
 }
 
+fn do_replace_value<I: CollationIndexer>(value: f64, new_spectrum: &str, column: &str, indexer: &I) -> CollationResult<bool> {
+    if value > POSTPROC_FILL_VALUE * 0.99 {
+        Ok(true)
+    } else {
+        indexer.do_replace_value(new_spectrum, column)
+    }
+}
+
 /// Add the zmin values from the `.ray` file to the `.Xsw` file rows.
 /// [`PostprocRow`] instances created from runlog data records have
 /// a fill value for `zmin`, so this overwrites that.
@@ -468,9 +510,12 @@ fn add_zmin<I: CollationIndexer>(rows: &mut Vec<PostprocRow>, indexer: &mut I, r
         let sw_idx = indexer.get_row_index(&ray_row.spectrum())?;
         let sw_row = rows.get_mut(sw_idx)
             .expect("Index returned by the collation indexer should be a valid index for the rows created from the runlog");
-        sw_row.auxiliary.zmin = ray_row.get("Zmin").ok_or_else(|| 
-            CollationError::missing_column(ray_file, "Zmin")
-        )?;
+
+        if do_replace_value(sw_row.auxiliary.zmin, &ray_row.spectrum(), "zmin", indexer)? {
+            sw_row.auxiliary.zmin = ray_row.get("Zmin").ok_or_else(|| 
+                CollationError::missing_column(ray_file, "Zmin")
+            )?;
+        }
     }
     Ok(())
 }
@@ -536,8 +581,11 @@ fn add_col_value<I: CollationIndexer>(rows: &mut Vec<PostprocRow>, indexer: &mut
         let sw_row = rows.get_mut(sw_idx)
             .expect("Index returned by the collation indexer should be a valid index for the rows created from the runlog");
 
-        sw_row.retrieved.insert(val_colname.to_string(), val);
-        sw_row.retrieved.insert(val_err_colname.to_string(), val_err);
+        let curr_val = *sw_row.retrieved.get(val_colname).expect("All rows should have a fill value for the gas value and error");
+        if do_replace_value(curr_val, &col_row.spectrum, &val_colname, indexer)? {
+            sw_row.retrieved.insert(val_colname.to_string(), val);
+            sw_row.retrieved.insert(val_err_colname.to_string(), val_err);
+        }
     }
 
     Ok(())

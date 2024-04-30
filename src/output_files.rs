@@ -355,14 +355,14 @@ impl AuxData {
     /// 
     /// Developers *must* update this when fields are added unless those
     /// fields are not to be serialized or deserialized.
-    pub(crate) fn postproc_fields_str() -> &'static[&'static str] {
+    pub fn postproc_fields_str() -> &'static[&'static str] {
         &["spectrum", "year", "day", "hour", "run", "lat", "long", "zobs", "zmin",
           "solzen", "azim", "osds", "opd", "fovi", "amal", "graw", "tins", "pins",
           "tout", "pout", "hout", "sia", "fvsi", "wspd", "wdir"]
     }
 
     /// A fully-owned version of `postproc_fields_str`.
-    pub(crate) fn postproc_fields_vec() -> Vec<String> {
+    pub fn postproc_fields_vec() -> Vec<String> {
         Vec::from_iter(Self::postproc_fields_str().into_iter().map(|s| s.to_string()))
     }
 }

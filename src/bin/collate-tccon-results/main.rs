@@ -1,7 +1,7 @@
 use std::{collections::HashMap, path::PathBuf, process::ExitCode};
 
 use clap::Parser;
-use ggg_rs::{cit_spectrum_name::NoDetectorSpecName, collation::{collate_results, CollationError, CollationIndexer, CollationMode, CollationResult}, output_files::ProgramVersion, runlogs::{FallibleRunlog, RunlogDataRec}};
+use ggg_rs::{cit_spectrum_name::{CitDetector, CitSpectrumName, NoDetectorSpecName}, collation::{collate_results, CollationError, CollationIndexer, CollationMode, CollationResult}, output_files::ProgramVersion, runlogs::{FallibleRunlog, RunlogDataRec}};
 use log4rs::{encode::pattern::PatternEncoder, append::console::{ConsoleAppender, Target}, Config, config::{Appender, Root}};
 
 fn main() -> ExitCode {
@@ -29,7 +29,7 @@ fn main_inner() -> error_stack::Result<(), CollationError> {
         date: "2024-04-28".to_string(),
         authors: "JLL".to_string()
     };
-    let indexer = TcconColIndexer::default();
+    let indexer = TcconColIndexer::new(clargs.primary_detector);
     collate_results(&multiggg_file, indexer, clargs.mode, collate_version)
 }
 
@@ -46,6 +46,19 @@ struct CollateCli {
     /// as relative to that directory
     #[clap(short='m', long, default_value = "./multiggg.sh")]
     multiggg_file: PathBuf,
+
+    /// Which detector is considered the "primary" detector; this will affect
+    /// which auxiliary values (year, day, hour, zmin, met data, etc.) are written.
+    /// For such values, those associated with the primary detector will take precedence
+    /// over those with the secondary detector (though the secondary detector's values
+    /// will be used if no primary detector is present). That is, by default, if
+    /// the "a" spectrum has a `zmin` value of 0.100 and the "c" spectrum has a `zmin` value
+    /// of "0.120", then the output `.Xsw` file will have `zmin = 0.100` for this entry.
+    /// But, passing --primary-detector=c in this example would make `zmin = 0.120`.
+    /// This option takes any single character (usually "a", "b", or "c") or recognized
+    /// detector long names - see documentation for [`CitDetector`] for a list.
+    #[clap(short='p', long, default_value_t = CitDetector::InGaAs)]
+    primary_detector: CitDetector,
 }
 
 fn init_logging(level: log::LevelFilter) {
@@ -67,10 +80,17 @@ fn init_logging(level: log::LevelFilter) {
     log4rs::init_config(config).expect("Failed to initialize logger");
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct TcconColIndexer {
     index_map: HashMap<NoDetectorSpecName, usize>,
     runlog_data: Vec<RunlogDataRec>,
+    primary_detector: CitDetector,
+}
+
+impl TcconColIndexer {
+    fn new(primary_detector: CitDetector) -> Self {
+        Self { primary_detector, index_map: HashMap::new(), runlog_data: vec![] }
+    }
 }
 
 impl CollationIndexer for TcconColIndexer {
@@ -128,4 +148,24 @@ impl CollationIndexer for TcconColIndexer {
     fn get_runlog_data(&self) -> CollationResult<&[ggg_rs::runlogs::RunlogDataRec]> {
         Ok(&self.runlog_data)
     }
+    
+    fn do_replace_value(&self, new_spectrum: &str, column_name: &str) -> CollationResult<bool> {
+        // For standard TCCON use, we want auxiliary data like the time, met, zmin, etc. to come from
+        // the primary detector (usually InGaAs) because that detector provides the key CO2 and CH4
+        // products.
+        if ggg_rs::output_files::AuxData::postproc_fields_str().contains(&column_name) {
+            let new_spectrum: CitSpectrumName = new_spectrum.parse().map_err(|e| CollationError::parsing_error(
+                format!("could not parse spectrum name '{new_spectrum}': {e}")
+            ))?;
+            if new_spectrum.detector() == self.primary_detector {
+                Ok(true)
+            } else {
+                Ok(false)
+            }
+        } else {
+            Err(CollationError::duplicate_value(new_spectrum, column_name))
+        }
+    }
+
+    
 }

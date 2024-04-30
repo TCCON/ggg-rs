@@ -85,6 +85,20 @@ impl Display for CitFormatError {
 
 impl std::error::Error for CitFormatError {}
 
+#[derive(Debug)]
+pub struct CitUnknownDetectorError {
+    detector: String
+}
+
+impl Display for CitUnknownDetectorError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Unknown detector description '{}' - custom detectors are only supported as a single character.", self.detector)
+    }
+}
+
+impl std::error::Error for CitUnknownDetectorError {}
+
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CitSource {
     Sun,
@@ -193,13 +207,33 @@ impl From<char> for CitOpticalFilter {
     }
 }
 
+/// Which detector recorded this spectrum
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CitDetector {
+    /// The typical NIR detector for TCCON, represented by "a"
+    /// in spectrum names. Recognized long names when parsing 
+    /// a string are "ingaas" and "InGaAs".
     InGaAs,
+
+    /// Silicon detector, usually for frequencies closer to visible
+    /// (e.g. O2 A- and B- bands). Represented by "b" in spectrum
+    /// names, long names are "si" or "Si".
     Si,
+
+    /// A detector that usually covers mid-IR frequencies. Represented
+    /// by "c" in spectrum names, long names are "insb" or "InSb".
     InSb,
+
+    /// A secondary detector in EM27s used to cover the CO bands.
+    /// Represented by "d" in spectrum names, long names are 
+    /// "em27ext", "Em27Ext", or "EM27Ext".
     Em27Ext,
+
+    /// A special detector represented by "x" or "X" in spectrum names.
+    /// Long names are "dual", "Dual", "dualchannel", or "DualChannel".
     DualChannel,
+
+    /// Any other single-character detector representation. 
     Other(char)
 }
 
@@ -212,6 +246,24 @@ impl From<char> for CitDetector {
             'd' => Self::Em27Ext,
             'x' | 'X' => Self::DualChannel,
             _ => Self::Other(value)
+        }
+    }
+}
+
+impl FromStr for CitDetector {
+    type Err = CitUnknownDetectorError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "a" | "ingaas" | "InGaAs" => Ok(Self::InGaAs),
+            "b" | "si" | "Si" => Ok(Self::Si),
+            "c" | "insb" | "InSb" => Ok(Self::InSb),
+            "d" | "em27ext" | "Em27Ext" | "EM27Ext" => Ok(Self::Em27Ext),
+            "x" | "X" | "dual" | "Dual" | "dualchannel" | "DualChannel" => Ok(Self::DualChannel),
+            _ => {
+                let c: char = s.parse().map_err(|_| CitUnknownDetectorError { detector: s.to_string() })?;
+                Ok(Self::Other(c))
+            }
         }
     }
 }
