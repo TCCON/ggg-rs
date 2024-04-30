@@ -318,7 +318,8 @@ pub fn collate_results<I: CollationIndexer>(multiggg_file: &Path, mode: Collatio
         .map_err(|e| CollationError::parsing_error(
             format!("Could not parse format .xsw format string '{writer_format_str}': {e}")
         ))?;
-    
+   
+    info!("Writing results to {}...", xsw_file.display()); 
     let ser_settings = fortformat::ser::SerSettings::default().align_left_str(true);
     fortformat::ser::many_to_writer_custom(&rows, &write_format, Some(&columns), &ser_settings, &mut writer)
         .change_context_lazy(|| CollationError::could_not_write(&xsw_file))?;
@@ -496,6 +497,12 @@ fn add_run(rows: &mut Vec<PostprocRow>) {
 fn add_col_value<I: CollationIndexer>(rows: &mut Vec<PostprocRow>, indexer: &mut I, col_file: &Path, mode: CollationMode, val_colname: &str, val_err_colname: &str)
 -> error_stack::Result<(), CollationError> 
 {
+    // Prepopulate all rows with fill values for this .col file's fields; that way every row is
+    // guaranteed to have a value, even if it isn't present in a given window's .col file.
+    for row in rows.iter_mut() {
+        row.retrieved.insert(val_colname.to_string(), POSTPROC_FILL_VALUE);
+        row.retrieved.insert(val_err_colname.to_string(), POSTPROC_FILL_VALUE);    
+    }
     let it = open_and_iter_col_file(col_file)
         .change_context_lazy(|| CollationError::could_not_read_file("error setting up .col file read", col_file))?;
 
