@@ -29,7 +29,8 @@ fn main_inner() -> error_stack::Result<(), CollationError> {
         date: "2024-04-28".to_string(),
         authors: "JLL".to_string()
     };
-    collate_results::<TcconColIndexer>(&multiggg_file, clargs.mode, collate_version)
+    let indexer = TcconColIndexer::default();
+    collate_results(&multiggg_file, indexer, clargs.mode, collate_version)
 }
 
 #[derive(Debug, clap::Parser)]
@@ -66,18 +67,17 @@ fn init_logging(level: log::LevelFilter) {
     log4rs::init_config(config).expect("Failed to initialize logger");
 }
 
+#[derive(Debug, Default)]
 struct TcconColIndexer {
     index_map: HashMap<NoDetectorSpecName, usize>,
     runlog_data: Vec<RunlogDataRec>,
 }
 
 impl CollationIndexer for TcconColIndexer {
-    fn new_from_runlog(runlog: &std::path::Path) -> CollationResult<Self> {
+    fn parse_runlog(&mut self, runlog: &std::path::Path) -> CollationResult<()> {
         let runlog_iter = FallibleRunlog::open(runlog)
             .map_err(|e| CollationError::could_not_read_file(e.to_string(), runlog))?;
 
-        let mut index_map = HashMap::new();
-        let mut runlog_data = vec![];
         let mut last_spec = None;
         let mut idx = 0;
 
@@ -93,7 +93,7 @@ impl CollationIndexer for TcconColIndexer {
 
             if Some(&nd_spec) == last_spec.as_ref() {
                 // ignore this spectrum; it's a second detector for the same observation as the last one
-            } else if index_map.contains_key(&nd_spec) {
+            } else if self.index_map.contains_key(&nd_spec) {
                 return Err(CollationError::custom(format!(
                     "Spectrum '{}' (ignoring the detector) shows up in two separate places in the runlog, this is not allowed.",
                     rec.spectrum_name
@@ -103,15 +103,15 @@ impl CollationIndexer for TcconColIndexer {
                 // settings through when serializing a structure it seems. For now this is a workaround to make sure
                 // the spectrum names are left aligned.
                 rec.spectrum_name = format!("{:57}", rec.spectrum_name);
-                index_map.insert(nd_spec.clone(), idx);
-                runlog_data.push(rec);
+                self.index_map.insert(nd_spec.clone(), idx);
+                self.runlog_data.push(rec);
                 idx += 1;
                 last_spec = Some(nd_spec);
             }
 
         }
         
-        Ok(Self { index_map, runlog_data })
+        Ok(())
     }
 
     fn get_row_index(&self, spectrum: &str) -> CollationResult<usize> {

@@ -152,7 +152,7 @@ pub trait CollationIndexer: Sized {
     /// the index for the row that each spectrum's values should be placed
     /// in in the output file. This will also likely need to store the runlog's
     /// data to return from the `get_runlog_data` method.
-    fn new_from_runlog(runlog: &Path) -> CollationResult<Self>;
+    fn parse_runlog(&mut self, runlog: &Path) -> CollationResult<()>;
 
     /// Given a spectrum name from a `.col` file, return the row index where
     /// values from this `.col` row should be placed in the `.Xsw` file.
@@ -234,7 +234,7 @@ impl FromStr for CollationMode {
 /// ```ignore
 /// collate_results::<TcconIndexer>(multiggg_file, mode, collate_version)
 /// ``` 
-pub fn collate_results<I: CollationIndexer>(multiggg_file: &Path, mode: CollationMode, collate_version: ProgramVersion) -> error_stack::Result<(), CollationError> {
+pub fn collate_results<I: CollationIndexer>(multiggg_file: &Path, mut indexer: I, mode: CollationMode, collate_version: ProgramVersion) -> error_stack::Result<(), CollationError> {
     let run_dir = multiggg_file.parent().ok_or_else(
         || CollationError::could_not_find(
             format!("run directory (could not get parent directory of the given multiggg file, {})", multiggg_file.display())
@@ -259,7 +259,7 @@ pub fn collate_results<I: CollationIndexer>(multiggg_file: &Path, mode: Collatio
     let (gsetup_version, gfit_version, window_sfs) = get_header_info(&col_files)?;
 
     // Gather the auxiliary data we can from the runlog
-    let mut indexer = I::new_from_runlog(&runlog)?;
+    indexer.parse_runlog(&runlog)?;
     let mut columns = AuxData::postproc_fields_vec();
     let mut rows: Vec<PostprocRow> = indexer.get_runlog_data()?
         .iter()
