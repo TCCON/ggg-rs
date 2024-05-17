@@ -46,24 +46,24 @@ name = "bin2nc"
 required-features = ["netcdf"]
 
 [[bin]]
-name = "collate-tccon-results"
+name = "collate_tccon_results"
 
 [[bin]]
 name = "list_spectra"
 
 [[bin]]
-name = "add-nc-flags"
+name = "add_nc_flags"
 required-features = ["netcdf"]
 
 [[bin]]
-name = "plot-spt"
+name = "plot_spt"
 required-features = ["plotting"]
 
 [[bin]]
-name = "i2s-setup"
+name = "i2s_setup"
 
 [[bin]]
-name = "strip-header"
+name = "strip_header"
 
 [[bin]]
 name = "write_private_netcdf"

@@ -2,7 +2,7 @@ ifndef GGGPATH
 $(error "Must have GGGPATH set")
 endif
 
-FEATURES ?= static
+include $(GGGPATH)/install/.compiler_gggrs.mk
 
 install:
-	cargo install --features $(FEATURES) --path . --root $(GGGPATH)
+	$(CARGOCMD) install $(CARGOARGS) --path . --root $(GGGPATH)
