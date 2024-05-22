@@ -31,11 +31,12 @@
 //! `.col` files. For example, the TCCON implementation (in `bin/collate-tccon-results`)
 //! iterates through the runlog first and assigns adjacent spectra with identical
 //! names save the detector character to the same index.
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use error_stack::ResultExt;
-use log::info;
+use log::{info, warn};
 
 use crate::error::FileLocation;
 use crate::output_files::{iter_tabular_file, open_and_iter_col_file, read_col_file_header, write_postproc_header, AuxData, ColFileHeader, ColRetQuantity, PostprocRow, ProgramVersion, POSTPROC_FILL_VALUE};
@@ -166,6 +167,21 @@ pub trait CollationIndexer: Sized {
     /// values from this `.col` row should be placed in the `.Xsw` file.
     fn get_row_index(&self, spectrum: &str) -> CollationResult<usize>;
 
+    /// Given an index that would be returned by `get_row_index`, return
+    /// the spectrum name that should be used for that index. This will
+    /// by default return the spectrum from the corresponding [`RunlogDataRec`]
+    /// returned by `get_runlog_data`.
+    fn get_index_spectrum(&self, index: usize) -> CollationResult<&str> {
+        let recs = self.get_runlog_data()?;
+        if let Some(rec) = recs.get(index) {
+            Ok(&rec.spectrum_name)
+        } else {
+            Err(CollationError::custom(format!(
+                "Index {index} is outside the range of unique runlog records"
+            )))
+        }
+    }
+
     /// Return a slice of runlog data to write as (most) of the auxiliary
     /// data columns in the `.Xsw` file. Note that these *must* align with
     /// the indices returned by `get_row_index`, so that the record at index
@@ -275,6 +291,7 @@ pub fn collate_results<I: CollationIndexer>(multiggg_file: &Path, mut indexer: I
         ))?;
 
     info!("Collating results in {}", run_dir.display());
+    let mut missing = MissingValues::default();
 
     // Make sure we can get all the input files we need
     let col_files = get_col_files(multiggg_file, run_dir)?;
@@ -326,7 +343,7 @@ pub fn collate_results<I: CollationIndexer>(multiggg_file: &Path, mut indexer: I
         
         let val_colname = window;
         let val_err_colname = format!("{window}_error");
-        add_col_value(&mut rows, &mut indexer, &cfile, mode, val_colname, &val_err_colname)
+        add_col_value(&mut rows, &mut indexer, &cfile, mode, val_colname, &val_err_colname, &mut missing)
             .change_context_lazy(|| CollationError::col_file_error(&cfile))?;
         columns.push(val_colname.to_string());
         columns.push(val_err_colname);
@@ -358,6 +375,11 @@ pub fn collate_results<I: CollationIndexer>(multiggg_file: &Path, mut indexer: I
     fortformat::ser::many_to_writer_custom(&rows, &write_format, Some(&columns), &ser_settings, &mut writer)
         .change_context_lazy(|| CollationError::could_not_write(&xsw_file))?;
     info!("Results written to {}.", xsw_file.display());
+
+    missing.write_missing_report(&run_dir.join("collate_results.missing"))
+        .unwrap_or_else(|e| log::error!("collate_results.missing may be incomplete due to an error: {e}"));
+    missing.write_missing_summary(std::io::stdout())
+        .unwrap_or_else(|e| log::error!("Writing the percentage of found/missing values to stdout failed: {e}"));
 
     Ok(())
 }
@@ -539,18 +561,14 @@ fn add_run(rows: &mut Vec<PostprocRow>) {
 /// 
 /// Note that `val_colname` and `val_err_colname` need to match their respective values in the list
 /// of field names passed to the serializer.
-fn add_col_value<I: CollationIndexer>(rows: &mut Vec<PostprocRow>, indexer: &mut I, col_file: &Path, mode: CollationMode, val_colname: &str, val_err_colname: &str)
+fn add_col_value<I: CollationIndexer>(rows: &mut Vec<PostprocRow>, indexer: &mut I, col_file: &Path, mode: CollationMode, 
+                                      val_colname: &str, val_err_colname: &str, missing_values: &mut MissingValues)
 -> error_stack::Result<(), CollationError> 
 {
-    // Prepopulate all rows with fill values for this .col file's fields; that way every row is
-    // guaranteed to have a value, even if it isn't present in a given window's .col file.
-    for row in rows.iter_mut() {
-        row.retrieved.insert(val_colname.to_string(), POSTPROC_FILL_VALUE);
-        row.retrieved.insert(val_err_colname.to_string(), POSTPROC_FILL_VALUE);    
-    }
     let it = open_and_iter_col_file(col_file)
         .change_context_lazy(|| CollationError::could_not_read_file("error setting up .col file read", col_file))?;
 
+    // Go through the .col file and assign the values to the postprocessing rows
     for (irow, row) in it.enumerate() {
         let col_row = row.change_context_lazy(|| {
             CollationError::could_not_read_file(
@@ -581,12 +599,83 @@ fn add_col_value<I: CollationIndexer>(rows: &mut Vec<PostprocRow>, indexer: &mut
         let sw_row = rows.get_mut(sw_idx)
             .expect("Index returned by the collation indexer should be a valid index for the rows created from the runlog");
 
-        let curr_val = *sw_row.retrieved.get(val_colname).expect("All rows should have a fill value for the gas value and error");
-        if do_replace_value(curr_val, &col_row.spectrum, &val_colname, indexer)? {
+        let do_insert = if sw_row.retrieved.contains_key(val_colname) {
+            indexer.do_replace_value(&col_row.spectrum, &val_colname)?
+        } else {
+            true
+        };
+
+        if do_insert {
             sw_row.retrieved.insert(val_colname.to_string(), val);
             sw_row.retrieved.insert(val_err_colname.to_string(), val_err);
+            missing_values.add_found(1);
+        }
+    }
+
+    // Review the rows, inserting fill values for any missing values and recording them for the final report.
+    for (idx, row) in rows.iter_mut().enumerate() {
+        let val_missing = !row.retrieved.contains_key(val_colname);
+        let err_missing = !row.retrieved.contains_key(val_err_colname);
+
+        if val_missing || err_missing {
+            let spec = indexer.get_index_spectrum(idx)?;
+            missing_values.add_missing(val_colname.to_string(), spec.to_string());
+
+            if val_missing && !err_missing {
+                warn!("Row for {spec} contains a value for {val_err_colname} but not {val_colname}");
+            } else if err_missing && !val_missing {
+                warn!("Row for {spec} contains a value for {val_colname} but not {val_err_colname}");
+            }
+        }
+
+        if val_missing {
+            row.retrieved.insert(val_colname.to_string(), POSTPROC_FILL_VALUE);
+        }
+
+        if err_missing {
+            row.retrieved.insert(val_err_colname.to_string(), POSTPROC_FILL_VALUE);    
         }
     }
 
     Ok(())
+}
+
+#[derive(Debug, Default)]
+struct MissingValues {
+    nfound: usize,
+    missing_window_spec: Vec<(String, String)>
+}
+
+impl MissingValues {
+    fn add_missing(&mut self, window: String, spectrum: String) {
+        self.missing_window_spec.push((window, spectrum));
+    }
+
+    fn add_found(&mut self, n: usize) {
+        self.nfound += n;
+    }
+
+    fn write_missing_report(&self, path: &Path) -> std::io::Result<()> {
+        let f = std::fs::File::create(path)?;
+        let mut writer = std::io::BufWriter::new(f);
+        for (window, spec) in self.missing_window_spec.iter() {
+            writeln!(&mut writer, "Missing: {window} {spec}")?;
+        }
+        Ok(())
+    }
+
+    fn write_missing_summary<W: Write>(&self, mut writer: W) -> std::io::Result<()> {
+        let n_miss = self.missing_window_spec.len();
+        let n_tot = (self.nfound + n_miss) as f32;
+        let percent_found = 100.0 * self.nfound as f32 / n_tot;
+        let percent_missing = 100.0 * n_miss as f32 / n_tot;
+        writeln!(writer, " found values = {percent_found:.1}%")?;
+        write!(writer, " missing values = {percent_missing:.1}%")?;
+        if n_miss > 0 {
+            writeln!(writer, " See missing value report file.")?;
+        } else {
+            writeln!(writer, "")?;
+        }
+        Ok(())
+    }
 }
