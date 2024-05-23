@@ -17,7 +17,7 @@ fn main() -> ExitCode {
 // - Verbosity CL flag
 // - After fortformat alignment issue fixed, use that SerSettings::left_align_str instead of padding
 //   the string ourselves.
-// - Handle the mid-IR and visible windows
+// - Test the mid-IR windows (visible seems ok)
 
 fn main_inner() -> error_stack::Result<(), CollationError> {
     let clargs = CollateCli::parse();
@@ -30,7 +30,7 @@ fn main_inner() -> error_stack::Result<(), CollationError> {
         authors: "JLL".to_string()
     };
     let indexer = TcconColIndexer::new(clargs.primary_detector);
-    collate_results(&multiggg_file, indexer, clargs.mode, collate_version)
+    collate_results(&multiggg_file, indexer, clargs.mode, collate_version, clargs.write_nts)
 }
 
 #[derive(Debug, clap::Parser)]
@@ -59,6 +59,12 @@ struct CollateCli {
     /// detector long names - see documentation for [`CitDetector`] for a list.
     #[clap(short='p', long, default_value_t = CitDetector::InGaAs)]
     primary_detector: CitDetector,
+
+    /// Write out "collate_results.nts" listing spectra with a ZPD time earlier than
+    /// the preceding spectrum in the runlog. This is not written by default, because
+    /// collate_tccon_results does not rely on the runlog to be time-ordered.
+    #[clap(short='n', long)]
+    write_nts: bool,
 }
 
 fn init_logging(level: log::LevelFilter) {
@@ -84,12 +90,13 @@ fn init_logging(level: log::LevelFilter) {
 struct TcconColIndexer {
     index_map: HashMap<NoDetectorSpecName, usize>,
     runlog_data: Vec<RunlogDataRec>,
+    neg_timesteps: Vec<(RunlogDataRec, RunlogDataRec)>,
     primary_detector: CitDetector,
 }
 
 impl TcconColIndexer {
     fn new(primary_detector: CitDetector) -> Self {
-        Self { primary_detector, index_map: HashMap::new(), runlog_data: vec![] }
+        Self { primary_detector, index_map: HashMap::new(), neg_timesteps: vec![], runlog_data: vec![] }
     }
 }
 
@@ -99,12 +106,30 @@ impl CollationIndexer for TcconColIndexer {
             .map_err(|e| CollationError::could_not_read_file(e.to_string(), runlog))?;
 
         let mut last_spec = None;
+        let mut prev_rec: Option<RunlogDataRec> = None;
         let mut idx = 0;
+
 
         for rec in runlog_iter {
             let mut rec = rec.map_err(|e| CollationError::could_not_read_file(
                 format!("error occurred while reading one line of the runlog: {e}"), runlog
             ))?;
+
+            if let Some(was) = prev_rec {
+                let time_was = was.zpd_time();
+                let time_is = rec.zpd_time();
+                match (time_was, time_is) {
+                    (Some(t_was), Some(t_is)) => {
+                        if t_is < t_was {
+                            self.neg_timesteps.push((was.clone(), rec.clone()));
+                        }
+                    },
+                    (None, Some(_)) => log::warn!("Could not convert time for spectrum {}, cannot check for negative time steps", rec.spectrum_name),
+                    // the last two arms are empty so we don't repeat the warning
+                    (Some(_), None) => (),
+                    (None, None) => (),
+                }
+            }
 
             let nd_spec = NoDetectorSpecName::new(&rec.spectrum_name)
                 .map_err(|e| CollationError::custom(
@@ -124,11 +149,12 @@ impl CollationIndexer for TcconColIndexer {
                 // the spectrum names are left aligned.
                 rec.spectrum_name = format!("{:57}", rec.spectrum_name);
                 self.index_map.insert(nd_spec.clone(), idx);
-                self.runlog_data.push(rec);
+                self.runlog_data.push(rec.clone());
                 idx += 1;
                 last_spec = Some(nd_spec);
             }
 
+            prev_rec = Some(rec);
         }
         
         Ok(())
@@ -147,6 +173,10 @@ impl CollationIndexer for TcconColIndexer {
 
     fn get_runlog_data(&self) -> CollationResult<&[ggg_rs::runlogs::RunlogDataRec]> {
         Ok(&self.runlog_data)
+    }
+
+    fn get_negative_runlog_timesteps(&self) -> CollationResult<&[(RunlogDataRec, RunlogDataRec)]> {
+        Ok(&self.neg_timesteps)
     }
     
     fn do_replace_value(&self, new_spectrum: &str, column_name: &str) -> CollationResult<bool> {

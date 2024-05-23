@@ -190,33 +190,7 @@ pub trait CollationIndexer: Sized {
     /// returns a 1, and so on.
     fn get_runlog_data(&self) -> CollationResult<&[RunlogDataRec]>;
 
-    fn get_negative_runlog_timesteps(&self) -> CollationResult<Vec<usize>> {
-        let mut neg_ts = vec![];
-
-        let all_recs = self.get_runlog_data()?;
-        if all_recs.is_empty() {
-            return Ok(neg_ts);
-        }
-
-        let mut prev_time = None;
-        for (idx, rec) in all_recs.into_iter().enumerate() {
-            let curr_time = if let Some(t) = rec.zpd_time() {
-                t
-            } else {
-                continue;
-            };
-
-            if let Some(prev) = prev_time {
-                if curr_time < prev {
-                    neg_ts.push(idx);
-                }
-            } else {
-                prev_time = Some(curr_time);
-            }
-        }
-
-        Ok(neg_ts)
-    }
+    fn get_negative_runlog_timesteps(&self) -> CollationResult<&[(RunlogDataRec, RunlogDataRec)]>;
 
     /// Controls when previously written values should be overwritten. 
     /// Returning `Ok(true)` allows the value in `column_name` of the current
@@ -312,7 +286,8 @@ impl FromStr for CollationMode {
 ///   `.col` files go into.
 /// -  `mode` controls what values are written from each `.col` file.
 /// - `collate_version` specifies what program version to put in the header of the output file.
-pub fn collate_results<I: CollationIndexer>(multiggg_file: &Path, mut indexer: I, mode: CollationMode, collate_version: ProgramVersion) -> error_stack::Result<(), CollationError> {
+pub fn collate_results<I: CollationIndexer>(multiggg_file: &Path, mut indexer: I, mode: CollationMode, collate_version: ProgramVersion,
+                                            write_neg_timesteps: bool) -> error_stack::Result<(), CollationError> {
     let run_dir = multiggg_file.parent().ok_or_else(
         || CollationError::could_not_find(
             format!("run directory (could not get parent directory of the given multiggg file, {})", multiggg_file.display())
@@ -409,8 +384,10 @@ pub fn collate_results<I: CollationIndexer>(multiggg_file: &Path, mut indexer: I
     missing.write_missing_summary(std::io::stdout())
         .unwrap_or_else(|e| log::error!("Writing the percentage of found/missing values to stdout failed: {e}"));
 
-    report_negative_time_steps(&run_dir.join("collate_results.nts"), indexer)
-        .unwrap_or_else(|e| log::error!("Writing the negative time steps report failed: {e}"));
+    if write_neg_timesteps {
+        report_negative_time_steps(&run_dir.join("collate_results.nts"), indexer)
+            .unwrap_or_else(|e| log::error!("Writing the negative time steps report failed: {e}"));
+    }
     Ok(())
 }
 
@@ -714,19 +691,12 @@ fn report_negative_time_steps<I: CollationIndexer>(report_file: &Path, indexer: 
     let f = std::fs::File::create(report_file)
         .change_context_lazy(|| CollationError::CouldNotWrite { path: report_file.to_path_buf() })?;
     let mut writer = std::io::BufWriter::new(f);
-    let recs = indexer.get_runlog_data()?;
-    let neg_ts_inds = indexer.get_negative_runlog_timesteps()?;
-    for idx in neg_ts_inds {
-        let this_spec = &recs[idx].spectrum_name;
-        let (this_dec_year, _, _) = utils::to_decimal_year_day_hour(recs[idx].year, recs[idx].day, recs[idx].hour);
-        let res = if idx == 0 {
-            writeln!(&mut writer, "  Negative time step on first spectrum (should not happen) {this_spec} {this_dec_year:12.6}")
-        } else {
-            let (prev_dec_year, _, _) = utils::to_decimal_year_day_hour(recs[idx-1].year, recs[idx-1].day, recs[idx-1].hour);
-            writeln!(&mut writer, "  Negative time step (runlog unsorted?) {this_spec} {prev_dec_year:12.6} {this_dec_year:12.6}")
-        };
-
-        res.change_context_lazy(|| CollationError::CouldNotWrite { path: report_file.to_path_buf() })?;
+    for (prev_rec, next_rec) in indexer.get_negative_runlog_timesteps()? {
+        let this_spec = &next_rec.spectrum_name;
+        let (prev_dec_year, _, _) = utils::to_decimal_year_day_hour(prev_rec.year, prev_rec.day, prev_rec.hour);
+        let (this_dec_year, _, _) = utils::to_decimal_year_day_hour(next_rec.year, next_rec.day, next_rec.hour);
+        writeln!(&mut writer, "  Negative time step (runlog unsorted?) {this_spec} {prev_dec_year:12.6} {this_dec_year:12.6}")
+            .change_context_lazy(|| CollationError::CouldNotWrite { path: report_file.to_path_buf() })?;
     }
     Ok(())
 }
