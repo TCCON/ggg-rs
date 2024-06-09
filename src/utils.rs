@@ -979,6 +979,29 @@ pub fn get_windows_from_multiggg(multiggg_file: &Path, include_runlog_name: bool
     Ok(windows)
 }
 
+pub struct DateIter {
+    curr: chrono::NaiveDate,
+    end: chrono::NaiveDate,
+}
+
+impl Iterator for DateIter {
+    type Item = chrono::NaiveDate;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.curr > self.end {
+            return None;
+        }
+
+        let next_date = self.curr;
+        self.curr += chrono::Duration::days(1);
+        Some(next_date)
+    }
+}
+
+pub fn iter_dates(start_date: chrono::NaiveDate, end_date: chrono::NaiveDate) -> DateIter {
+    DateIter { curr: start_date, end: end_date }
+}
+
 
 #[derive(Debug, thiserror::Error)]
 pub enum EncodingError {
