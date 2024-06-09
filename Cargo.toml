@@ -34,7 +34,6 @@ toml = "0.8.8"
 rstest = "0.18.2"
 
 [features]
-default = ["dep:netcdf"]
 netcdf = ["dep:netcdf"]
 static = ["netcdf", "netcdf/static"]
 plotting = ["dep:plotly"]
