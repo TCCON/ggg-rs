@@ -16,3 +16,5 @@ pub mod cit_spectrum_name;
 pub mod output_files;
 /// Common code for `collate-*-results` programs.
 pub mod collation;
+/// Code supporting TCCON-focused programs
+pub mod tccon;

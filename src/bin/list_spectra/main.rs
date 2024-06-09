@@ -1,13 +1,14 @@
-use std::{path::{PathBuf, Path}, fmt::Display};
+use std::path::PathBuf;
 
 use clap::Parser;
 
+use ggg_rs::tccon::sort_spectra;
+
 fn main() {
     let args = Cli::parse();
-    let mut spectra_names = get_spectrum_names(&args.spectra)
+    let spectra_names = sort_spectra::sort_spectrum_names(&args.spectra)
         .expect("Was not able to extract the base names of all given spectra");
 
-    spectra_names.sort_unstable();
     for name in spectra_names {
         println!("{name}");
     }
@@ -39,89 +40,4 @@ struct Cli {
     /// The spectra to print in order. May be full paths to spectra, only the names
     /// will be printed.
     spectra: Vec<PathBuf>
-}
-
-#[derive(Debug, thiserror::Error)]
-enum NameError<'p> {
-    #[error("Spectrum {} has no base name", .0.display())]
-    NoBaseName(&'p Path),
-    #[error("Spectrum {} has a base name with invalid unicode", .0.display())]
-    NonUnicodeName(&'p Path),
-    #[error("Spectrum {0} has a name that is too short")]
-    TooShort(&'p str)
-}
-
-fn get_spectrum_names(paths: &[PathBuf]) -> Result<Vec<SortingSpec>, NameError> {
-    let mut names = vec![];
-
-    for path in paths {
-        let this_name = path.file_name()
-            .ok_or_else(|| NameError::NoBaseName(&path))?
-            .to_str()
-            .ok_or_else(|| NameError::NonUnicodeName(&path))?;
-        names.push(SortingSpec::new(this_name)?);
-    }
-
-    Ok(names)
-}
-
-#[derive(Debug, PartialEq, Eq)]
-struct SortingSpec<'s> {
-    head: &'s str,
-    detector: char,
-    tail: &'s str,
-}
-
-impl<'s> SortingSpec<'s> {
-    fn new(spectrum_name: &'s str) -> Result<Self, NameError> {
-        let (i, detector) = spectrum_name.char_indices().nth(15)
-            .ok_or_else(|| NameError::TooShort(spectrum_name))?;
-        // The detector should be an ASCII character, so we assume it is one byte in the string
-        let head = &spectrum_name[..i];
-        let tail = &spectrum_name[i+1..];
-
-        Ok(Self { head, detector, tail })
-    }
-}
-
-impl<'s> Display for SortingSpec<'s> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}{}{}", self.head, self.detector, self.tail)
-    }
-}
-
-impl<'s> PartialOrd for SortingSpec<'s> {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        match self.head.partial_cmp(&other.head) {
-            Some(core::cmp::Ordering::Equal) => {}
-            ord => return ord,
-        }
-
-        match self.tail.partial_cmp(&other.tail) {
-            Some(core::cmp::Ordering::Equal) => {}
-            ord => return ord,
-        }
-        
-        self.detector.partial_cmp(&other.detector)
-    }
-}
-
-impl<'s> Ord for SortingSpec<'s> {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        // Because we're most often dealing with spectra from the same site, which
-        // will have the same head, we can do a small optimization by comparing the
-        // tail first (which will be the run number). 
-
-        match self.tail.cmp(&other.tail) {
-            core::cmp::Ordering::Equal => {},
-            ord => return ord
-        }
-
-        match self.head.cmp(&other.head) {
-            core::cmp::Ordering::Equal => {},
-            ord => return ord
-        }
-
-        self.detector.cmp(&other.detector)
-    }
 }
