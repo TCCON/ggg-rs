@@ -185,7 +185,7 @@ impl RunlogDataRec {
     pub fn zpd_time(&self) -> Option<chrono::DateTime<chrono::Utc>> {
         let h = self.hour.floor();
         let m = (self.hour.fract() * 60.0).floor();
-        let s = (self.hour.fract() * 60.0 - m).floor() * 60.0;
+        let s = (self.hour.fract() * 60.0 - m) * 60.0;
         let dt = chrono::NaiveDate::from_yo_opt(self.year, self.day as u32)?
             .and_hms_opt(h as u32, m as u32, s as u32)?;
         Some(chrono::DateTime::from_naive_utc_and_offset(dt, chrono::Utc))

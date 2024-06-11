@@ -34,6 +34,7 @@ toml = "0.8.8"
 rstest = "0.18.2"
 
 [features]
+inprogress = []
 netcdf = ["dep:netcdf"]
 static = ["netcdf", "netcdf/static"]
 plotting = ["dep:plotly"]
@@ -66,11 +67,11 @@ name = "strip_header"
 
 [[bin]]
 name = "write_private_netcdf"
-required-features = ["netcdf"]
+required-features = ["netcdf", "inprogress"]
 
 [[bin]]
 name = "write_public_netcdf"
-required-features = ["netcdf"]
+required-features = ["netcdf", "inprogress"]
 
 #[[bin]]
 #name = "plot_opus_spectra"
