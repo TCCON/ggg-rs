@@ -60,6 +60,9 @@ name = "plot_spt"
 required-features = ["plotting"]
 
 [[bin]]
+name = "query_output"
+
+[[bin]]
 name = "i2s_setup"
 
 [[bin]]

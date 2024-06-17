@@ -5,6 +5,7 @@ use std::path::Path;
 use std::{path::PathBuf, str::FromStr, sync::OnceLock, io::BufRead};
 
 use error_stack::ResultExt;
+use fortformat::FortFormat;
 use itertools::Itertools;
 
 use crate::error::{BodyError, HeaderError, WriteError};
@@ -116,6 +117,72 @@ pub struct ColFileHeader {
     pub format: String,
     pub command_line: String,
     pub column_names: Vec<String>
+}
+
+/// Parse a "format=(...)" or "format:(...)" line from a post processing file header into a [`FortFormat`]
+/// 
+/// This takes the full line, including the "format:" or "format="; it will split the line on the
+/// ":" or "=" and parse the part after that delimiter as the format string.
+/// 
+/// If `ignore_a1` is `true`, then the first instance of "a1" in the format string will be replaced
+/// with a "1x" before parsing. This assumes a string like "(a57,a1,f13.8,23f13.5,0114(1pe13.5))",
+/// where the "a1" is present to support some legacy formatting that ggg-rs generally ignores.
+/// For deserializing into ggg-rs structures, this almost always needs removed.
+fn parse_postproc_format_str(fmt: String, ignore_a1: bool) -> Result<FortFormat, String> {
+    let fmt = if ignore_a1 && fmt.contains(",a1,") {
+        fmt.replacen("a1,", "1x,", 1)
+    } else {
+        fmt
+    };
+
+    let s = if fmt.contains("=") {
+        fmt.split_once("=").unwrap().1
+    } else if fmt.contains(":") {
+        fmt.split_once(":").unwrap().1
+    } else {
+        return Err("Expected the format line in the header to contain a '=' or ':'".to_string());
+    };
+
+    FortFormat::parse(s).map_err(|e| {
+        format!("Could not parse the format string '{s}': {e}")
+    })
+}
+/// Read the header of a tabular file and return the column names.
+/// 
+/// Given an open file reader that points to the start of a tabular file,
+/// this reads the header (and advances the pointer to after the header).
+/// The column names are parsed from the final line of the header and returned.
+pub fn read_tabular_file_header<F: BufRead>(file: &mut FileBuf<F>) -> error_stack::Result<(FortFormat, Vec<String>), HeaderError> {
+    let (nhead, _) = get_nhead_ncol(file)
+        .change_context_lazy(|| HeaderError::ParseError {
+            location: file.path.as_path().into(), 
+            cause: "Could not parse number of header lines and data columns".to_string() 
+        })?;
+
+    let mut format_line = None;
+    let mut line = String::new();
+    for _ in 1..nhead {
+        line = file.read_header_line()?;
+        if line.trim().starts_with("format") {
+            format_line = Some(line.clone());
+        }
+    }
+
+    let fmt = if let Some(fmt) = format_line {
+        parse_postproc_format_str(fmt, true).map_err(|e| {
+            HeaderError::ParseError { 
+                location: file.path.as_path().into(),
+                cause: e }
+        })?
+    } else {
+        return Err(HeaderError::ParseError { location: file.path.as_path().into(), cause: "Could not find format line in header".to_string() }.into());
+    };
+
+    let column_names = line.trim()
+        .split_ascii_whitespace()
+        .map(|s| s.to_string())
+        .collect_vec();
+    Ok((fmt, column_names))
 }
 
 pub fn read_col_file_header<F: BufRead>(file: &mut FileBuf<F>) -> error_stack::Result<ColFileHeader, HeaderError> {
@@ -365,6 +432,36 @@ impl AuxData {
     pub fn postproc_fields_vec() -> Vec<String> {
         Vec::from_iter(Self::postproc_fields_str().into_iter().map(|s| s.to_string()))
     }
+
+    pub fn get_numeric_field(&self, field: &str) -> Option<f64> {
+        match field {
+            "year" => Some(self.year),
+            "day" => Some(self.day),
+            "hour" => Some(self.hour),
+            "run" => Some(self.run),
+            "lat" => Some(self.lat),
+            "long" => Some(self.long),
+            "zobs" => Some(self.zobs),
+            "zmin" => Some(self.zmin),
+            "solzen" => Some(self.solzen),
+            "azim" => Some(self.azim),
+            "osds" => Some(self.osds),
+            "opd" => Some(self.opd),
+            "fovi" => Some(self.fovi),
+            "amal" => Some(self.amal),
+            "graw" => Some(self.graw),
+            "tins" => Some(self.tins),
+            "pins" => Some(self.pins),
+            "tout" => Some(self.tout),
+            "pout" => Some(self.pout),
+            "hout" => Some(self.hout),
+            "sia" => Some(self.sia),
+            "fvsi" => Some(self.fvsi),
+            "wspd" => Some(self.wspd),
+            "wdir" => Some(self.wdir),
+            _ => None
+        }
+    }
 }
 
 impl From<&RunlogDataRec> for AuxData {
@@ -424,6 +521,63 @@ impl PostprocRow {
     pub fn new(aux_data: AuxData) -> Self {
         Self { auxiliary: aux_data, retrieved: HashMap::new() }
     }
+
+    /// Get the value of one of the numeric fields from the row
+    pub fn get_numeric_field(&self, field: &str) -> Option<f64> {
+        if let Some(value) = self.auxiliary.get_numeric_field(field) {
+            Some(value)
+        } else {
+            self.retrieved.get(field).map(|v| *v)
+        }
+    }
+}
+
+/// An iterator over data rows in a postprocessing text file; holds the
+/// file open for the duration of the iterator's life.
+pub struct PostprocRowIter {
+    lines: std::io::Lines<FileBuf<BufReader<std::fs::File>>>,
+    fmt: fortformat::FortFormat,
+    colnames: Vec<String>,
+    src_path: PathBuf,
+}
+
+impl Iterator for PostprocRowIter {
+    type Item = Result<PostprocRow, GggError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let res = self.lines.next()?
+            .map_err(|e| GggError::CouldNotRead { path: self.src_path.clone(), reason: e.to_string() });
+
+        let line = match res {
+            Ok(s) => s,
+            Err(e) => return Some(Err(e)),
+        };
+
+        let row: PostprocRow = match fortformat::from_str_with_fields(&line, &self.fmt, &self.colnames) {
+            Ok(r) => r,
+            Err(e) => return Some(Err(GggError::DataError { path: self.src_path.clone(), cause: e.to_string() })),
+        };
+
+        Some(Ok(row))
+    }
+}
+
+/// Convenience function to open a postprocessing output file at `path` and
+/// return an iterator over its data rows.
+pub fn open_and_iter_postproc_file(path: &Path) -> error_stack::Result<PostprocRowIter, BodyError> {
+    let mut fbuf = FileBuf::open(path)
+        .change_context_lazy(|| BodyError::could_not_read("error opening .col file", Some(path.into()), None, None))?;
+
+    let (fmt, columns) = read_tabular_file_header(&mut fbuf).change_context_lazy(|| {
+        BodyError::could_not_read("error getting information from .col file header", Some(path.into()), None, None)
+    })?;
+
+    Ok(PostprocRowIter {
+        lines: fbuf.lines(),
+        fmt,
+        colnames: columns,
+        src_path: path.to_path_buf()
+    })
 }
 
 /// Represents data from a row of any tabular GGG file that has the spectrum name,
