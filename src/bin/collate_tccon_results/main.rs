@@ -1,7 +1,8 @@
-use std::{collections::HashMap, path::PathBuf, process::ExitCode};
+use std::{collections::HashMap, io::BufRead, path::{Path, PathBuf}, process::ExitCode};
 
 use clap::Parser;
-use ggg_rs::{cit_spectrum_name::{CitDetector, CitSpectrumName, NoDetectorSpecName}, collation::{collate_results, CollationError, CollationIndexer, CollationMode, CollationResult}, output_files::ProgramVersion, runlogs::{FallibleRunlog, RunlogDataRec}};
+use error_stack::ResultExt;
+use ggg_rs::{cit_spectrum_name::{CitDetector, CitSpectrumName, NoDetectorSpecName}, collation::{collate_results, parse_window_name, CollationError, CollationIndexer, CollationMode, CollationPrefixer, CollationResult}, output_files::ProgramVersion, runlogs::{FallibleRunlog, RunlogDataRec}, utils::get_ggg_path};
 use log4rs::{encode::pattern::PatternEncoder, append::console::{ConsoleAppender, Target}, Config, config::{Appender, Root}};
 
 fn main() -> ExitCode {
@@ -30,7 +31,22 @@ fn main_inner() -> error_stack::Result<(), CollationError> {
         authors: "JLL".to_string()
     };
     let indexer = TcconColIndexer::new(clargs.primary_detector);
-    collate_results(&multiggg_file, indexer, clargs.mode, collate_version, clargs.write_nts)
+
+    // I think eventually we will require a prefix file. But for now, I want to be able to use
+    // this without needing a prefix file.
+    let prefixer = if let Some(p) = clargs.prefix_file {
+        Some(TcconColPrefixer::new(&p)?)
+    } else {
+        let gggpath = get_ggg_path().change_context_lazy(|| CollationError::custom("could not get GGGPATH"))?;
+        let default_file = gggpath.join("tccon").join("secondary_prefixes.dat");
+        if default_file.exists() {
+            Some(TcconColPrefixer::new(&default_file)?)
+        } else {
+            log::warn!("No prefix file specified and default file ({}) not found, will not use any prefixes for secondary detector windows", default_file.display());
+            None
+        }
+    };
+    collate_results(&multiggg_file, indexer, prefixer, clargs.mode, collate_version, clargs.write_nts)
 }
 
 #[derive(Debug, clap::Parser)]
@@ -65,6 +81,12 @@ struct CollateCli {
     /// collate_tccon_results does not rely on the runlog to be time-ordered.
     #[clap(short='n', long)]
     write_nts: bool,
+
+    /// Path to the file that defines the specie's prefixes for different frequency
+    /// ranges. If not given, will use the file at $GGGPATH/tccon/secondary_prefixes.dat
+    /// if it exists. Giving a path to this argument that does not exist is an error.
+    #[clap(long)]
+    prefix_file: Option<PathBuf>,
 }
 
 fn init_logging(level: log::LevelFilter) {
@@ -196,6 +218,68 @@ impl CollationIndexer for TcconColIndexer {
             Err(CollationError::duplicate_value(new_spectrum, column_name))
         }
     }
+}
 
-    
+
+struct TcconColPrefixer {
+    ranges: Vec<(f32, f32, String)>
+}
+
+impl TcconColPrefixer {
+    fn new(prefix_file: &Path) -> error_stack::Result<Self, CollationError> {
+        let f = std::fs::File::open(prefix_file)
+            .change_context_lazy(|| CollationError::could_not_read_file("failed to open", prefix_file))?;
+        let rdr = std::io::BufReader::new(f);
+        let mut ranges = vec![];
+        for (iline, line) in rdr.lines().enumerate() {
+            let line = line.change_context_lazy(|| CollationError::could_not_read_file(
+                format!("failed to read line {}", iline+1), prefix_file)
+            )?;
+            let line = line.trim();
+
+            if line.starts_with(":") || line.is_empty() {
+                // comment or empty line
+                continue;
+            }
+
+            let mut parts = line.split_ascii_whitespace();
+            let start_wn = parts.next().ok_or_else(|| CollationError::could_not_read_file(
+                    format!("line {} did not include a starting wavenumber", iline+1), prefix_file)
+            )?;
+            let end_wn = parts.next().ok_or_else(|| CollationError::could_not_read_file(
+                format!("line {} did not include an ending wavenumber", iline+1), prefix_file)
+            )?;
+            let prefix = parts.next().unwrap_or("").to_string();
+
+            let start_wn = start_wn.parse::<f32>().change_context_lazy(|| CollationError::could_not_read_file(
+                format!("starting wavenumber on line {} is not a valid number", iline+1), prefix_file)
+            )?;
+            let end_wn = end_wn.parse::<f32>().change_context_lazy(|| CollationError::could_not_read_file(
+                format!("starting wavenumber on line {} is not a valid number", iline+1), prefix_file)
+            )?;
+
+            ranges.push((start_wn, end_wn, prefix));
+        }
+        
+        Ok(Self { ranges })
+    }
+}
+
+impl CollationPrefixer for TcconColPrefixer {
+    fn set_provided_windows<P: AsRef<Path>>(&mut self, _col_files: &[P]) {}
+
+    fn get_prefix(&self, window: &str) -> Result<&str, CollationError> {
+        let (_, center) = parse_window_name(window)?;
+
+        for (start, end, prefix) in self.ranges.iter() {
+            if start <= &center && end > &center {
+                return Ok(&prefix)
+            }
+        }
+
+
+        Err(CollationError::custom(
+            format!("Window {window} does not have a prefix defined; frequency center ({center}) is ou")
+        ))
+    }
 }

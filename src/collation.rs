@@ -46,6 +46,7 @@ use crate::utils::{self, FileBuf};
 pub type CollationResult<T> = Result<T, CollationError>;
 
 static WINDOW_SF_REGEX: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+static WINDOW_PARSE_REGEX: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
 
 /// Possible errors during data collation.
 /// 
@@ -224,6 +225,25 @@ pub trait CollationIndexer: Sized {
     }
 }
 
+/// A trait to implement for different prefixes to differentiate windows during collation
+/// 
+/// To avoid `average_results` combining data for a specie between different detectors,
+/// we prefix secondary detectors' windows with a letter so that `average_results` sees
+/// them as different species. Implementors of this trait will provide the desired prefix
+/// for each window.
+pub trait CollationPrefixer {
+    /// Called at the beginning of collation to tell the prefixer what windows will be processed.
+    /// This is useful if you want to prefix some windows only if other windows are present.
+    /// If this indexer does not need to know about what windows are available, it can make
+    /// this function do nothing.
+    fn set_provided_windows<P: AsRef<Path>>(&mut self, col_files: &[P]);
+
+    /// Given a window (e.g. "co2_6220"), return the desired prefix for this window.
+    /// If no prefix is needed, return an empty string. This function should return
+    /// an error if it cannot determine the prefix for the given window.
+    fn get_prefix(&self, window: &str) -> Result<&str, CollationError>;
+}
+
 /// What data to write to the `.Xsw` file.
 #[derive(Debug, Clone, Copy)]
 pub enum CollationMode {
@@ -286,8 +306,14 @@ impl FromStr for CollationMode {
 ///   `.col` files go into.
 /// -  `mode` controls what values are written from each `.col` file.
 /// - `collate_version` specifies what program version to put in the header of the output file.
-pub fn collate_results<I: CollationIndexer>(multiggg_file: &Path, mut indexer: I, mode: CollationMode, collate_version: ProgramVersion,
-                                            write_neg_timesteps: bool) -> error_stack::Result<(), CollationError> {
+pub fn collate_results<I: CollationIndexer, P: CollationPrefixer>(
+    multiggg_file: &Path,
+    mut indexer: I,
+    mut prefixer: Option<P>,
+    mode: CollationMode,
+    collate_version: ProgramVersion,
+    write_neg_timesteps: bool
+) -> error_stack::Result<(), CollationError> {
     let run_dir = multiggg_file.parent().ok_or_else(
         || CollationError::could_not_find(
             format!("run directory (could not get parent directory of the given multiggg file, {})", multiggg_file.display())
@@ -308,6 +334,11 @@ pub fn collate_results<I: CollationIndexer>(multiggg_file: &Path, mut indexer: I
 
     info!("{} .col files will be collated", col_files.len());
     info!("Spectrum order taken from {}", runlog.display());
+
+    // Initialize the prefixer
+    if let Some(pre) = &mut prefixer {
+        pre.set_provided_windows(&col_files);
+    }
 
     // Get the program versions and the scale factors from the .col files
     let (gsetup_version, gfit_version, window_sfs) = get_header_info(&col_files)?;
@@ -331,22 +362,17 @@ pub fn collate_results<I: CollationIndexer>(multiggg_file: &Path, mut indexer: I
     // Get values from the .col files
     let ncol = col_files.len();
     for (idx, cfile) in col_files.into_iter().enumerate() {
-        let window = cfile.file_name()
-            .ok_or_else(|| CollationError::parsing_error(
-                format!("Could not get base name of .col file {}", cfile.display())
-            ))?.to_str()
-            .ok_or_else(|| CollationError::parsing_error(
-                format!("Could not convert base name of {} to valid UTF-8", cfile.display())
-            ))?.split('.')
-            .next()
-            .ok_or_else(|| CollationError::parsing_error(
-                format!("Could not find a '.' in base name of {} to mark the end of the window name", cfile.display())
-            ))?;
+        let window = get_window_from_col_file(&cfile)?;
         info!("Reading .col file {}/{ncol}: {window}", idx+1);
         
-        let val_colname = window;
-        let val_err_colname = format!("{window}_error");
-        add_col_value(&mut rows, &mut indexer, &cfile, mode, val_colname, &val_err_colname, &mut missing)
+        let (val_colname, val_err_colname) = if let Some(pre) = &prefixer {
+            let p = pre.get_prefix(window)?;
+            (format!("{p}{window}"), format!("{p}{window}_error"))
+        } else {
+            (window.to_string(), format!("{window}_error"))
+        };
+        
+        add_col_value(&mut rows, &mut indexer, &cfile, mode, &val_colname, &val_err_colname, &mut missing)
             .change_context_lazy(|| CollationError::col_file_error(&cfile))?;
         columns.push(val_colname.to_string());
         columns.push(val_err_colname);
@@ -415,6 +441,21 @@ fn get_col_files(multiggg_file: &Path, run_dir: &Path) -> error_stack::Result<Ve
         let msg = format!("Missing {} of {} expected .col files, missing windows were: {missing_str}", missing_files.len(), nwin);
         Err(CollationError::missing_input(msg).into())
     }
+}
+
+fn get_window_from_col_file(col_file: &Path) -> Result<&str, CollationError> {
+    let window = col_file.file_name()
+        .ok_or_else(|| CollationError::parsing_error(
+            format!("Could not get base name of .col file {}", col_file.display())
+        ))?.to_str()
+        .ok_or_else(|| CollationError::parsing_error(
+            format!("Could not convert base name of {} to valid UTF-8", col_file.display())
+        ))?.split('.')
+        .next()
+        .ok_or_else(|| CollationError::parsing_error(
+            format!("Could not find a '.' in base name of {} to mark the end of the window name", col_file.display())
+        ))?;
+    Ok(window)
 }
 
 /// Get a path to one file from the `.col` file headers, error if it differs across files.
@@ -502,6 +543,22 @@ fn get_header_info(col_files: &[PathBuf]) -> error_stack::Result<(ProgramVersion
 
     let window_sfs = if sf_present { Some(window_sfs) } else { None };
     Ok((expected_gsetup_version, expected_gfit_version, window_sfs))
+}
+
+pub fn parse_window_name(window: &str) -> Result<(&str, f32), CollationError> {
+    let re = WINDOW_PARSE_REGEX.get_or_init(|| 
+        regex::Regex::new(r"^([a-z0-9]+)_([0-9]+)")
+            .expect("Could not compile window name regex")
+    );
+
+    let matches = re.captures(window).ok_or_else(|| CollationError::custom(
+        format!("Window {window} did not match the expected format, GAS_CENTER. GAS must contain lowercase letters and numbers, CENTER must contain numbers immediately following the underscore.")
+    ))?;
+
+    let gas = matches.get(1).expect("Window name regex match must contain a first capture group").as_str();
+    let center = matches.get(2).expect("Window name regex match must contain a first capture group").as_str();
+    let center = center.parse::<f32>().expect("Window center capture group should be a valid number");
+    Ok((gas, center))
 }
 
 /// Get the `sf=` value from a `.col` file's header, if present (`None` returned if not).
