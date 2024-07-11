@@ -1,0 +1,43 @@
+name: Docs for GH Pages
+on:
+  push:
+    branches:
+      - 'main'
+
+# For future reuse, only the `working-directory` line should
+# need changed to match the crate name in the last part of the
+# path.
+# Also this doesn't quite work as is; the ggg_rs subfolder of docs
+# relies on static pages in sibling directories. Will need instead to
+# to tar the entire doc directory and make an index.html file in the
+# root of doc that redirects to the ggg_rs/index.html file
+jobs:
+  build_docs:
+    name: Build docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo doc --no-default-features --no-deps
+      - run: tar -czf ../docs.tgz .
+        working-directory: ./target/doc/ggg_rs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: github-pages
+          path: ./target/doc/docs.tgz
+          if-no-files-found: error
+          retention-days: 1
+  deploy_docs:
+    needs: build_docs
+    name: Deploy docs
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }} 
+    steps:
+      - name: Deploy to Github Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

@@ -1,6 +1,7 @@
 {
-    "rust-analyzer.cargo.features": [
-        "static"
-    ],
-    "cmake.configureOnOpen": false
+  // "rust-analyzer.cargo.features": [
+  //   "static"
+  // ],
+  "rust-analyzer.cargo.noDefaultFeatures": true, 
+  "rust-analyzer.showUnlinkedFileNotification": false,
 }
