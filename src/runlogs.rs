@@ -182,13 +182,20 @@ where S: Serializer
 }
 
 impl RunlogDataRec {
+    /// Return the zero path difference time defined in this entry
+    ///
+    /// Converts the year, day, and hour fields of the runlog entry to
+    /// a [`chrono::DateTime`] instance with the UTC timezone. Will 
+    /// return `None` if the day value is out of range for the given year.
+    /// In most cases, it is safe to unwrap the returned option, since
+    /// `create_runlog` should not generate an invalid day-of-year value. 
     pub fn zpd_time(&self) -> Option<chrono::DateTime<chrono::Utc>> {
-        let h = self.hour.floor();
-        let m = (self.hour.fract() * 60.0).floor();
-        let s = (self.hour.fract() * 60.0 - m) * 60.0;
         let dt = chrono::NaiveDate::from_yo_opt(self.year, self.day as u32)?
-            .and_hms_opt(h as u32, m as u32, s as u32)?;
-        Some(chrono::DateTime::from_naive_utc_and_offset(dt, chrono::Utc))
+            .and_hms_opt(0, 0, 0).unwrap()
+            .and_utc();
+        let delta_nanos = self.hour * 3600.0 * 1e9;
+        let tdel = chrono::TimeDelta::nanoseconds(delta_nanos as i64);
+        Some(dt + tdel)
     }
 }
 
@@ -451,6 +458,50 @@ mod tests {
             .expect("Reading first data line should not error")
             .expect("First data line should not return None");
         approx::assert_abs_diff_eq!(test_rec, data_rec_1b);
+    }
+
+    #[rstest]
+    fn test_zpd_time_conversion() {
+        let mut data_rec = RunlogDataRec {
+            commented: false,
+            spectrum_name: "pa20040721saaaaa.043".to_string(), year: 2004, day: 203, hour: 20.5956, obs_lat: 45.945, obs_lon: -90.273, obs_alt: 0.442,
+            asza: 39.684, poff: 0.0, azim: 242.281, osds: 0.138, opd: 45.02, fovi: 0.0024, fovo: 0.0024, amal: 0.0, ifirst: 530991, ilast: 1460226,
+            delta_nu: 0.00753308262, pointer: 108232, bpw: -4, zoff: 0.000, snr: 117, apf: utils::ApodizationFxn::BoxCar, tins: 30.3, pins: 0.9, hins: 99.9,
+            tout: 29.1, pout: 950.70, hout: 62.8, sia: 207.5, fvsi: 0.0072, wspd: 1.7, wdir: 125., lasf: 15798.014, wavtkr: 9900., aipl: 0.002
+        };
+
+        let exp_dt = make_dt(2004, 7, 21, 20, 35, 44, 160_000_000);
+        assert_eq!(data_rec.zpd_time().unwrap(), exp_dt);
+
+        data_rec.year = 2004;
+        data_rec.day = 1;
+        data_rec.hour = 25.0;
+        let exp_dt = make_dt(2004, 1, 2, 1, 0, 0, 0);
+        assert_eq!(data_rec.zpd_time().unwrap(), exp_dt, "Hour > 24 failed");
+
+        data_rec.year = 2003;
+        data_rec.day = 365;
+        data_rec.hour = -6.0;
+        let exp_dt = make_dt(2003, 12, 30, 18, 0, 0, 0);
+        assert_eq!(data_rec.zpd_time().unwrap(), exp_dt, "Hour < 24 failed");
+        
+        data_rec.year = 2004;
+        data_rec.day = 1;
+        data_rec.hour = -6.0;
+        let exp_dt = make_dt(2003, 12, 31, 18, 0, 0, 0);
+        assert_eq!(data_rec.zpd_time().unwrap(), exp_dt, "Hour < 24 on Jan 1 failed");
+        
+        data_rec.year = 2003;
+        data_rec.day = 365;
+        data_rec.hour = 25.0;
+        let exp_dt = make_dt(2004, 1, 1, 1, 0, 0, 0);
+        assert_eq!(data_rec.zpd_time().unwrap(), exp_dt, "Hour > 24 on Dec 31 failed");
+    }
+
+    fn make_dt(year: i32, month: u32, day: u32, hour: u32, minute: u32, second: u32, nanos: u32) -> chrono::DateTime<chrono::Utc> {
+        chrono::NaiveDate::from_ymd_opt(year, month, day).unwrap()
+            .and_hms_nano_opt(hour, minute, second, nanos).unwrap()
+            .and_utc()
     }
 }
 

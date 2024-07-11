@@ -1,6 +1,7 @@
 use std::{collections::HashMap, io::BufRead, path::{Path, PathBuf}, process::ExitCode};
 
 use clap::Parser;
+use clap_verbosity_flag::{Verbosity, InfoLevel};
 use error_stack::ResultExt;
 use ggg_rs::{cit_spectrum_name::{CitDetector, CitSpectrumName, NoDetectorSpecName}, collation::{collate_results, parse_window_name, CollationError, CollationIndexer, CollationMode, CollationPrefixer, CollationResult}, output_files::ProgramVersion, runlogs::{FallibleRunlog, RunlogDataRec}, utils::get_ggg_path};
 use log4rs::{encode::pattern::PatternEncoder, append::console::{ConsoleAppender, Target}, Config, config::{Appender, Root}};
@@ -22,7 +23,7 @@ fn main() -> ExitCode {
 
 fn main_inner() -> error_stack::Result<(), CollationError> {
     let clargs = CollateCli::parse();
-    init_logging(log::LevelFilter::Info);
+    init_logging(clargs.verbosity.log_level_filter());
     let multiggg_file = PathBuf::from(&clargs.multiggg_file);
     let collate_version = ProgramVersion { 
         program: "collate_tccon_results".to_string(),
@@ -87,6 +88,9 @@ struct CollateCli {
     /// if it exists. Giving a path to this argument that does not exist is an error.
     #[clap(long)]
     prefix_file: Option<PathBuf>,
+
+    #[command(flatten)]
+    verbosity: Verbosity<InfoLevel>,
 }
 
 fn init_logging(level: log::LevelFilter) {
@@ -222,7 +226,8 @@ impl CollationIndexer for TcconColIndexer {
 
 
 struct TcconColPrefixer {
-    ranges: Vec<(f32, f32, String)>
+    ranges: Vec<(f32, f32, String)>,
+    all_prefixes: Vec<String>,
 }
 
 impl TcconColPrefixer {
@@ -231,6 +236,7 @@ impl TcconColPrefixer {
             .change_context_lazy(|| CollationError::could_not_read_file("failed to open", prefix_file))?;
         let rdr = std::io::BufReader::new(f);
         let mut ranges = vec![];
+        let mut all_prefixes = vec![];
         for (iline, line) in rdr.lines().enumerate() {
             let line = line.change_context_lazy(|| CollationError::could_not_read_file(
                 format!("failed to read line {}", iline+1), prefix_file)
@@ -257,11 +263,14 @@ impl TcconColPrefixer {
             let end_wn = end_wn.parse::<f32>().change_context_lazy(|| CollationError::could_not_read_file(
                 format!("starting wavenumber on line {} is not a valid number", iline+1), prefix_file)
             )?;
-
+            
+            if !prefix.is_empty() {
+                all_prefixes.push(prefix.clone())
+            }
             ranges.push((start_wn, end_wn, prefix));
         }
         
-        Ok(Self { ranges })
+        Ok(Self { ranges, all_prefixes })
     }
 }
 
@@ -273,7 +282,16 @@ impl CollationPrefixer for TcconColPrefixer {
 
         for (start, end, prefix) in self.ranges.iter() {
             if start <= &center && end > &center {
-                return Ok(&prefix)
+                if !prefix.is_empty() && window.starts_with(prefix) {
+                    log::warn!("Window {window} already begins with {prefix}. Please update your post processing to avoid adding this prefix yourself.");
+                    return Ok("")
+                } else if self.all_prefixes.iter().any(|p| window.starts_with(p)) {
+                    return Err(CollationError::custom(
+                        format!("Window {window} begins with a prefix it should not.")
+                    ))
+                } else {
+                    return Ok(&prefix)
+                }
             }
         }
 
