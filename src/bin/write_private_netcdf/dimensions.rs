@@ -4,7 +4,7 @@ use chrono::{DateTime, Utc};
 use error_stack::ResultExt;
 use itertools::Itertools;
 use log::{debug, info};
-use ndarray::{Array1, ArrayView1, Array2};
+use ndarray::{Array1, ArrayView1};
 
 use crate::sources::DataSourceList;
 
@@ -121,7 +121,7 @@ impl DimensionWithValues {
         self.dimension().to_string()
     }
 
-    fn write_variable<'a>(&self, nc: &'a mut netcdf::GroupMut<'a>) -> error_stack::Result<(), netcdf::Error> {
+    fn write_variable(&self, nc: &mut netcdf::GroupMut) -> error_stack::Result<(), netcdf::Error> {
         match self {
             DimensionWithValues::Time(times, specnames) => {
                 Self::write_time_var(nc, times.view(), self.dimension())?;
@@ -158,11 +158,8 @@ impl DimensionWithValues {
         Ok(())
     }
 
-    fn write_specnames<'a>(nc: &'a mut netcdf::GroupMut<'a>, specnames: ArrayView1<String>) -> error_stack::Result<(), netcdf::Error> {
+    fn write_specnames(nc: &mut netcdf::GroupMut, specnames: ArrayView1<String>) -> error_stack::Result<(), netcdf::Error> {
         let ntimes = nc.dimension(&Dimension::Time.to_string())
-            .ok_or_else(|| netcdf::Error::NotFound(Dimension::Time.to_string()))?
-            .len();
-        let speclength = nc.dimension(&Dimension::SpectrumNameLength.to_string())
             .ok_or_else(|| netcdf::Error::NotFound(Dimension::Time.to_string()))?
             .len();
 
@@ -171,30 +168,11 @@ impl DimensionWithValues {
                 .attach_printable("Number of times in netCDF file does not match the number of spectrum names")?;
         }
 
-        let mut specname_chars = Array2::<u8>::zeros((ntimes, speclength));
-        for (mut char_row, specname) in specname_chars.rows_mut().into_iter().zip(specnames.iter()) {
-            let bytes = Array1::from_iter(specname.as_bytes().iter().copied());
-            char_row.assign(&bytes);
+        let mut var = nc.add_string_variable("spectrum", &[&Dimension::Time.to_string()])?;
+        for (i, spec) in specnames.iter().enumerate() {
+            let ex: netcdf::Extents = i.into();
+            var.put_string(&spec, ex)?;
         }
-
-        // Should this error, we might be able to use "as_standard_order" to convert it - but we want to be
-        // sure that does the right thing, so let's wait for a test case.
-        let values_slice = specname_chars.as_slice()
-        .ok_or_else(|| netcdf::Error::Str(
-            "Could not convert 2D character array to standard order slice".to_string()
-        ))?;
-
-        let mut var = nc.add_variable_with_type(
-            "spectrum",
-            &[&Dimension::Time.to_string(), &Dimension::SpectrumNameLength.to_string()],
-            &netcdf::types::VariableType::Basic(netcdf::types::BasicType::Char)
-        )?;
-
-        var.put_values(values_slice, netcdf::Extents::All)?;
-
-        // unsafe {
-        //     var.put_raw_values(values_slice, netcdf::Extents::All)?;
-        // }
         var.put_attribute("_Encoding", "UTF-8")?;
         var.put_attribute("standard_name", "spectrum_file_name")?;
         var.put_attribute("long_name", "spectrum file name")?;
@@ -204,7 +182,7 @@ impl DimensionWithValues {
     }
 }
 
-pub(crate) fn write_required_dimensions<'a>(nc: &'a mut netcdf::GroupMut<'a>, sources: &DataSourceList) -> error_stack::Result<(), DimensionError> {
+pub(crate) fn write_required_dimensions(nc: &mut netcdf::GroupMut, sources: &DataSourceList) -> error_stack::Result<(), DimensionError> {
     let req_dims = identify_required_dimensions(sources)?;
     create_dims_in_group(nc, &req_dims)?;
     write_dims_in_group(nc, &req_dims)?;
