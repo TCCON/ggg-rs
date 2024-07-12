@@ -11,7 +11,7 @@ pub enum TranscriptionError {
     #[error("In file {}: {problem}", file.display())]
     UnexpectedEvent{file: PathBuf, problem: String},
     #[error("Error writing variable {variable} to netCDF: {inner}")]
-    WriteError{variable: String, inner: netcdf::error::Error}
+    WriteError{variable: String, inner: netcdf::Error}
 }
 
 

@@ -80,7 +80,7 @@ fn main_inner() -> error_stack::Result<(), CliError> {
     let mut flags = ds.variable_mut("flag")
         .ok_or_else(|| CliError::MissingReqVariable("flag"))
         .attach_printable("This occurred while trying to get the flag variable in either the new output file or (if --in-place given) the original file")?; // this really shouldn't happen, since we read that variable in already
-    flags.put_values(data.flags.as_slice().unwrap(), netcdf::extent::Extents::All)
+    flags.put_values(data.flags.as_slice().unwrap(), netcdf::Extents::All)
         .change_context(CliError::NcError)
         .attach_printable("This occur write new flag values to either the new output file or (if --in-place given) the original file")?;
 
@@ -114,21 +114,21 @@ fn load_flags_and_data(nc_file: &Path, filter_varname: &str ) -> error_stack::Re
 
     let timestamps = ds.variable("time")
         .ok_or_else(|| CliError::MissingReqVariable("time"))?
-        .values_arr::<f64, _>(netcdf::extent::Extents::All)
+        .get::<f64, _>(netcdf::Extents::All)
         .change_context(CliError::NcError)?
         .into_dimensionality::<ndarray::Ix1>()
         .change_context_lazy(|| CliError::WrongDimension("time".to_string(), 1))?;
 
     let flags = ds.variable("flag")
         .ok_or_else(|| CliError::MissingReqVariable("flag"))?
-        .values_arr::<i16, _>(netcdf::extent::Extents::All)
+        .get::<i16, _>(netcdf::Extents::All)
         .change_context(CliError::NcError)?
         .into_dimensionality::<ndarray::Ix1>()
         .change_context_lazy(|| CliError::WrongDimension("flag".to_string(), 1))?;
 
     let filter_var = ds.variable(filter_varname)
         .ok_or_else(|| CliError::MissingFilterVariable(filter_varname.to_string()))?
-        .values_arr::<f32, _>(netcdf::extent::Extents::All)
+        .get::<f32, _>(netcdf::Extents::All)
         .change_context(CliError::NcError)
         .attach_printable("This error may be caused by trying to filter on a variable that is not of type 'float'")?
         .into_dimensionality::<ndarray::Ix1>()

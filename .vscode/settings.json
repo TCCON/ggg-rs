@@ -1,7 +1,12 @@
 {
-  // "rust-analyzer.cargo.features": [
-  //   "static"
-  // ],
+  "rust-analyzer.cargo.features": [
+    "netcdf", "inprogress"
+  ],
+  "rust-analyzer.server.extraEnv": {
+    "HDF5_DIR": "/Users/laughner/Documents/Projects/TCCON/ggg-stable/install/.mambaenv",
+    "NETCDF_DIR": "/Users/laughner/Documents/Projects/TCCON/ggg-stable/install/.mambaenv",
+    "RUSTFLAGS": "-C link-args=-Wl,-rpath,/Users/laughner/Documents/Projects/TCCON/ggg-stable/install/.mambaenv/lib"
+  },
   "rust-analyzer.cargo.noDefaultFeatures": true, 
   "rust-analyzer.showUnlinkedFileNotification": false,
 }
