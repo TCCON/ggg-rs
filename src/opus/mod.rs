@@ -1,5 +1,6 @@
 use std::{path::{Path, PathBuf}, fs::File, io::{Seek, Read}, str::FromStr, slice::ChunksExact, fmt::{Debug, Display}, collections::HashMap};
 
+use itertools::Itertools;
 use ndarray::Array1;
 use crate::{runlogs, utils::{self,GggError}, opus::constants::bruker::BrukerParType};
 
@@ -57,6 +58,38 @@ impl Display for MissingOpusParameterError {
 }
 
 impl std::error::Error for MissingOpusParameterError {}
+
+#[derive(Debug)]
+pub enum OpusParameterSearchError {
+    NotFound(String),
+    MultipleFound(String, Vec<BrukerBlockType>)
+}
+
+impl Display for OpusParameterSearchError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            OpusParameterSearchError::NotFound(param_name) => write!(f, "Parameter '{param_name}' not present in any block"),
+            OpusParameterSearchError::MultipleFound(param_name, blocks) => {
+                let n = blocks.len();
+                let bstr = blocks.iter().map(|b| b.to_string()).join(", ");
+                write!(f, "Parameter '{param_name}' was found in {n} blocks: {bstr}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for OpusParameterSearchError {}
+
+impl OpusParameterSearchError {
+    pub fn not_found<S: ToString>(parameter: S) -> Self {
+        Self::NotFound(parameter.to_string())
+    }
+
+    pub fn multiple_found<S: ToString, B: IntoIterator<Item = BrukerBlockType>>(parameter: S, blocks: B) -> Self {
+        let blocks = blocks.into_iter().collect_vec();
+        Self::MultipleFound(parameter.to_string(), blocks)
+    }
+}
 
 pub struct Spectrum {
     pub path: PathBuf,
@@ -518,12 +551,76 @@ impl IgramHeader {
         todo!()
     }
 
+    /// Retrieve a value from a given block in this header
+    /// 
+    /// # Inputs
+    /// - `block`: which block the parameter can be found in
+    /// - `parameter`: the parameter name, usually a 3-4 character string, $GGGPATH/utils/OpusHdr/OpusHdr
+    ///   will show the available parameters grouped by block for an interferogram or spectrum, but note that
+    ///   it appends numbers when parameters are present in multiple blocks, so what it prints may not be
+    ///   exactly what you give here.
+    /// 
+    /// # Returns
+    /// A reference to the parameter value with a lifetime bounded by the lifetime of this header.
+    /// 
+    /// # Errors
+    /// If the block cannot be found in the header or the parameter is not present in the block.
+    /// 
+    /// # See also
+    /// - [`IgramHeader::get_value_any_block`]: find a parameter across all blocks.
+    /// - [`IgramHeader::get_value_any_block_opt`]: convenience version of `get_value_any_block`
     pub fn get_value(&self, block: constants::bruker::BrukerBlockType, parameter: &str) -> Result<&BrukerParValue, MissingOpusParameterError> {
         self.parameter_blocks
             .get(&block)
             .ok_or_else(|| MissingOpusParameterError{ block, parameter: parameter.to_string(), block_missing: true})?
             .get(parameter)
             .ok_or_else(|| MissingOpusParameterError { block, parameter: parameter.to_string(), block_missing: false })
+    }
+
+    /// Retrieve a value from the header without knowing which block it is in.
+    /// 
+    /// Takes the parameter name (usually 3 or 4 characters) and searches all blocks for it.
+    /// Returns `Ok` if the parameter is present in exactly one block. Returns `Err` if the
+    /// parameter is missing or is present more than once.
+    /// 
+    /// # See also
+    /// - [`IgramHeader::get_value`]: find a parameter in a given block. This will be more efficient since it
+    ///   does not have to iterate across all blocks to search for the parameter.
+    /// - [`IgramHeader::get_value_any_block_opt`]: a convenience version of this function that assumes a
+    ///   parameter being present in multiple blocks should cause a panic.
+    pub fn get_value_any_block(&self, parameter: &str) -> Result<&BrukerParValue, OpusParameterSearchError> {
+        let matching_params = self.parameter_blocks.iter()
+            .filter_map(|(key ,block)| block.get(parameter).map(|v| (key, v)))
+            .collect_vec();
+
+        if matching_params.is_empty() {
+            Err(OpusParameterSearchError::not_found(parameter))
+        } else if matching_params.len() > 1 {
+            let blocks = matching_params.iter().map(|(b, _)| **b);
+            Err(OpusParameterSearchError::multiple_found(parameter, blocks))
+        } else {
+            let value = matching_params[0].1;
+            Ok(value)
+        }
+    }
+
+    /// Retrieve a value from the header without knowing which block it is in.
+    ///
+    /// Unlike [`IgramHeader::get_value_any_block`], this returns `Some` if the parameter is
+    /// found exactly once and `None` if it is missing. If the parameter occurs in multiple
+    /// blocks, this function panics, so if you need to recover from that case, use
+    /// [`IgramHeader::get_value_any_block`] instead.
+    /// 
+    /// # Panics
+    /// If the `parameter` exists in multiple blocks.
+    pub fn get_value_any_block_opt(&self, parameter: &str) -> Option<&BrukerParValue> {
+        match self.get_value_any_block(parameter) {
+            Ok(value) => Some(value),
+            Err(OpusParameterSearchError::NotFound(_)) => None,
+            Err(e) => {
+                panic!("{e}")
+            }
+        }
     }
 }
 
