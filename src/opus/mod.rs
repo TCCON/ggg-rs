@@ -579,9 +579,16 @@ impl IgramHeader {
 
     /// Retrieve a value from the header without knowing which block it is in.
     /// 
-    /// Takes the parameter name (usually 3 or 4 characters) and searches all blocks for it.
+    /// Takes the parameter name and searches all blocks for it.
     /// Returns `Ok` if the parameter is present in exactly one block. Returns `Err` if the
     /// parameter is missing or is present more than once.
+    /// 
+    /// Parameters that show up in the interferogram and spectrum blocks for both channels can be
+    /// differentiated by appending a '1' or '2' and an 'I', 'i', 'S', or 's' to the end of the parameter
+    /// name. For example, to get the "NPT" parameter for the primary interferogram, pass "NPT1I" or "NPT1i"
+    /// as the parameter name. 'I' and 'i' will give the interferogram, 'S' and 's' the spectrum.
+    /// If the parameter is present in both channels for the interferogram or spectrum blocks (but not both),
+    /// you only need to include the '1' or '2'.
     /// 
     /// # See also
     /// - [`IgramHeader::get_value`]: find a parameter in a given block. This will be more efficient since it
@@ -589,18 +596,67 @@ impl IgramHeader {
     /// - [`IgramHeader::get_value_any_block_opt`]: a convenience version of this function that assumes a
     ///   parameter being present in multiple blocks should cause a panic.
     pub fn get_value_any_block(&self, parameter: &str) -> Result<&BrukerParValue, OpusParameterSearchError> {
+        // First split off any extra 1 or 2 at the end
+        let (search_param, channel_blocks) = if parameter.len() == 3 {
+            (parameter, None)
+        } else if parameter.len() == 4 {
+            let i3 = parameter.char_indices().nth(3).map(|(i, _)| i).unwrap_or(parameter.len());
+            let sp = &parameter[..i3];
+            let c = match parameter.chars().last() {
+                Some('1') => Some(BrukerBlockType::primary_detector_blocks()),
+                Some('2') => Some(BrukerBlockType::secondary_detector_blocks()),
+                Some(c) => {
+                    log::warn!("Fourth character of the parameter name should be a 1 or 2, not {c}");
+                    None
+                },
+                None => None
+            };
+            (sp, c)
+        } else if parameter.len() == 5 {
+            let i3 = parameter.char_indices().nth(3).map(|(i, _)| i).unwrap_or(parameter.len());
+            let sp = &parameter[..i3];
+            let chan = parameter.chars().nth_back(1).unwrap_or(' ');
+            let data = parameter.chars().nth_back(0).unwrap_or(' ');
+            let c = match (chan, data) {
+                ('1', 'i') | ('1', 'I') => Some(BrukerBlockType::primary_igram_blocks()),
+                ('1', 's') | ('1', 'S') => Some(BrukerBlockType::primary_spectrum_blocks()),
+                ('2', 'i') | ('2', 'I') => Some(BrukerBlockType::secondary_igram_blocks()),
+                ('2', 's') | ('2', 'S') => Some(BrukerBlockType::secondary_spectrum_blocks()),
+                (a, b) => {
+                    log::warn!("Fourth character of the parameter name should be a 1 or 2 and fifth should be I, i, S, or S, got {a} and {b}");
+                    None
+                }
+            };
+            (sp, c)
+        } else {
+            (parameter, None)
+        };
+
         let matching_params = self.parameter_blocks.iter()
-            .filter_map(|(key ,block)| block.get(parameter).map(|v| (key, v)))
+            .filter_map(|(key ,block)| block.get(search_param).map(|v| (key, v)))
             .collect_vec();
 
+        // If there's exactly two matching parameters, they probably came from a pair of
+        // blocks that represent a primary and secondary channel. If the user indicated which
+        // channel as the 4th character, try filtering that.
+        let matching_params = if let Some(blocks_to_keep) = channel_blocks {
+            matching_params.into_iter()
+                .filter(|(b, v)| blocks_to_keep.contains(*b))
+                .collect_vec()
+        } else {
+            matching_params
+        };
+
+        // This might need a little better error message to clarify primary/secondary block
+        // issues
         if matching_params.is_empty() {
             Err(OpusParameterSearchError::not_found(parameter))
-        } else if matching_params.len() > 1 {
-            let blocks = matching_params.iter().map(|(b, _)| **b);
-            Err(OpusParameterSearchError::multiple_found(parameter, blocks))
-        } else {
+        } else if matching_params.len() == 1 {
             let value = matching_params[0].1;
             Ok(value)
+        } else {
+            let blocks = matching_params.iter().map(|(b, _)| **b);
+            Err(OpusParameterSearchError::multiple_found(parameter, blocks))
         }
     }
 

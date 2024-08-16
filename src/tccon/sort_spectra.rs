@@ -73,12 +73,12 @@ impl<'s> Display for SortingSpec<'s> {
 
 impl<'s> PartialOrd for SortingSpec<'s> {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        match self.head.partial_cmp(&other.head) {
+        match self.head.partial_cmp(other.head) {
             Some(core::cmp::Ordering::Equal) => {}
             ord => return ord,
         }
 
-        match self.tail.partial_cmp(&other.tail) {
+        match self.tail.partial_cmp(other.tail) {
             Some(core::cmp::Ordering::Equal) => {}
             ord => return ord,
         }

@@ -31,6 +31,10 @@ tabled = "0.15.0"
 thiserror = "1.0.50"
 toml = "0.8.8"
 
+# Dependencies for building the Python package around this crate
+pyo3 = { version = "0.22", optional = true }
+
+
 [dev-dependencies]
 rstest = "0.18.2"
 
@@ -39,8 +43,12 @@ inprogress = []
 netcdf = ["dep:netcdf"]
 static = ["netcdf", "netcdf/static"]
 plotting = ["dep:plotly"]
+python = ["dep:pyo3"]
 
 [lib]
+# cdylib is needed to make the Python bindings
+# lib should produce the normal Rust library
+crate-type = ["lib", "cdylib"]
 
 [[bin]]
 name = "bin2nc"

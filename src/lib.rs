@@ -18,3 +18,6 @@ pub mod output_files;
 pub mod collation;
 /// Code supporting TCCON-focused programs
 pub mod tccon;
+
+#[cfg(feature = "python")]
+mod python;

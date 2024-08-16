@@ -151,6 +151,40 @@ pub mod bruker {
                 false
             }
         }
+
+        pub fn primary_detector_blocks() -> &'static [BrukerBlockType] {
+            &[BrukerBlockType::IgramPrimaryData, 
+              BrukerBlockType::IgramPrimaryStatus,
+              BrukerBlockType::SpectrumPrimaryData,
+              BrukerBlockType::SpectrumPrimaryStatus]
+        }
+
+        pub fn secondary_detector_blocks() -> &'static [BrukerBlockType] {
+            &[BrukerBlockType::IgramSecondaryData,
+             BrukerBlockType::IgramSecondaryStatus,
+             BrukerBlockType::SpectrumSecondaryData,
+             BrukerBlockType::SpectrumSecondaryStatus]
+        }
+
+        pub fn primary_igram_blocks() -> &'static [BrukerBlockType] {
+            &[BrukerBlockType::IgramPrimaryData, 
+              BrukerBlockType::IgramPrimaryStatus]
+        }
+
+        pub fn primary_spectrum_blocks() -> &'static [BrukerBlockType] {
+            &[BrukerBlockType::SpectrumPrimaryData,
+              BrukerBlockType::SpectrumPrimaryStatus]
+        }
+
+        pub fn secondary_igram_blocks() -> &'static [BrukerBlockType] {
+            &[BrukerBlockType::IgramSecondaryData,
+             BrukerBlockType::IgramSecondaryStatus]
+        }
+
+        pub fn secondary_spectrum_blocks() -> &'static [BrukerBlockType] {
+            &[BrukerBlockType::SpectrumSecondaryData,
+             BrukerBlockType::SpectrumSecondaryStatus]
+        }
     }
 
     pub enum BrukerParType {

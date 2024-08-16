@@ -1,7 +1,7 @@
 {
-  // "rust-analyzer.cargo.features": [
-  //   "static"
-  // ],
+  "rust-analyzer.cargo.features": [
+    "python"
+  ],
   "rust-analyzer.cargo.noDefaultFeatures": true, 
   "rust-analyzer.showUnlinkedFileNotification": false,
 }
