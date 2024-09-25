@@ -126,7 +126,10 @@ pub enum BodyError {
     /// Some value in the file is formatted incorrectly, and therefore
     /// cannot be interpreted.
     #[error("Unexpected format in {loc}: {reason}")]
-    UnexpectedFormat{loc: FileLocation, reason: String}
+    UnexpectedFormat{loc: FileLocation, reason: String},
+
+    #[error("{0}")]
+    Custom(String),
 }
 
 impl BodyError {
@@ -142,6 +145,10 @@ impl BodyError {
             loc: FileLocation { path, line_num, line_value },
             reason: reason.into()
         }
+    }
+
+    pub fn custom<R: Into<String>>(reason: R) -> Self {
+        Self::Custom(reason.into())
     }
 }
 

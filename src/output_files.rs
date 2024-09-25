@@ -10,7 +10,7 @@ use itertools::Itertools;
 
 use crate::error::{BodyError, HeaderError, WriteError};
 use crate::runlogs::RunlogDataRec;
-use crate::utils::{self, get_nhead_ncol, FileBuf, GggError};
+use crate::utils::{self, get_file_shape_info, get_nhead_ncol, FileBuf, GggError};
 
 pub const POSTPROC_FILL_VALUE: f64 = 9.8765e35;
 static PROGRAM_VERSION_REGEX: OnceLock<regex::Regex> = OnceLock::new();
@@ -152,23 +152,29 @@ fn parse_postproc_format_str(fmt: String, ignore_a1: bool) -> Result<FortFormat,
 /// Given an open file reader that points to the start of a tabular file,
 /// this reads the header (and advances the pointer to after the header).
 /// The column names are parsed from the final line of the header and returned.
-pub fn read_tabular_file_header<F: BufRead>(file: &mut FileBuf<F>) -> error_stack::Result<(FortFormat, Vec<String>), HeaderError> {
-    let (nhead, _) = get_nhead_ncol(file)
-        .change_context_lazy(|| HeaderError::ParseError {
-            location: file.path.as_path().into(), 
-            cause: "Could not parse number of header lines and data columns".to_string() 
-        })?;
+pub fn read_postproc_file_header<F: BufRead>(file: &mut FileBuf<F>) -> error_stack::Result<PostprocFileHeader, HeaderError> {
+    let sizes = get_file_shape_info(file, 2)?;
+    let nhead = sizes[0];
+    let ncol = sizes[1];
+    let nrow = sizes.get(2).map(|v| *v);
+    let nauxcol = sizes.get(3).map(|v| *v);
 
+    let mut missing_val_line = None;
     let mut format_line = None;
+    let mut extra_lines = vec![];
     let mut line = String::new();
-    for _ in 1..nhead {
+    for ihead in 1..nhead {
         line = file.read_header_line()?;
         if line.trim().starts_with("format") {
             format_line = Some(line.clone());
+        } else if line.trim().starts_with("missing:") {
+            missing_val_line = Some(line.clone());
+        } else if ihead < nhead - 1 {
+            extra_lines.push(line.clone());
         }
     }
 
-    let fmt = if let Some(fmt) = format_line {
+    let format = if let Some(fmt) = format_line {
         parse_postproc_format_str(fmt, true).map_err(|e| {
             HeaderError::ParseError { 
                 location: file.path.as_path().into(),
@@ -178,11 +184,30 @@ pub fn read_tabular_file_header<F: BufRead>(file: &mut FileBuf<F>) -> error_stac
         return Err(HeaderError::ParseError { location: file.path.as_path().into(), cause: "Could not find format line in header".to_string() }.into());
     };
 
+    let missing = missing_val_line.map(|line| {
+        let (_, val) = line.split_once(":").unwrap();
+        val.parse::<f32>().map_err(|e| HeaderError::ParseError { 
+            location: file.path.clone().into(),
+            cause: format!("Missing value could not be parsed as a float ({e}")
+        })
+    }).transpose()?;
+
     let column_names = line.trim()
         .split_ascii_whitespace()
         .map(|s| s.to_string())
         .collect_vec();
-    Ok((fmt, column_names))
+    Ok(PostprocFileHeader { nhead, ncol, nrow, nauxcol, missing, format, column_names, extra_lines })
+}
+
+pub struct PostprocFileHeader {
+    pub nhead: usize,
+    pub ncol: usize,
+    pub nrow: Option<usize>,
+    pub nauxcol: Option<usize>,
+    pub missing: Option<f32>,
+    pub format: FortFormat,
+    pub column_names: Vec<String>,
+    pub extra_lines: Vec<String>,
 }
 
 pub fn read_col_file_header<F: BufRead>(file: &mut FileBuf<F>) -> error_stack::Result<ColFileHeader, HeaderError> {
@@ -504,6 +529,34 @@ impl From<&RunlogDataRec> for AuxData {
 }
 
 
+pub enum PostprocType {
+    Vsw,
+    Tsw,
+    Vav,
+    Tav,
+    VswAda,
+    VavAda,
+    VavAdaAia,
+    Other(String)
+}
+
+impl PostprocType {
+    pub fn from_path(path: &Path) -> Option<Self> {
+        let name = path.file_name()?.to_string_lossy();
+        let (_, ext) = name.split_once(".")?;
+        match ext {
+            "vsw" => Some(Self::Vsw),
+            "tsw" => Some(Self::Tsw),
+            "vav" => Some(Self::Vav),
+            "tav" => Some(Self::Tav),
+            "vsw.ada" => Some(Self::VswAda),
+            "vav.ada" => Some(Self::VavAda),
+            "vav.ada.aia" => Some(Self::VavAdaAia),
+            _ => Some(Self::Other(ext.to_string()))
+        }
+    }
+}
+
 /// One row of data in a postprocessing file.
 #[derive(Debug, serde::Deserialize, serde::Serialize)]
 pub struct PostprocRow {
@@ -564,20 +617,22 @@ impl Iterator for PostprocRowIter {
 
 /// Convenience function to open a postprocessing output file at `path` and
 /// return an iterator over its data rows.
-pub fn open_and_iter_postproc_file(path: &Path) -> error_stack::Result<PostprocRowIter, BodyError> {
+pub fn open_and_iter_postproc_file(path: &Path) -> error_stack::Result<(PostprocFileHeader, PostprocRowIter), BodyError> {
     let mut fbuf = FileBuf::open(path)
         .change_context_lazy(|| BodyError::could_not_read("error opening .col file", Some(path.into()), None, None))?;
 
-    let (fmt, columns) = read_tabular_file_header(&mut fbuf).change_context_lazy(|| {
-        BodyError::could_not_read("error getting information from .col file header", Some(path.into()), None, None)
+    let header = read_postproc_file_header(&mut fbuf).change_context_lazy(|| {
+        BodyError::could_not_read("error getting information from postprocessing file header", Some(path.into()), None, None)
     })?;
 
-    Ok(PostprocRowIter {
+    let it = PostprocRowIter {
         lines: fbuf.lines(),
-        fmt,
-        colnames: columns,
+        fmt: header.format.clone(),
+        colnames: header.column_names.clone(),
         src_path: path.to_path_buf()
-    })
+    };
+
+    Ok((header, it))
 }
 
 /// Represents data from a row of any tabular GGG file that has the spectrum name,

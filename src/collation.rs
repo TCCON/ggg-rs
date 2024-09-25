@@ -46,7 +46,6 @@ use crate::utils::{self, FileBuf};
 pub type CollationResult<T> = Result<T, CollationError>;
 
 static WINDOW_SF_REGEX: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-static WINDOW_PARSE_REGEX: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
 
 /// Possible errors during data collation.
 /// 
@@ -543,22 +542,6 @@ fn get_header_info(col_files: &[PathBuf]) -> error_stack::Result<(ProgramVersion
 
     let window_sfs = if sf_present { Some(window_sfs) } else { None };
     Ok((expected_gsetup_version, expected_gfit_version, window_sfs))
-}
-
-pub fn parse_window_name(window: &str) -> Result<(&str, f32), CollationError> {
-    let re = WINDOW_PARSE_REGEX.get_or_init(|| 
-        regex::Regex::new(r"^([a-z0-9]+)_([0-9]+)")
-            .expect("Could not compile window name regex")
-    );
-
-    let matches = re.captures(window).ok_or_else(|| CollationError::custom(
-        format!("Window {window} did not match the expected format, GAS_CENTER. GAS must contain lowercase letters and numbers, CENTER must contain numbers immediately following the underscore.")
-    ))?;
-
-    let gas = matches.get(1).expect("Window name regex match must contain a first capture group").as_str();
-    let center = matches.get(2).expect("Window name regex match must contain a first capture group").as_str();
-    let center = center.parse::<f32>().expect("Window center capture group should be a valid number");
-    Ok((gas, center))
 }
 
 /// Get the `sf=` value from a `.col` file's header, if present (`None` returned if not).
