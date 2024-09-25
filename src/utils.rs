@@ -22,6 +22,9 @@ use crate::error::{DateTimeError, FileLocation, BodyError};
 
 use crate::error::HeaderError;
 
+static WINDOW_PARSE_REGEX: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+
+
 /// Standard error type for all GGG functions
 #[derive(Debug)]
 pub enum GggError {
@@ -898,6 +901,25 @@ impl DataPartArgs {
             DataPartition::new_from_ggg_path()
         }
     }
+}
+
+pub fn parse_window_name(window: &str) -> Result<(&str, f32), BodyError> {
+    let re = WINDOW_PARSE_REGEX.get_or_init(|| 
+        regex::Regex::new(r"^([a-z0-9]+)_([0-9]+)")
+            .expect("Could not compile window name regex")
+    );
+
+    let matches = re.captures(window).ok_or_else(|| BodyError::unexpected_format(
+        format!("Window {window} did not match the expected format, GAS_CENTER. GAS must contain lowercase letters and numbers, CENTER must contain numbers immediately following the underscore."),
+        None,
+        None,
+        None
+    ))?;
+
+    let gas = matches.get(1).expect("Window name regex match must contain a first capture group").as_str();
+    let center = matches.get(2).expect("Window name regex match must contain a first capture group").as_str();
+    let center = center.parse::<f32>().expect("Window center capture group should be a valid number");
+    Ok((gas, center))
 }
 
 /// Convert a runlog year, day, and hour value to a proper UTC datetime

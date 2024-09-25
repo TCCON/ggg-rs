@@ -349,11 +349,6 @@ impl CitSpectrumName {
     pub fn spectrum_number(&self) -> u64 {
         self.spec_num
     }
-
-    pub fn spectrum_name_with_detector(&self, detector: CitDetector) -> String {
-        let (pre, post) = split_specname_around_detector(&self.spectrum_name);
-        format!("{pre}{detector}{post}")
-    }
 }
 
 impl FromStr for CitSpectrumName {
@@ -445,6 +440,10 @@ impl NoDetectorSpecName {
     pub fn new(spectrum: &str) -> Result<Self, CitFormatError> {
         let inner = CitSpectrumName::from_str(spectrum)?;
         Ok(Self(inner))
+    }
+
+    pub fn spectrum_name(&self) -> &str {
+        self.0.spectrum()
     }
 }
 

@@ -16,7 +16,7 @@ fn main() -> ExitCode {
 
 fn main_inner() -> error_stack::Result<(), CliError> {
     let clargs = Cli::parse();
-    let it = output_files::open_and_iter_postproc_file(&clargs.file)
+    let (_, it) = output_files::open_and_iter_postproc_file(&clargs.file)
         .change_context_lazy(|| "Error opening file".into())?;
 
     for col in clargs.columns.iter() {
