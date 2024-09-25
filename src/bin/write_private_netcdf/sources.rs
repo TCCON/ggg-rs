@@ -1,7 +1,9 @@
-use std::{path::{PathBuf, Path}, str::FromStr, fmt::Display, collections::HashMap};
+use std::{collections::{HashMap, HashSet}, fmt::Display, path::{Path, PathBuf}, str::FromStr};
 
 use chrono::{DateTime, Utc};
-use ggg_rs::{runlogs::FallibleRunlog, cit_spectrum_name::{CitSpectrumName, NoDetectorSpecName}};
+use error_stack::ResultExt;
+use ggg_rs::{cit_spectrum_name::{CitSpectrumName, NoDetectorSpecName}, output_files::{open_and_iter_postproc_file, PostprocType}, runlogs::FallibleRunlog, tccon::input_config::TcconWindowPrefixes, utils::parse_window_name};
+use itertools::Itertools;
 use log::warn;
 use ndarray::Array1;
 
@@ -12,6 +14,7 @@ use crate::dimensions::{Dimension, DimensionWithValues};
 pub enum DataSourceType {
     Runlog,
     ColFile,
+    PostprocFile,
 }
 
 /// A trait representing one source of data to copy to the netCDF file
@@ -30,7 +33,7 @@ pub trait DataSource: Display {
     fn required_dimensions(&self) -> &[Dimension];
     fn required_groups(&self) -> &[DataGroup];
     fn variable_names(&self) -> &[String];
-    fn write_variables(&mut self, nc_grp: &mut netcdf::GroupMut, group: DataGroup) -> Result<(), TranscriptionError>;
+    fn write_variables(&mut self, nc_grp: &mut netcdf::GroupMut, group: &DataGroup) -> Result<(), TranscriptionError>;
 }
 
 pub(crate) struct DataSourceList(Vec<Box<dyn DataSource>>);
@@ -68,7 +71,7 @@ pub struct TcconRunlog {
     runlog: PathBuf,
     variables: Vec<String>,
     dimensions: Vec<DimensionWithValues>,
-    spectrum_to_index: HashMap<NoDetectorSpecName, usize>
+    spectrum_to_index: HashMap<String, usize>
 }
 
 impl TcconRunlog {
@@ -81,7 +84,11 @@ impl TcconRunlog {
         Ok(Self { runlog, variables, spectrum_to_index, dimensions: vec![time_dim, specname_dim] })
     }
 
-    fn read_dims(runlog: &Path) -> Result<(Array1<DateTime<Utc>>, Array1<String>, HashMap<NoDetectorSpecName, usize>, usize), TranscriptionError> {
+    pub fn get_spec_index(&self, spectrum: &str) -> Option<usize> {
+        self.spectrum_to_index.get(spectrum).map(|i| *i)
+    }
+
+    fn read_dims(runlog: &Path) -> Result<(Array1<DateTime<Utc>>, Array1<String>, HashMap<String, usize>, usize), TranscriptionError> {
         let runlog_handle = FallibleRunlog::open(runlog)
             .map_err(|e| TranscriptionError::ReadError { file: runlog.to_path_buf(), cause: e.to_string() })?;
 
@@ -90,6 +97,7 @@ impl TcconRunlog {
         let mut times = vec![];
         let mut spectra = vec![];
         let mut time_index_mapping = HashMap::new();
+        let mut spec_check = HashSet::new();
         let mut curr_time_index: usize = 0;
         let mut max_specname_length = 0;
         for (line, res) in runlog_handle.into_line_iter() {
@@ -134,7 +142,8 @@ impl TcconRunlog {
                 true
             };
             
-            if is_new_obs && time_index_mapping.contains_key(&spectrum) {
+            time_index_mapping.insert(rl_rec.spectrum_name.clone(), curr_time_index);
+            if is_new_obs && spec_check.contains(&spectrum) {
                 // This should mean that a spectrum has the same name (ignoring the detector)
                 // as a spectrum we already encountered. This means the runlog is formatted in
                 // a way we don't expect. Weird runlog ordering is the root cause for a lot
@@ -147,8 +156,8 @@ impl TcconRunlog {
             } else if is_new_obs {
                 max_specname_length = max_specname_length.max(spectrum.0.spectrum().as_bytes().len());
                 times.push(zpd_time);
-                spectra.push(spectrum.0.spectrum().to_string());
-                time_index_mapping.insert(spectrum, curr_time_index);
+                spectra.push(spectrum.spectrum_name().to_string());
+                spec_check.insert(spectrum);
                 curr_time_index += 1;
             } else if last_time != Some(zpd_time) {
                 // This is *not* the first spectrum for the obs, but it has a different ZPD time than the last
@@ -194,7 +203,7 @@ impl DataSource for TcconRunlog {
         &self.variables
     }
 
-    fn write_variables(&mut self, nc_grp: &mut netcdf::GroupMut, group: crate::interface::DataGroup) -> Result<(), crate::interface::TranscriptionError> {
+    fn write_variables(&mut self, nc_grp: &mut netcdf::GroupMut, group: &DataGroup) -> Result<(), crate::interface::TranscriptionError> {
         todo!()
     }
 }
@@ -208,5 +217,264 @@ impl Display for TcconRunlog {
         };
 
         write!(f, "runlog ({filename})")
+    }
+}
+
+
+pub struct PostprocFile {
+    /// Path to the file read
+    path: PathBuf,
+
+    /// Which type of post-processing file this is.
+    postproc_type: PostprocType,
+
+    /// The list of unique groups required in the netCDF file 
+    data_groups: Vec<DataGroup>,
+
+    /// A map from the names of the variables in the postprocessing file
+    /// to the index in `output_var_names` contain the corresponding netCDF
+    /// variable name
+    variable_map: HashMap<String, usize>,
+
+    /// A map containing the actual data for each variable in the postprocessing
+    /// file, indexed by the same keys as `variable_map`.
+    variable_data: HashMap<String, Array1<f32>>,
+
+    /// A map from the names of the variables in the postprocessing file
+    /// to the index in `data_groups` containing the group for which this
+    /// variable will go.
+    group_map: HashMap<String, usize>,
+
+    /// The list of netCDF variable names.
+    output_var_names: Vec<String>
+}
+
+impl PostprocFile {
+    pub(crate) fn new(path: PathBuf, runlog: &TcconRunlog) -> error_stack::Result<Self, TranscriptionError> {
+        let mut this = Self::init_self(path)?;
+        this.load_data(runlog)?;
+        Ok(this)
+    }
+
+    fn init_self(path: PathBuf) -> error_stack::Result<Self, TranscriptionError> {
+        let postproc_type = PostprocType::from_path(&path).ok_or_else(|| {
+            TranscriptionError::Custom(format!("Could not determine file type of post processing file {}", path.display()))
+        })?;
+        
+        // Use the iterator convenience function to get the first row
+        // of the data - if it doesn't exist, that's an error because
+        // there really should be data in these files.
+        let (header, mut it) = open_and_iter_postproc_file(&path)
+            .change_context_lazy(|| TranscriptionError::ReadError { 
+                file: path.clone(), 
+                cause: "error while opening the file".into()
+            })?;
+        let nrow = header.nrow.ok_or_else(|| TranscriptionError::Custom(
+            "Header does not include the number of rows of data".to_string()
+        ))?;
+
+        let row = it.next().ok_or_else(|| {
+            TranscriptionError::ReadError {
+                file: path.clone(),
+                cause: "no data rows - post processing files are expected to have at least one data row".into()
+            }
+        })?.change_context_lazy(|| TranscriptionError::Custom(
+            format!("Error reading first data row of post processing file {}", path.display())
+        ))?;
+
+        // We need to check if there are any InGaAs or InSb gases. We'll need the file that collate_tccon_results
+        // uses. TODO: allow specifying a different prefix file to be consistent with collate_tccon_results.
+        let detector_config = TcconWindowPrefixes::new_standard_opt()
+            .change_context_lazy(|| TranscriptionError::Custom("Error getting the standard prefix definition file".to_string()))?
+            .ok_or_else(|| TranscriptionError::Custom("Standard secondary detector prefix file not found".to_string()))?;
+
+        let mut variable_map = HashMap::new();
+        let mut group_map = HashMap::new();
+        let mut data_groups = vec![];
+        let mut output_var_names = vec![];
+        for column_name in row.retrieved.keys() {
+            let entry = detector_config.get_entry(&column_name)
+                .map_err(|e| TranscriptionError::Custom(e.to_string()))?;
+
+            let this_data_group = entry.nc_group.as_deref().map(|s| DataGroup::from_str(&s).unwrap())
+                .unwrap_or_default();
+            let idx = if !data_groups.contains(&this_data_group) {
+                data_groups.push(this_data_group);
+                data_groups.len() - 1
+            } else {
+                data_groups.iter().position(|el| el == &this_data_group)
+                .expect("data_groups should already contain the data group for this variable")
+            };
+
+            group_map.insert(column_name.to_string(), idx);
+            let nc_varname = Self::map_var_name(column_name, &postproc_type);
+            output_var_names.push(nc_varname);
+            variable_map.insert(column_name.to_string(), output_var_names.len()-1);
+        }
+
+
+        let variable_data = HashMap::from_iter(
+            variable_map.keys().map(|k| (k.to_string(), Array1::from_elem((nrow,), f32::MAX)))
+        );
+        
+        Ok(Self { path, postproc_type, data_groups, variable_map, variable_data, group_map, output_var_names })
+    }
+
+    fn load_data(&mut self, runlog: &TcconRunlog) -> error_stack::Result<(), TranscriptionError> {
+        let (_, it) = open_and_iter_postproc_file(&self.path)
+            .change_context_lazy(|| TranscriptionError::ReadError { 
+                file: self.path.to_path_buf(), 
+                cause: "error while opening the file".into()
+            })?;
+
+        for row in it {
+            let row = row.change_context_lazy(|| TranscriptionError::ReadError { 
+                file: self.path.to_path_buf(), cause: "error reading data row".to_string()
+            })?;
+
+            let idx = runlog.get_spec_index(&row.auxiliary.spectrum)
+                .ok_or_else(|| TranscriptionError::Custom(
+                    format!("Spectrum '{}' in {} was not present in the runlog", row.auxiliary.spectrum, self.path.display())
+                ))?;
+
+            for (key, value) in row.retrieved.iter() {
+                let arr = self.variable_data.get_mut(key)
+                    .expect("All data variables must be pre-populated by init_self");
+                arr[idx] = *value as f32;
+            }
+        }
+
+        Ok(())
+    }
+    
+    fn map_var_name(column_name: &str, postproc_type: &PostprocType) -> String {
+        match postproc_type {
+            PostprocType::Vsw => format!("vsw_{column_name}"),
+            PostprocType::Tsw => format!("tsw_{column_name}"),
+            PostprocType::Vav => format!("column_{column_name}"),
+            PostprocType::Tav => format!("vsf_{column_name}"),
+            PostprocType::VswAda => format!("vsw_ada_{column_name}"),
+            PostprocType::VavAda => format!("ada_{column_name}"),
+            PostprocType::VavAdaAia => format!("{column_name}"),
+            PostprocType::Other(s) => todo!("{s}_{column_name}"),
+        }
+    }
+
+    fn make_long_name(&self, orig_varname: &str) -> String {
+        let err_str = if orig_varname.contains("error") {
+            "_error"
+        } else {
+            ""
+        };
+
+        match &self.postproc_type {
+            PostprocType::Vsw => format!("{orig_varname}_column_density{err_str}"),
+            PostprocType::Tsw => format!("{orig_varname}_vmr_scale_factor{err_str}"),
+            PostprocType::Vav => format!("{orig_varname}_column_density{err_str}"),
+            PostprocType::Tav => format!("{orig_varname}_vmr_scale_factor{err_str}"),
+            PostprocType::VswAda => format!("{orig_varname}_column_average_mole_fraction{err_str}"),
+            PostprocType::VavAda => format!("{orig_varname}_column_average_mole_fraction{err_str}"),
+            PostprocType::VavAdaAia => format!("{orig_varname}_column_average_mole_fraction{err_str}"),
+            PostprocType::Other(s) => format!("{s}_{orig_varname}{err_str}"),
+        }
+    }
+
+    fn make_description(&self, orig_varname: &str) -> String {
+        let err_str = if orig_varname.contains("error") {
+            " error"
+        } else {
+            ""
+        };
+
+        match &self.postproc_type {
+            PostprocType::Vsw => {
+                let (gas, center) = parse_window_name(orig_varname).expect(".vsw variable name should be of form GAS_CENTER");
+                format!("{gas} total column density{err_str} from the window centered at {center:.0} cm-1")
+            },
+            PostprocType::Tsw => {
+                let (gas, center) = parse_window_name(orig_varname).expect(".vsw variable name should be of form GAS_CENTER");
+                format!("{gas} VMR scale factor{err_str} from the window centered at {center:.0} cm-1")
+            },
+            PostprocType::Vav => format!("{orig_varname} total column density{err_str}"),
+            PostprocType::Tav => format!("{orig_varname} VMR scale factor{err_str}"),
+            PostprocType::VswAda => {
+                let (gas, center) = parse_window_name(orig_varname).expect(".vsw variable name should be of form GAS_CENTER");
+                format!("{gas} column average mole fraction{err_str} from the window centered at {center:.0} cm-1, after airmass dependence is removed but before tying to the WMO scale")
+            },
+            PostprocType::VavAda => format!("{orig_varname} column average mole fraction{err_str}, after airmass dependence is removed but before tying to the WMO scale"),
+            PostprocType::VavAdaAia => format!("{orig_varname} column average mole fraction{err_str}, with airmass dependence removed and the tie to the WMO scale applied"),
+            PostprocType::Other(s) => format!("{s} {orig_varname}"),
+        }
+    }
+}
+
+impl DataSource for PostprocFile {
+    fn source_type(&self) -> DataSourceType {
+        DataSourceType::PostprocFile
+    }
+
+    fn file(&self) -> &Path {
+        &self.path
+    }
+
+    fn provided_dimensions(&self) -> &[DimensionWithValues] {
+        &[]
+    }
+
+    fn required_dimensions(&self) -> &[Dimension] {
+        &[Dimension::Time]
+    }
+
+    fn required_groups(&self) -> &[DataGroup] {
+        &self.data_groups
+    }
+
+    fn variable_names(&self) -> &[String] {
+        &self.output_var_names
+    }
+
+    fn write_variables(&mut self, nc_grp: &mut netcdf::GroupMut, group: &DataGroup) -> Result<(), TranscriptionError> {
+        // Get the variables for just this group in the order they were listed in the output vector - that
+        // gives us control to group variables together in ncdump output.
+        let mut vars_to_write = self.group_map.iter()
+            .filter_map(|(name, grpidx)| {
+                let grp = &self.data_groups[*grpidx];
+                if grp == group {
+                    Some(name.as_str())
+                } else {
+                    None
+                }
+            }).collect_vec();
+        vars_to_write.sort_unstable_by_key(|name| self.variable_map.get(*name).expect("All variables must be in the variable_map"));
+
+        for var in vars_to_write {
+            let nameidx = *self.variable_map.get(var).expect("All variables must be defined in the variable_map");
+            let outname = &self.output_var_names[nameidx];
+            let values = self.variable_data.get(var).expect("All variables must be present in the variable_data map");
+            // TODO: these errors should have context indicating what action failed
+            let mut new_var = nc_grp.add_variable::<f32>(&outname, &[Dimension::Time.to_string().as_str()])
+                .map_err(|e| TranscriptionError::WriteError { variable: outname.to_string(), inner: e })?;
+            new_var.put(netcdf::Extents::All, values.view())
+                .map_err(|e| TranscriptionError::WriteError { variable: outname.to_string(), inner: e })?;
+            new_var.put_attribute("units", "mol mol-1")
+                .map_err(|e| TranscriptionError::WriteError { variable: outname.to_string(), inner: e })?;
+            new_var.put_attribute("long_name", self.make_long_name(var))
+                .map_err(|e| TranscriptionError::WriteError { variable: outname.to_string(), inner: e })?;
+            new_var.put_attribute("description", self.make_description(var))
+                .map_err(|e| TranscriptionError::WriteError { variable: outname.to_string(), inner: e })?;
+        }
+        todo!()
+    }
+}
+
+impl Display for PostprocFile {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let filename = if let Some(name) = self.path.file_name() {
+            name.to_string_lossy()
+        } else {
+            self.path.to_string_lossy()
+        };
+
+        write!(f, "postproc file ({filename})")
     }
 }

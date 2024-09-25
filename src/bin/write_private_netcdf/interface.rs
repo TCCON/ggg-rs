@@ -1,4 +1,6 @@
-use std::path::PathBuf;
+use std::{convert::Infallible, path::PathBuf, str::FromStr};
+
+use ggg_rs::{tccon::input_config::PrefixEntry, utils::GggError};
 
 use crate::dimensions::{DimensionWithValues, Dimension};
 
@@ -11,7 +13,9 @@ pub enum TranscriptionError {
     #[error("In file {}: {problem}", file.display())]
     UnexpectedEvent{file: PathBuf, problem: String},
     #[error("Error writing variable {variable} to netCDF: {inner}")]
-    WriteError{variable: String, inner: netcdf::Error}
+    WriteError{variable: String, inner: netcdf::Error},
+    #[error("{0}")]
+    Custom(String),
 }
 
 
@@ -20,12 +24,19 @@ pub enum GroupLocation {
     Subgroup(String)
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DataGroup {
     InGaAs,
     InGaAsExperimental,
     Si,
     InSb,
+    Other(String)
+}
+
+impl Default for DataGroup {
+    fn default() -> Self {
+        Self::InGaAs
+    }
 }
 
 impl DataGroup {
@@ -36,18 +47,35 @@ impl DataGroup {
             Self::InGaAsExperimental => GroupLocation::Subgroup("ingaas_experimental".to_string()),
             Self::Si => GroupLocation::Subgroup("si_experimental".to_string()),
             Self::InSb => GroupLocation::Subgroup("insb_experimental".to_string()),
+            Self::Other(s) => GroupLocation::Subgroup(format!("{s}_experimental"))
         }
     }
 
     /// Return the suffix to append to variables in this group in a flat netCDF3-64bit or netCDF4 file
-    pub fn suffix(&self) -> Option<&'static str> {
+    pub fn suffix(&self) -> Option<String> {
         // TODO: some of this might need to move into a "netcdf utility" library so they can be shared with
         // the public writer.
         match self {
             Self::InGaAs => None,
-            Self::InGaAsExperimental => Some("_experimental"),
-            Self::Si => Some("_si"),
-            Self::InSb => Some("_insb"),
+            Self::InGaAsExperimental => Some("_experimental".to_string()),
+            Self::Si => Some("_si".to_string()),
+            Self::InSb => Some("_insb".to_string()),
+            Self::Other(s) => Some(format!("_{s}"))
+        }
+    }
+}
+
+
+impl FromStr for DataGroup {
+    type Err = Infallible;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_ref() {
+            "ingaas" => Ok(Self::InGaAs),
+            "ingaas_experimental" => Ok(Self::InGaAsExperimental),
+            "si" => Ok(Self::Si),
+            "insb" => Ok(Self::InSb),
+            _ => Ok(Self::Other(s.to_string()))
         }
     }
 }
