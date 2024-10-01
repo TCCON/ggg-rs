@@ -209,6 +209,8 @@ fn driver(clargs: AirmassCorrCli) -> error_stack::Result<(), CliError> {
     // Read each row, apply airmass corrections, and write out the Xgas values. Include the
     // O2 DMF as a new auxiliary column.
     let settings = fortformat::ser::SerSettings::default().align_left_str(true);
+    let missing_value = header.missing.unwrap_or(POSTPROC_FILL_VALUE);
+
     for (irow, row) in rows.enumerate() {
         let mut row = row.change_context_lazy(|| CliError::ReadErrorAtLine {
             file: clargs.upstream_file.clone(),
@@ -218,7 +220,7 @@ fn driver(clargs: AirmassCorrCli) -> error_stack::Result<(), CliError> {
         let this_o2_dmf = o2_provider.o2_dmf(&row.auxiliary.spectrum)
             .change_context_lazy(|| CliError::O2Dmf)?;
         row.auxiliary.o2dmf = Some(this_o2_dmf);
-        row.retrieved = apply_correction(&row.retrieved, &adcfs, &o2_window, this_o2_dmf, row.auxiliary.solzen, input_is_averaged)?;
+        row.retrieved = apply_correction(&row.retrieved, &adcfs, &o2_window, this_o2_dmf, row.auxiliary.solzen, missing_value, input_is_averaged)?;
 
         fortformat::ser::to_writer_custom(row, &format_spec, Some(&col_names), &settings, &mut fw)
             .change_context_lazy(|| CliError::WriteError { 
@@ -269,7 +271,7 @@ fn add_adcf_header_lines(lines_out: &mut Vec<String>, adcfs: &IndexMap<String, A
     Ok(())
 }
 
-fn apply_correction(row: &HashMap<String, f64>, adcfs: &IndexMap<String, AdcfRow>, o2_window: &str, o2_dmf: f64, sza: f64, is_avg: bool) -> Result<HashMap<String, f64>, CliError> {
+fn apply_correction(row: &HashMap<String, f64>, adcfs: &IndexMap<String, AdcfRow>, o2_window: &str, o2_dmf: f64, sza: f64, missing_value: f64, is_avg: bool) -> Result<HashMap<String, f64>, CliError> {
     let o2_window_error = format!("{o2_window}_error");
 
     let o2_col = *row.get(o2_window).ok_or_else(|| {
@@ -311,10 +313,19 @@ fn apply_correction(row: &HashMap<String, f64>, adcfs: &IndexMap<String, AdcfRow
         let g = xgas_adcf.map(|a| a.g).flatten().unwrap_or(DEFAULT_G);
         let sbf = symmetric_basis_function(sza, p, g);
         
-        let xgas = col_val / col_dry_air / (1.0 + cf*sbf);
-        new_row.insert(xgas_key, xgas);
-        let xgas_error = gas_frac_uncert / col_dry_air / (1.0 + cf*sbf);
-        new_row.insert(xgas_error_key, xgas_error);
+        if approx::abs_diff_eq!(col_val, missing_value) {
+            new_row.insert(xgas_key, missing_value);
+        } else {
+            let xgas = col_val / col_dry_air / (1.0 + cf*sbf);
+            new_row.insert(xgas_key, xgas);
+        }
+
+        if approx::abs_diff_eq!(col_err_val, missing_value) {
+            new_row.insert(xgas_error_key, missing_value);
+        } else {
+            let xgas_error = gas_frac_uncert / col_dry_air / (1.0 + cf*sbf);
+            new_row.insert(xgas_error_key, xgas_error);
+        }
     }
 
     Ok(new_row)
