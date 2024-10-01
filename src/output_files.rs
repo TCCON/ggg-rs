@@ -903,9 +903,12 @@ pub fn write_postproc_header<W: Write>(mut f: W, ncol: usize, nrow: usize, naux:
             }
         });
 
-    // 4 = line with nhead etc. + missing + format + colnames
+    // The extra 4 = line with nhead etc. + missing + format + colnames
     let nhead = program_versions.len() + extra_lines.len() + 4;
-    writeln!(f, " {nhead}  {ncol}  {nrow}  {naux}").change_context_lazy(|| WriteError::IoError)?;
+    let first_line_format = fortformat::FortFormat::parse("(i2,i5,i7,i4)")
+        .expect("The (hard coded) Fortran format for the first line of a post-processing output file should be valid");
+    fortformat::to_writer((nhead, ncol, nrow, naux), &first_line_format, &mut f)
+        .change_context_lazy(|| WriteError::IoError)?;
 
     for pver in program_versions.iter() {
         writeln!(f, " {pver}").change_context_lazy(|| WriteError::IoError)?;

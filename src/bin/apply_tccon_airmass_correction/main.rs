@@ -52,27 +52,6 @@ struct AirmassCorrCli {
     o2_dmf_file: Option<PathBuf>,
 }
 
-// #[derive(Debug)]
-// struct CliReport(Report<CliError>);
-
-// impl Display for CliReport {
-//     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-//         write!(f, "{}", self.0)
-//     }
-// }
-
-// impl std::error::Error for CliReport {}
-
-// impl<E> From<Report<E>> for CliReport
-// where E: Into<CliError> + ToOwned + Send + Sync + 'static,
-//       CliError: From<<E as ToOwned>::Owned>
-// {
-//     fn from(value: Report<E>) -> Self {
-//         let inner: CliError = value.current_context().to_owned().into();
-//         Self(Report::new(inner))
-//     }
-// }
-
 #[derive(Debug, thiserror::Error)]
 enum CliError {
     #[error("Error getting the mean O2 dry mole fractions")]
