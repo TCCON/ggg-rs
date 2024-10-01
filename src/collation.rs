@@ -39,7 +39,7 @@ use error_stack::ResultExt;
 use log::{info, warn};
 
 use crate::error::FileLocation;
-use crate::output_files::{iter_tabular_file, open_and_iter_col_file, read_col_file_header, write_postproc_header, AuxData, ColFileHeader, ColRetQuantity, PostprocRow, ProgramVersion, POSTPROC_FILL_VALUE};
+use crate::output_files::{get_col_files, get_file_from_col_header, iter_tabular_file, open_and_iter_col_file, read_col_file_header, write_postproc_header, AuxData, ColFileHeader, ColRetQuantity, PostprocRow, ProgramVersion, POSTPROC_FILL_VALUE};
 use crate::runlogs::RunlogDataRec;
 use crate::utils::{self, FileBuf};
 
@@ -322,10 +322,13 @@ pub fn collate_results<I: CollationIndexer, P: CollationPrefixer>(
     let mut missing = MissingValues::default();
 
     // Make sure we can get all the input files we need
-    let col_files = get_col_files(multiggg_file, run_dir)?;
-    let runlog = get_file_from_header(&col_files, run_dir, |h| h.runlog_file.path)
+    let col_files = get_col_files(multiggg_file, run_dir)
+        .change_context_lazy(|| CollationError::missing_input(
+            format!("problem finding all the .col files in {}", run_dir.display())
+        ))?;
+    let runlog = get_file_from_col_header(&col_files, run_dir, |h| h.runlog_file.path)
         .change_context_lazy(|| CollationError::could_not_find("runlog"))?;
-    let ray_file = get_file_from_header(&col_files, run_dir, |h| h.ray_file.path)
+    let ray_file = get_file_from_col_header(&col_files, run_dir, |h| h.ray_file.path)
         .change_context_lazy(|| CollationError::could_not_find(".ray file"))?;
     let runlog_name = runlog.file_stem().ok_or_else(|| CollationError::could_not_find(
         "file stem of the runlog"
@@ -416,32 +419,6 @@ pub fn collate_results<I: CollationIndexer, P: CollationPrefixer>(
     Ok(())
 }
 
-/// Return a vector of paths to the `.col` files to read
-fn get_col_files(multiggg_file: &Path, run_dir: &Path) -> error_stack::Result<Vec<PathBuf>, CollationError> {
-    let col_file_basenames = utils::get_windows_from_multiggg(multiggg_file, true)
-        .change_context_lazy(|| CollationError::missing_input("Error getting windows from multiggg.sh file"))?;
-    let nwin = col_file_basenames.len();
-
-    let mut col_files = vec![];
-    let mut missing_files = vec![];
-    for basename in col_file_basenames {
-        let cf_path = run_dir.join(format!("{basename}.col"));
-        if cf_path.exists() {
-            col_files.push(cf_path);
-        } else {
-            missing_files.push(basename);
-        }
-    }
-
-    if missing_files.is_empty() {
-        Ok(col_files)
-    } else {
-        let missing_str = missing_files.join(", ");
-        let msg = format!("Missing {} of {} expected .col files, missing windows were: {missing_str}", missing_files.len(), nwin);
-        Err(CollationError::missing_input(msg).into())
-    }
-}
-
 fn get_window_from_col_file(col_file: &Path) -> Result<&str, CollationError> {
     let window = col_file.file_name()
         .ok_or_else(|| CollationError::parsing_error(
@@ -455,44 +432,6 @@ fn get_window_from_col_file(col_file: &Path) -> Result<&str, CollationError> {
             format!("Could not find a '.' in base name of {} to mark the end of the window name", col_file.display())
         ))?;
     Ok(window)
-}
-
-/// Get a path to one file from the `.col` file headers, error if it differs across files.
-/// 
-/// `get_file` is a function that takes ownership of a [`ColFileHeader`] and returns the
-/// desired path as a [`PathBuf`].
-fn get_file_from_header<F>(col_files: &[PathBuf], run_dir: &Path, get_file: F) -> error_stack::Result<PathBuf, CollationError> 
-where F: Fn(ColFileHeader) -> PathBuf
-{
-    if col_files.is_empty() {
-        return Err(CollationError::missing_input("no .col files found").into());
-    }
-
-    let mut fbuf = FileBuf::open(&col_files[0])
-        .change_context_lazy(|| CollationError::could_not_read_file("could not open", &col_files[0]))?;
-    let first_header = read_col_file_header(&mut fbuf)
-        .change_context_lazy(|| CollationError::could_not_read_file("error reading header", &col_files[0]))?;
-    let expected_file = get_file(first_header);
-
-    for cfile in &col_files[1..] {
-        let mut fbuf = FileBuf::open(cfile)
-            .change_context_lazy(|| CollationError::could_not_read_file("could not open", cfile))?;
-        let header = read_col_file_header(&mut fbuf)
-            .change_context_lazy(|| CollationError::could_not_read_file("error reading header", cfile))?;
-        let new_file = get_file(header);
-
-        if new_file != expected_file {
-            return Err(CollationError::mismatched_input(
-                &col_files[0], cfile, expected_file.display().to_string(), new_file.display().to_string()
-            ))?;
-        }
-    }
-
-    if expected_file.is_absolute() {
-        Ok(expected_file)
-    } else {
-        Ok(run_dir.join(expected_file))
-    }
 }
 
 /// Return the gsetup and gfit versions, possibly along with a list of window scale factors.

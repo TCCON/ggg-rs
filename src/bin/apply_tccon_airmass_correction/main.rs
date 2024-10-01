@@ -197,7 +197,10 @@ fn driver(clargs: AirmassCorrCli) -> error_stack::Result<(), CliError> {
     // commenting-out character that we don't have a field for.
     let format_str = format_spec.fmt_string(1).replacen("1x", "a1", 1);
 
-    // Add the airmass corrections to the file header
+    // Add the airmass corrections and the O2 mole fraction source to the file header
+    header.extra_lines.push(format!(
+        " Mean O2 DMF source: {}", o2_provider.header_line()
+    ));
     add_adcf_header_lines(&mut header.extra_lines, &adcfs)
         .change_context_lazy(|| CliError::WriteError {
             path: out_file.clone(),
@@ -251,10 +254,17 @@ fn driver(clargs: AirmassCorrCli) -> error_stack::Result<(), CliError> {
 fn make_boxed_o2_dmf_provider(clargs: &AirmassCorrCli) -> error_stack::Result<Box<dyn O2DmfProvider>, O2DmfError> {
     if let Some(dmf) = clargs.fixed_o2_dmf {
         let provider = o2_dmf::FixedO2Dmf::new(dmf);
-        return Ok(Box::new(provider))
+        return Ok(Box::new(provider));
     }
 
-
+    if let Some(o2_file) = &clargs.o2_dmf_file {
+        let run_dir = clargs.upstream_file.parent().ok_or_else(|| O2DmfError::custom(format!(
+            "could not get parent of upstream file, {}", clargs.upstream_file.display()
+        )))?;
+        let provider = o2_dmf::O2DmfTimeseries::new(o2_file.to_path_buf(), run_dir)?;
+        return Ok(Box::new(provider));
+    }
+    
     todo!()
 }
 

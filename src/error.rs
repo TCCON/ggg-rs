@@ -85,6 +85,13 @@ pub enum HeaderError {
     NumLinesMismatch{expected: usize, got: usize},
     NumColMismatch{location: FileLocation, expected: usize, got: usize},
     CouldNotRead{location: FileLocation, cause: String},
+    Custom(String),
+}
+
+impl HeaderError {
+    pub fn custom<S: ToString>(msg: S) -> Self {
+        Self::Custom(msg.to_string())
+    }
 }
 
 impl Display for HeaderError {
@@ -101,6 +108,9 @@ impl Display for HeaderError {
             },
             Self::CouldNotRead{location, cause} => {
                 write!(f, "Could not read {location}: {cause}")
+            },
+            Self::Custom(msg) => {
+                write!(f, "{msg}")
             }
         }
     }
