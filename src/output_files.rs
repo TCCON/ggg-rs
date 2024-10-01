@@ -54,11 +54,17 @@ impl FromStr for ColInputData {
     }
 }
 
+/// A struct representing the components of a complete GGG program version string
+/// as found in the post processing file headers.
 #[derive(Debug, PartialEq, Eq)]
 pub struct ProgramVersion {
+    /// The program name, e.g. "GFIT" or "collate_results"
     pub program: String,
+    /// The program version, usually including the word "Version", e.g. "Version 1.0"
     pub version: String,
+    /// The date this version was finalized in YYYY-MM-DD format
     pub date: String,
+    /// The initials of individuals who contributed to this program, e.g. "GCT" or "GCT,JLL"
     pub authors: String,
 }
 
@@ -186,9 +192,9 @@ pub fn read_postproc_file_header<F: BufRead>(file: &mut FileBuf<F>) -> error_sta
 
     let missing = missing_val_line.map(|line| {
         let (_, val) = line.split_once(":").unwrap();
-        val.parse::<f32>().map_err(|e| HeaderError::ParseError { 
+        val.trim().parse::<f64>().map_err(|e| HeaderError::ParseError { 
             location: file.path.clone().into(),
-            cause: format!("Missing value could not be parsed as a float ({e}")
+            cause: format!("Missing value could not be parsed as a float ({e})")
         })
     }).transpose()?;
 
@@ -199,12 +205,13 @@ pub fn read_postproc_file_header<F: BufRead>(file: &mut FileBuf<F>) -> error_sta
     Ok(PostprocFileHeader { nhead, ncol, nrow, nauxcol, missing, format, column_names, extra_lines })
 }
 
+#[derive(Debug)]
 pub struct PostprocFileHeader {
     pub nhead: usize,
     pub ncol: usize,
     pub nrow: Option<usize>,
     pub nauxcol: Option<usize>,
-    pub missing: Option<f32>,
+    pub missing: Option<f64>,
     pub format: FortFormat,
     pub column_names: Vec<String>,
     pub extra_lines: Vec<String>,
@@ -440,6 +447,7 @@ pub struct AuxData {
     pub fvsi: f64,
     pub wspd: f64,
     pub wdir: f64,
+    pub o2dmf: Option<f64>,
 }
 
 impl AuxData {
@@ -450,7 +458,7 @@ impl AuxData {
     pub fn postproc_fields_str() -> &'static[&'static str] {
         &["spectrum", "year", "day", "hour", "run", "lat", "long", "zobs", "zmin",
           "solzen", "azim", "osds", "opd", "fovi", "amal", "graw", "tins", "pins",
-          "tout", "pout", "hout", "sia", "fvsi", "wspd", "wdir"]
+          "tout", "pout", "hout", "sia", "fvsi", "wspd", "wdir", "o2dmf"]
     }
 
     /// A fully-owned version of `postproc_fields_str`.
@@ -524,6 +532,7 @@ impl From<&RunlogDataRec> for AuxData {
             fvsi: value.fvsi,
             wspd: value.wspd,
             wdir: value.wdir,
+            o2dmf: None
         }
     }
 }
@@ -769,9 +778,12 @@ pub fn iter_tabular_file(file: &Path) -> Result<GenericRowIter, GggError> {
 /// - `f`: the handle to write to, usually a mutable [`std::io::BufWriter`] or similar.
 /// - `ncol`: the number of columns in the file (including the spectrum name).
 /// - `naux`: the number of columns containing auxiliary data (i.e not retrieved quantities).
-/// - `program_versions`: the list of programs that processed the data in this file. Normally
-///   this should include gsetup and gfit, plus each post processing program up to and including
-///   the current one.
+/// - `program_versions`: the list of programs that generated this file to add to the header.
+///   If using this to write the first post processing file, make sure to include GSETUP and GFIT
+///   from the `.col` files, as well as the program generating the current file. If using this to
+///   write a later post processing file, then usually previous program versions will be included
+///   in the `extra_lines` read from the previous file's header, and this will only include the
+///   new program.
 /// - `extra_lines`: additional lines to include in the header, e.g. AICF or ADCF values.
 /// - `missing_value`: the value to use as a fill value for missing data. Should be *significantly*
 ///   larger than any real value, [`POSTPROC_FILL_VALUE`] is a good default.
@@ -794,8 +806,16 @@ pub fn write_postproc_header<W: Write>(mut f: W, ncol: usize, nrow: usize, naux:
         .map_err(|e| WriteError::convert_error(
             format!("Could not interpret widths in format string: {e}")
         ))?.into_fields()
+        .expect("Fortran format string should contain fixed width fields, not list-directed input (i.e. must not be '*')")
         .into_iter()
-        .filter_map(|field| if field.width() > 1 { Some(field.width()) } else { None });
+        .filter_map(|field| {
+            let width = field.width().expect("write_postproc_header should not receive a format string with non-fixed width fields");
+            if width > 1 { 
+                Some(width)
+            } else {
+                None
+            }
+        });
 
     // 4 = line with nhead etc. + missing + format + colnames
     let nhead = program_versions.len() + extra_lines.len() + 4;
@@ -806,7 +826,9 @@ pub fn write_postproc_header<W: Write>(mut f: W, ncol: usize, nrow: usize, naux:
     }
 
     for line in extra_lines {
-        writeln!(f, "{line}").change_context_lazy(|| WriteError::IoError)?;
+        // The trim_end protects against newlines being accidentally doubled from lines read in
+        // from a previous file.
+        writeln!(f, "{}", line.trim_end()).change_context_lazy(|| WriteError::IoError)?;
     }
 
     let mvfmt = fortformat::FortFormat::parse("(1pe11.4)").unwrap();
