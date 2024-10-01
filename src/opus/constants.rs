@@ -79,7 +79,7 @@ pub mod bruker {
     const DER_SPEC_PRI_STAT: i32 = DER_SPEC_PRI_DATA + DBB_DSTAT;
     const DER_SPEC_SEC_STAT: i32 = DER_SPEC_SEC_DATA + DBB_DSTAT;
 
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, strum::Display)]
     pub enum BrukerBlockType {
         InstrumentStatus,
         AquisitionParameters,
@@ -92,7 +92,7 @@ pub mod bruker {
         SpectrumPrimaryData,
         SpectrumSecondaryData,
         IgramPrimaryStatus,
-        IgramSecondayStatus,
+        IgramSecondaryStatus,
         SpectrumPrimaryStatus,
         SpectrumSecondaryStatus,
         Unknown(i32)
@@ -113,7 +113,7 @@ pub mod bruker {
                 DER_IGRAM_PRI_DATA => Self::IgramPrimaryData,
                 DER_IGRAM_SEC_DATA => Self::IgramSecondaryData,
                 DER_IGRAM_PRI_STAT => Self::IgramPrimaryStatus,
-                DER_IGRAM_SEC_STAT => Self::IgramSecondayStatus,
+                DER_IGRAM_SEC_STAT => Self::IgramSecondaryStatus,
 
                 DER_SPEC_PRI_DATA => Self::SpectrumPrimaryData,
                 DER_SPEC_SEC_DATA => Self::SpectrumSecondaryData,
