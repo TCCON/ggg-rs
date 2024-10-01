@@ -1,9 +1,11 @@
 use std::{collections::HashMap, fmt::Debug, io::BufRead, path::{Path, PathBuf}};
 
+use chrono::Datelike;
 use error_stack::ResultExt;
 use ggg_rs::output_files::get_runlog_from_col_files;
 use ggg_rs::runlogs::FallibleRunlog;
 use itertools::Itertools;
+use nalgebra::{self, OMatrix, OVector};
 
 // ----------------- //
 // Generic interface //
@@ -70,27 +72,29 @@ impl O2DmfProvider for FixedO2Dmf {
 #[derive(Debug)]
 pub(crate) struct O2DmfTimeseries {
     o2_file: PathBuf,
-    timestamps: Vec<chrono::DateTime<chrono::Utc>>,
+    years: Vec<i32>,
     o2_dmfs: Vec<f64>,
-    runlog_timestamps: HashMap<String, chrono::DateTime<chrono::Utc>>
+    runlog_timestamps: HashMap<String, chrono::DateTime<chrono::Utc>>,
+    delay_years: i32,
+    extrap_basis_years: i32,
 }
 
 impl O2DmfTimeseries {
     pub(crate) fn new(o2_file: PathBuf, run_dir: &Path) -> error_stack::Result<Self, O2DmfError> {
         // Handle reading the O2 file first - this will go quickly, so if there's an error here,
         // no sense in making the user wait until the runlog finishes being read.
-        let (timestamps, o2_dmfs) = Self::read_o2_dmf_file(&o2_file)?;
+        let (years, o2_dmfs) = Self::read_o2_dmf_file(&o2_file)?;
 
         // Now handle reading the runlog - all we need is the mapping of spectrum names to their times.
         let runlog_timestamps = Self::read_runlog(run_dir)?;
         
-        Ok(Self { o2_file, timestamps, o2_dmfs, runlog_timestamps })
+        Ok(Self { o2_file, years, o2_dmfs, runlog_timestamps, delay_years: 2, extrap_basis_years: 5 })
     }
 
-    fn read_o2_dmf_file(o2_file: &Path) -> error_stack::Result<(Vec<chrono::DateTime<chrono::Utc>>, Vec<f64>), O2DmfError> {
+    fn read_o2_dmf_file(o2_file: &Path) -> error_stack::Result<(Vec<i32>, Vec<f64>), O2DmfError> {
         let f = std::fs::File::open(o2_file).change_context_lazy(|| O2DmfError::input_not_found(o2_file.to_path_buf()))?;
         let f = std::io::BufReader::new(f);
-        let mut timestamps = vec![];
+        let mut years = vec![];
         let mut o2_dmfs = vec![];
 
         // This file won't be that long, just read the non-comment lines into memory.
@@ -132,10 +136,10 @@ impl O2DmfTimeseries {
             let year = year_str.parse::<i32>().map_err(|_| O2DmfError::custom(format!(
                 "could not parse year value in data line {} of {}, got the string '{year_str}' for year", iline+1, o2_file.display()
             )))?;
-            let dt = chrono::NaiveDate::from_ymd_opt(year, 7, 1).unwrap()
-                .and_hms_opt(0, 0, 0).unwrap()
-                .and_utc();
-            timestamps.push(dt);
+            // let dt = chrono::NaiveDate::from_ymd_opt(year, 7, 1).unwrap()
+            //     .and_hms_opt(0, 0, 0).unwrap()
+            //     .and_utc();
+            years.push(year);
 
             // Parse the O2 DMF - this should be much easier
             let dmf_str = *parts.get(o2_idx).ok_or_else(|| O2DmfError::custom(format!(
@@ -147,7 +151,7 @@ impl O2DmfTimeseries {
             o2_dmfs.push(dmf);
         }
 
-        Ok((timestamps, o2_dmfs))
+        Ok((years, o2_dmfs))
     }
 
     fn read_runlog(run_dir: &Path) -> error_stack::Result<HashMap<String, chrono::DateTime<chrono::Utc>>, O2DmfError> {
@@ -180,19 +184,58 @@ impl O2DmfTimeseries {
         Ok(runlog_timestamps)
     }
 
-    fn interpolate_o2(&self, ifirst: usize, dt: &chrono::DateTime<chrono::Utc>, from_second_term: bool) -> f64 {
-        let ts = dt.timestamp() as f64;
-        let ts1 = self.timestamps[ifirst].timestamp() as f64;
-        let ts2 = self.timestamps[ifirst+1].timestamp() as f64;
-        let dmf1 = self.o2_dmfs[ifirst];
-        let dmf2 = self.o2_dmfs[ifirst+1];
-        let slope = (dmf2 - dmf1) / (ts2 - ts1);
+    fn interpolate_o2(&self, dt: &chrono::DateTime<chrono::Utc>) -> error_stack::Result<f64, O2DmfError> {
+        let last_year_to_keep = dt.year() - self.delay_years;
+        let ilast = self.years.iter().positions(|&y| y <= last_year_to_keep).last()
+            .ok_or_else(|| O2DmfError::custom(format!(
+                "need at least one year <= {last_year_to_keep} in the O2 mole fraction input file"
+            )))?;
+        
+        let first_basis_year = last_year_to_keep - self.extrap_basis_years + 1;
+        let ifirst = self.years.iter().positions(|&y| y >= first_basis_year).min()
+            .ok_or_else(|| O2DmfError::custom(format!(
+                "need at least one year >= {first_basis_year} in the O2 mole fraction input file"
+            )))?;
 
-        if from_second_term {
-            dmf2 + slope * (ts - ts2)
-        } else {
-            dmf1 + slope * (ts - ts1)
+        if ifirst > ilast {
+            return Err(O2DmfError::custom(format!(
+                "no years between {first_basis_year} and {last_year_to_keep} in the O2 mole fraction input file"
+            )).into());
         }
+
+        if self.years[ilast] != last_year_to_keep {
+            return Err(O2DmfError::custom(format!(
+                "must have {last_year_to_keep} in the O2 mole fraction input file"
+            )).into());
+        }
+
+        // Error checking done now, so convert the years and datetimes to timestamps and fit a
+        // line to the last N years to predict the O2 mole fraction. 
+        let nyear = ilast - ifirst + 1;
+
+        // This should produce a vector with [ts, 1, ts, 1, ts, 1, ...] which can be used to
+        // make a Nx2 matrix with the timestamps in the first column and 1 in the second (to
+        // fit the intercept).
+        let input_ts = self.years[ifirst..=ilast].iter()
+            .map(|&y| {
+                chrono::NaiveDate::from_ymd_opt(y, 7, 1).unwrap()
+                    .and_hms_opt(0, 0, 0).unwrap()
+                    .and_utc()
+                    .timestamp() as f64
+            }).interleave_shortest(std::iter::repeat(1.0));
+
+        let ts_matrix = OMatrix::<f64, nalgebra::Dyn, nalgebra::U2>::from_row_iterator(nyear, input_ts);
+        let dmf_vec = OVector::<f64, nalgebra::Dyn>::from_row_slice(&self.o2_dmfs[ifirst..=ilast]);
+
+        let epsilon = 1e-15; // since the lstsq example used 1e-14 for values of order 1 and the O2 DMFs are of order 0.1, I went one OoM down
+        let res = lstsq::lstsq(&ts_matrix, &dmf_vec, epsilon)
+            .map_err(|e| O2DmfError::custom(format!(
+                "error fitting O2 DMF trend: {e}"
+            )))?;
+
+        let tgt_ts = dt.timestamp() as f64;
+        let tgt_dmf = res.solution[0] * tgt_ts + res.solution[1];
+        Ok(tgt_dmf)
     }
 }
 
@@ -205,19 +248,6 @@ impl O2DmfProvider for O2DmfTimeseries {
         let dt = self.runlog_timestamps.get(spectrum_name)
             .ok_or_else(|| O2DmfError::spectrum_not_found(spectrum_name, "spectrum not found in the runlog"))?;
 
-        let imax = self.timestamps.len() - 1;
-        let idx_before = self.timestamps.iter().positions(|v| v <= dt).last();
-        let interp_dmf = if idx_before.is_some_and(|i| i == imax) {
-            // dt is after the last O2 timestamp, so need to extrapolate
-            self.interpolate_o2(idx_before.unwrap()-1, dt, true)
-        } else if idx_before.is_some() {
-            // dt is between two timestamps
-            self.interpolate_o2(idx_before.unwrap(), dt, false)
-        } else {
-            // dt is before the first timestamp
-            self.interpolate_o2(0, dt, false)
-        };
-        
-        Ok(interp_dmf)
+        self.interpolate_o2(dt)
     }
 }
