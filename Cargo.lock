@@ -632,7 +632,7 @@ checksum = "3f9eec918d3f24069decb9af1554cad7c880e2da24a9afd88aca000531ab82c1"
 [[package]]
 name = "fortformat"
 version = "0.1.0"
-source = "git+https://github.com/joshua-laughner/fortformat#40bc6f3d1785946a5fd8712310e88ec7bfd03760"
+source = "git+https://github.com/joshua-laughner/fortformat#07a9a3200d010c7471e6a03f96a4b9d5cce3ec10"
 dependencies = [
  "error-stack",
  "itertools",

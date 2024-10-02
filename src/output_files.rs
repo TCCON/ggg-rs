@@ -79,7 +79,7 @@ impl FromStr for ProgramVersion {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let re = PROGRAM_VERSION_REGEX.get_or_init(|| 
-            regex::Regex::new(r"(?<program>\w+)\s+(?<version>[Vv][Ee][Rr][Ss][Ii][Oo][Nn]\s+[\d\.]+)\s+(?<date>[\d\-]+)\s+(?<authors>[\w\,]+)")
+            regex::Regex::new(r"(?<program>\w+)\s+(?<version>[Vv][Ee][Rr][Ss][Ii][Oo][Nn]\s+[\w\.\-]+)\s+(?<date>[\d\-]+)(\s+(?<authors>[\w\,]+))?")
                 .expect("Could not compile program version regex")
         );
 
@@ -91,11 +91,21 @@ impl FromStr for ProgramVersion {
                 cause: "Did not match expected format of program name, version, date, and authors".to_string()
             })?;
 
+        // JLL: I allow authors to be missing because it was in one of the program lines for
+        // the AICF work. Might revert to this being required in the future.
+        let program = caps["program"].to_string();
+        let authors = if let Some(m) = caps.name("authors") {
+            m.as_str().to_string()
+        } else {
+            log::warn!("authors not found in the {program} program version line");
+            "".to_string()
+        };
+        
         Ok(Self { 
-            program: caps["program"].to_string(),
+            program,
             version: caps["version"].to_owned(), 
             date: caps["date"].to_string(),
-            authors: caps["authors"].to_string()
+            authors
         })
     }
 }
