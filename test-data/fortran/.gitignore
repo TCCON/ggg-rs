@@ -1,0 +1,4 @@
+# Ignore all object files
+**/*.o
+# Ignore the binary executables
+run_effective_path/run_effective_path
