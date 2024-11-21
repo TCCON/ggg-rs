@@ -10,8 +10,8 @@ pub enum TranscriptionError {
     ReadErrorAtLine{file: PathBuf, line: usize, cause: String},
     #[error("In file {}: {problem}", file.display())]
     UnexpectedEvent{file: PathBuf, problem: String},
-    #[error("Error writing variable {variable} to netCDF: {inner}")]
-    WriteError{variable: String, inner: netcdf::Error}
+    #[error("Error writing variable {variable} values or attributes to netCDF.")]
+    WriteError{variable: String}
 }
 
 

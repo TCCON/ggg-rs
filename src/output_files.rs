@@ -237,7 +237,7 @@ impl PostprocFileHeader {
         &self.column_names[..self.naux]
     }
 
-    fn data_varnames(&self) -> &[String] {
+    fn gas_varnames(&self) -> &[String] {
         &self.column_names[self.naux..]
     }
 }
@@ -333,10 +333,18 @@ impl PostprocFile {
             .map(|k| (k.as_str(), *rec.data.get(k.as_str()).unwrap()));
         let aux_data = HashMap::from_iter(aux_it);
 
-        let gas_it = self.header.data_varnames().iter()
+        let gas_it = self.header.gas_varnames().iter()
             .map(|k| (k.as_str(), *rec.data.get(k.as_str()).unwrap()));
         let gas_data = HashMap::from_iter(gas_it);
         Ok(PostprocData { spectrum: rec.spectrum, aux_data, gas_data })
+    }
+
+    pub fn aux_varnames(&self) -> &[String] {
+        self.header.aux_varnames()
+    }
+
+    pub fn gas_varnames(&self) -> &[String] {
+        self.header.gas_varnames()
     }
 }
 
