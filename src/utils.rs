@@ -667,7 +667,7 @@ pub struct CommonHeader {
 /// 
 /// # See also
 /// * [`get_nhead_ncol`] - shortcut to get the first two numbers (number of header lines and number of data columns)
-/// * [`get_nhead`] - shortcut to get the first numbers (number of header lines)
+/// * [`get_nhead`] - shortcut to get the first number (number of header lines)
 pub fn get_file_shape_info<F: BufRead>(f: &mut FileBuf<F>, min_numbers: usize) -> Result<Vec<usize>, HeaderError> {
     let mut buf = String::new();
     f.read_line(&mut buf)
@@ -809,7 +809,7 @@ pub fn read_common_header<F: BufRead>(f: &mut FileBuf<F>) -> Result<CommonHeader
     Ok(CommonHeader { nhead, ncol, missing, fformat, column_names })
 }
 
-
+/// A structure representing the list of directories where spectra may be stored.
 pub struct DataPartition {
     paths: Vec<PathBuf>,
     previous_index: std::cell::Cell<usize>,
@@ -897,22 +897,11 @@ impl DataPartition {
     /// 
     /// # Returns
     /// If the spectrum was found, then an `Some(p)` is returned, where `p` is the path
-    /// to the spectrum. If the spectrum was *not* found, `Ok(None)` is returned. An `Err`
-    /// is returned if:
-    /// 
-    /// * `$GGGPATH` is not set,
-    /// * `$GGGPATH/config/data_part.lst` does not exist, or
-    /// * a line of `data_part.lst` could not be read.
-    /// 
-    /// The final condition returns an `Err` rather than silently skipping the unreadable line
-    /// to avoid accidentally reading a spectrum from a later directory than it should if the
-    /// `data_part.lst` file was formatted correctly.
-    /// 
+    /// to the spectrum. If the spectrum was *not* found, `None` is returned.
+    ///
     /// # Difference to Fortran
-    /// Unlike the Fortran subroutine that performs this task, this function does not require
-    /// that the paths in `data_part.lst` end in a path separator. Also, this always starts 
-    /// from the first path in the configured data partition, whereas the Fortran may resume
-    /// from its previous line.
+    /// This always starts from the first path in the configured data partition, whereas the
+    /// Fortran (at least in GGG2020) may resume from its previous line.
     pub fn find_spectrum(&self, specname: &str) -> Option<PathBuf> {
         // Try the previous directory where we found a spectrum first - 
         // since runlogs normally keep spectra from the same location together,
