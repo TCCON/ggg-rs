@@ -247,7 +247,7 @@ impl I2SParamIterWithIndex {
     }
 }
 
-impl<'a> Iterator for I2SParamIterWithIndex {
+impl Iterator for I2SParamIterWithIndex {
     type Item = std::io::Result<(usize, String)>;
 
     fn next(&mut self) -> Option<Self::Item> {

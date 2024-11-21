@@ -704,16 +704,11 @@ pub fn read_common_header<F: BufRead>(f: &mut FileBuf<F>) -> Result<CommonHeader
             let format_str = line.replace("format=", "");
             fformat = Some(
                 FortFormat::parse(&format_str)
-                // .map_err(|e| GggError::HeaderError { 
-                //     path: f.path.to_path_buf(), 
-                //     cause: format!("Error parsing format line: {e}") 
-                // })?
-                .map_err(|e| HeaderError::ParseError { 
-                        location: FileLocation::new(Some(f.path.to_path_buf()), None, Some(line.clone())),
-                        cause: format!("Error parsing format line: {e}")
-                    }
-                )?
-            );
+                    .map_err(|e| HeaderError::ParseError {
+                        location: f.path.as_path().into(), 
+                        cause: format!("Error parsing format line: {e}") 
+                    })?
+                );
         }
         if line.starts_with("missing:") {
             let missing_str = line.replace("missing:", "");

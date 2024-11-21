@@ -2,19 +2,20 @@ use std::{collections::{HashMap, HashSet}, fmt::Display, path::{Path, PathBuf}, 
 
 use chrono::{DateTime, Utc};
 use error_stack::ResultExt;
-use ggg_rs::{cit_spectrum_name::{CitSpectrumName, NoDetectorSpecName}, output_files::{open_and_iter_postproc_file, PostprocType}, runlogs::FallibleRunlog, tccon::input_config::TcconWindowPrefixes, utils::parse_window_name};
+use ggg_rs::{cit_spectrum_name::{CitSpectrumName, NoDetectorSpecName}, output_files::{open_and_iter_postproc_file, PostprocType}, runlogs::{FallibleRunlog, RunlogDataRec}, tccon::input_config::TcconWindowPrefixes, utils::parse_window_name};
 use itertools::Itertools;
 use log::warn;
 use ndarray::Array1;
+use netcdf::Extents;
 
-use crate::interface::{DataGroup, TranscriptionError};
+use crate::{attributes::{self, FixedVar}, error::SetupError, interface::{DataGroup, TranscriptionError}};
 use crate::dimensions::{Dimension, DimensionWithValues};
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub enum DataSourceType {
     Runlog,
+    PostprocFile(PostprocType),
     ColFile,
-    PostprocFile,
 }
 
 /// A trait representing one source of data to copy to the netCDF file
@@ -33,7 +34,7 @@ pub trait DataSource: Display {
     fn required_dimensions(&self) -> &[Dimension];
     fn required_groups(&self) -> &[DataGroup];
     fn variable_names(&self) -> &[String];
-    fn write_variables(&mut self, nc_grp: &mut netcdf::GroupMut, group: &DataGroup) -> Result<(), TranscriptionError>;
+    fn write_variables(&mut self, nc_grp: &mut netcdf::GroupMut, group: &DataGroup) -> error_stack::Result<(), TranscriptionError>;
 }
 
 pub(crate) struct DataSourceList(Vec<Box<dyn DataSource>>);
@@ -67,28 +68,133 @@ impl DataSourceList {
     }
 }
 
+struct RunlogData {
+    year: Vec<i32>,
+    day: Vec<i32>,
+    others: HashMap<FixedVar, Vec<f32>>,
+    order: Vec<FixedVar>,
+}
+
+impl RunlogData {
+    fn push(&mut self, rec: &RunlogDataRec, curr_index: usize) {
+        if self.year.len() + 1 != curr_index {
+            panic!("Expected to add element {curr_index} to year, actually adding {}", self.year.len() + 1)
+        }
+        self.year.push(rec.year);
+
+        if self.day.len() + 1 != curr_index {
+            panic!("Expected to add element {curr_index} to year, actually adding {}", self.day.len() + 1)
+        }
+        self.day.push(rec.day);
+
+        self._push_helper(rec, FixedVar::Hour, rec.hour, curr_index);
+        self._push_helper(rec, FixedVar::Lat, rec.obs_lat, curr_index);
+        self._push_helper(rec, FixedVar::Lon, rec.obs_lon, curr_index);
+        self._push_helper(rec, FixedVar::Zobs, rec.obs_alt, curr_index);
+        self._push_helper(rec, FixedVar::Solzen, rec.asza, curr_index);
+        self._push_helper(rec, FixedVar::Azim, rec.azim, curr_index);
+        self._push_helper(rec, FixedVar::Osds, rec.osds, curr_index);
+        self._push_helper(rec, FixedVar::Opd, rec.opd, curr_index);
+        self._push_helper(rec, FixedVar::Fovi, rec.fovi, curr_index);
+        self._push_helper(rec, FixedVar::Amal, rec.amal, curr_index);
+        self._push_helper(rec, FixedVar::Graw, rec.delta_nu, curr_index);
+        self._push_helper(rec, FixedVar::Tins, rec.tins, curr_index);
+        self._push_helper(rec, FixedVar::Pins, rec.pins, curr_index);
+        self._push_helper(rec, FixedVar::Tout, rec.tout, curr_index);
+        self._push_helper(rec, FixedVar::Pout, rec.pout, curr_index);
+        self._push_helper(rec, FixedVar::Hout, rec.hout, curr_index);
+        self._push_helper(rec, FixedVar::Sia, rec.sia, curr_index);
+        self._push_helper(rec, FixedVar::Fvsi, rec.fvsi, curr_index);
+        self._push_helper(rec, FixedVar::Wspd, rec.wspd, curr_index);
+        self._push_helper(rec, FixedVar::Wdir, rec.wdir, curr_index);
+    }
+
+    fn _push_helper(&mut self, rec: &RunlogDataRec, key: FixedVar, value: f64, curr_index: usize) {
+        let v = if let Some(v) = self.others.get_mut(&key) {
+            v
+        } else {
+            // do this rather than .expect() so we can insert the key in the message
+            panic!("{key} not initialized; if this is a new runlog variable, ensure it is added to RunlogData::default()");
+        };
+
+        if v.len() + 1 != curr_index {
+            panic!("Expected to add element {curr_index} to {key}, actually adding {}", v.len() + 1)
+        }
+
+        v.push(value as f32);
+    }
+
+    fn write_to_nc(&self, grp: &mut netcdf::GroupMut) -> error_stack::Result<(), TranscriptionError> {
+        // TODO: make use of error stack - needs the TranscriptionError to r
+        let mut var = grp.add_variable::<i32>(&FixedVar::Year.to_string(), &[&Dimension::Time.to_string()])
+            .map_err(|e| TranscriptionError::WriteError { variable: "year".to_string(), inner: e })?;
+        var.put_values(&self.year, Extents::All)
+            .map_err(|e| TranscriptionError::WriteError { variable: "year".to_string(), inner: e })?;
+        attributes::year_attrs().write_attrs(&mut var)
+            .map_err(|e| TranscriptionError::WriteError { variable: "year".to_string(), inner: e })?;
+
+        let mut var = grp.add_variable::<i32>(&FixedVar::Day.to_string(), &[&Dimension::Time.to_string()])
+            .map_err(|e| TranscriptionError::WriteError { variable: "day".to_string(), inner: e })?;
+        var.put_values(&self.day, Extents::All)
+            .map_err(|e| TranscriptionError::WriteError { variable: "day".to_string(), inner: e })?;
+        attributes::day_attrs().write_attrs(&mut var)
+        .map_err(|e| TranscriptionError::WriteError { variable: "day".to_string(), inner: e })?;
+
+        for key in self.order.iter() {
+            let values = self.others.get(key).expect("All variables in `order` should have a corresponding entry in `others`");
+            let mut var = grp.add_variable::<f32>(&key.to_string(), &[&Dimension::Time.to_string()])
+                .map_err(|e| TranscriptionError::WriteError { variable: key.to_string(), inner: e })?;
+            var.put_values(&values, Extents::All)
+                .map_err(|e| TranscriptionError::WriteError { variable: key.to_string(), inner: e })?;
+            key.write_attrs(&mut var)
+                .map_err(|e| TranscriptionError::WriteError { variable: key.to_string(), inner: e })?;
+        }
+        Ok(())
+    }
+}
+
+impl Default for RunlogData {
+    fn default() -> Self {
+        let order = vec![FixedVar::Hour, FixedVar::Lat, FixedVar::Lon, FixedVar::Zobs, FixedVar::Solzen,
+                                        FixedVar::Azim, FixedVar::Osds, FixedVar::Opd, FixedVar::Fovi, FixedVar::Amal,
+                                        FixedVar::Graw, FixedVar::Tins, FixedVar::Pins, FixedVar::Tout, FixedVar::Pout,
+                                        FixedVar::Hout, FixedVar::Sia, FixedVar::Fvsi, FixedVar::Wspd, FixedVar::Wdir];
+        let others = HashMap::from_iter(
+            order.iter().copied().map(|k| (k, vec![]))
+        );
+        Self { 
+            year: Default::default(),
+            day: Default::default(),
+            others,
+            order
+        }
+    }
+}
+
 pub struct TcconRunlog {
     runlog: PathBuf,
     variables: Vec<String>,
     dimensions: Vec<DimensionWithValues>,
-    spectrum_to_index: HashMap<String, usize>
+    spectrum_to_index: HashMap<NoDetectorSpecName, usize>,
+    variable_data: RunlogData,
 }
 
 impl TcconRunlog {
     pub fn new(runlog: PathBuf) -> Result<Self, TranscriptionError> {
-        let (times, master_spectra, spectrum_to_index, max_specname_len) = Self::read_dims(&runlog)?;
+        let (times, master_spectra, spectrum_to_index, variable_data, max_specname_len) = Self::read_dims_and_vars(&runlog)?;
         let time_dim = DimensionWithValues::Time(times, master_spectra);
         let specname_dim = DimensionWithValues::SpectrumNameLength(max_specname_len);
 
-        let variables = vec![]; // TODO: define the variables we want from the runlog
-        Ok(Self { runlog, variables, spectrum_to_index, dimensions: vec![time_dim, specname_dim] })
+        let variables = vec![]; // TODO: define the variables we want from the runlog - this should be all the aux variables except zmin
+        Ok(Self { runlog, variables, spectrum_to_index, dimensions: vec![time_dim, specname_dim], variable_data })
     }
 
     pub fn get_spec_index(&self, spectrum: &str) -> Option<usize> {
-        self.spectrum_to_index.get(spectrum).map(|i| *i)
+        let ndspec = NoDetectorSpecName::new(spectrum).ok()?;
+        self.spectrum_to_index.get(&ndspec).map(|i| *i)
     }
 
-    fn read_dims(runlog: &Path) -> Result<(Array1<DateTime<Utc>>, Array1<String>, HashMap<String, usize>, usize), TranscriptionError> {
+    fn read_dims_and_vars(runlog: &Path) -> Result<(Array1<DateTime<Utc>>, Array1<String>, HashMap<NoDetectorSpecName, usize>, RunlogData, usize), TranscriptionError> {
         let runlog_handle = FallibleRunlog::open(runlog)
             .map_err(|e| TranscriptionError::ReadError { file: runlog.to_path_buf(), cause: e.to_string() })?;
 
@@ -97,9 +203,11 @@ impl TcconRunlog {
         let mut times = vec![];
         let mut spectra = vec![];
         let mut time_index_mapping = HashMap::new();
-        let mut spec_check = HashSet::new();
+        let mut spec_check: HashSet<NoDetectorSpecName> = HashSet::new();
         let mut curr_time_index: usize = 0;
         let mut max_specname_length = 0;
+        let mut variable_data = RunlogData::default();
+
         for (line, res) in runlog_handle.into_line_iter() {
             // Handle the case where reading & parsing the next line of the runlog fails
             let rl_rec = match res {
@@ -126,7 +234,7 @@ impl TcconRunlog {
             // while both should have the same ZPD time, this isn't always the case, and Opus occasionally 
             // writes out incorrect ZPD times for the second detector.) In the output, any data coming from the
             // secondary detector will be slotted into the same time index as the primary detector's data if there
-            // is a pimary detector.
+            // is a primary detector.
 
             let is_new_obs = if let Some(ls) = &last_spec {
                 if ls != &spectrum {
@@ -142,7 +250,7 @@ impl TcconRunlog {
                 true
             };
             
-            time_index_mapping.insert(rl_rec.spectrum_name.clone(), curr_time_index);
+            time_index_mapping.insert(spectrum.clone(), curr_time_index);
             if is_new_obs && spec_check.contains(&spectrum) {
                 // This should mean that a spectrum has the same name (ignoring the detector)
                 // as a spectrum we already encountered. This means the runlog is formatted in
@@ -156,8 +264,9 @@ impl TcconRunlog {
             } else if is_new_obs {
                 max_specname_length = max_specname_length.max(spectrum.0.spectrum().as_bytes().len());
                 times.push(zpd_time);
-                spectra.push(spectrum.spectrum_name().to_string());
-                spec_check.insert(spectrum);
+                spectra.push(spectrum.0.spectrum().to_string());
+                time_index_mapping.insert(spectrum, curr_time_index);
+                variable_data.push(&rl_rec, curr_time_index);
                 curr_time_index += 1;
             } else if last_time != Some(zpd_time) {
                 // This is *not* the first spectrum for the obs, but it has a different ZPD time than the last
@@ -174,7 +283,7 @@ impl TcconRunlog {
         let times = Array1::from_vec(times);
         let spectra = Array1::from_vec(spectra);
 
-        Ok((times, spectra, time_index_mapping, max_specname_length))
+        Ok((times, spectra, time_index_mapping, variable_data, max_specname_length))
     }
 }
 
@@ -203,8 +312,12 @@ impl DataSource for TcconRunlog {
         &self.variables
     }
 
-    fn write_variables(&mut self, nc_grp: &mut netcdf::GroupMut, group: &DataGroup) -> Result<(), crate::interface::TranscriptionError> {
-        todo!()
+    fn write_variables(&mut self, nc_grp: &mut netcdf::GroupMut, group: &crate::interface::DataGroup) -> error_stack::Result<(), crate::interface::TranscriptionError> {
+        if let crate::interface::DataGroup::InGaAs = group {
+            // Only write to the standard group
+            self.variable_data.write_to_nc(nc_grp)?;
+        }
+        Ok(())
     }
 }
 
@@ -269,9 +382,7 @@ impl PostprocFile {
                 file: path.clone(), 
                 cause: "error while opening the file".into()
             })?;
-        let nrow = header.nrow.ok_or_else(|| TranscriptionError::Custom(
-            "Header does not include the number of rows of data".to_string()
-        ))?;
+        let nrow = header.nrec;
 
         let row = it.next().ok_or_else(|| {
             TranscriptionError::ReadError {
@@ -406,11 +517,31 @@ impl PostprocFile {
             PostprocType::Other(s) => format!("{s} {orig_varname}"),
         }
     }
+
+    fn aux_to_write(&self) -> &[&str] {
+        if let PostprocType::VavAdaAia = self.postproc_type {
+            &["zmin"]
+        } else {
+            &[]
+        }
+    }
+}
+
+impl Display for PostprocFile {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let filename = if let Some(name) = self.path.file_name() {
+            name.to_string_lossy()
+        } else {
+            self.path.to_string_lossy()
+        };
+
+        write!(f, "{} ({filename})", self.postproc_type)
+    }
 }
 
 impl DataSource for PostprocFile {
     fn source_type(&self) -> DataSourceType {
-        DataSourceType::PostprocFile
+        DataSourceType::PostprocFile(self.postproc_type.clone())
     }
 
     fn file(&self) -> &Path {
@@ -433,7 +564,7 @@ impl DataSource for PostprocFile {
         &self.output_var_names
     }
 
-    fn write_variables(&mut self, nc_grp: &mut netcdf::GroupMut, group: &DataGroup) -> Result<(), TranscriptionError> {
+    fn write_variables(&mut self, nc_grp: &mut netcdf::GroupMut, group: &DataGroup) -> error_stack::Result<(), TranscriptionError> {
         // Get the variables for just this group in the order they were listed in the output vector - that
         // gives us control to group variables together in ncdump output.
         let mut vars_to_write = self.group_map.iter()
@@ -464,17 +595,5 @@ impl DataSource for PostprocFile {
                 .map_err(|e| TranscriptionError::WriteError { variable: outname.to_string(), inner: e })?;
         }
         todo!()
-    }
-}
-
-impl Display for PostprocFile {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let filename = if let Some(name) = self.path.file_name() {
-            name.to_string_lossy()
-        } else {
-            self.path.to_string_lossy()
-        };
-
-        write!(f, "postproc file ({filename})")
     }
 }

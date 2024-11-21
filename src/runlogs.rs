@@ -12,6 +12,10 @@ pub const NUM_RUNLOG_COLS: usize = 36;
 /// A struct representing one line of a GGG2020 runlog.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct RunlogDataRec {
+    /// The line number in the file
+    #[serde(skip)]
+    file_line_num: usize,
+
     /// Whether this line was commented out in the runlog
     #[serde(deserialize_with = "deser_comment", serialize_with = "ser_comment")]
     pub commented: bool,
@@ -112,6 +116,28 @@ pub struct RunlogDataRec {
     pub aipl: f64
 }
 
+impl RunlogDataRec {
+    pub fn file_line_num(&self) -> usize {
+        self.file_line_num
+    }
+
+    /// Return the zero path difference time defined in this entry
+    ///
+    /// Converts the year, day, and hour fields of the runlog entry to
+    /// a [`chrono::DateTime`] instance with the UTC timezone. Will 
+    /// return `None` if the day value is out of range for the given year.
+    /// In most cases, it is safe to unwrap the returned option, since
+    /// `create_runlog` should not generate an invalid day-of-year value. 
+    pub fn zpd_time(&self) -> Option<chrono::DateTime<chrono::Utc>> {
+        let dt = chrono::NaiveDate::from_yo_opt(self.year, self.day as u32)?
+            .and_hms_opt(0, 0, 0).unwrap()
+            .and_utc();
+        let delta_nanos = self.hour * 3600.0 * 1e9;
+        let tdel = chrono::TimeDelta::nanoseconds(delta_nanos as i64);
+        Some(dt + tdel)
+    }
+}
+
 impl approx::AbsDiffEq for RunlogDataRec {
     type Epsilon = f64;
 
@@ -178,24 +204,6 @@ where S: Serializer
         serializer.serialize_char(':')
     } else {
         serializer.serialize_char(' ')
-    }
-}
-
-impl RunlogDataRec {
-    /// Return the zero path difference time defined in this entry
-    ///
-    /// Converts the year, day, and hour fields of the runlog entry to
-    /// a [`chrono::DateTime`] instance with the UTC timezone. Will 
-    /// return `None` if the day value is out of range for the given year.
-    /// In most cases, it is safe to unwrap the returned option, since
-    /// `create_runlog` should not generate an invalid day-of-year value. 
-    pub fn zpd_time(&self) -> Option<chrono::DateTime<chrono::Utc>> {
-        let dt = chrono::NaiveDate::from_yo_opt(self.year, self.day as u32)?
-            .and_hms_opt(0, 0, 0).unwrap()
-            .and_utc();
-        let delta_nanos = self.hour * 3600.0 * 1e9;
-        let tdel = chrono::TimeDelta::nanoseconds(delta_nanos as i64);
-        Some(dt + tdel)
     }
 }
 
@@ -278,12 +286,10 @@ impl Runlog {
         }
 
         if header.fformat.is_none() {
-            return Err(GggError::HeaderError(
-                HeaderError::ParseError { 
-                    location: FileLocation::new::<_, String>(Some(runlog.to_path_buf()), None, None),
-                    cause: "No format line found in the header".to_string()
-                }
-            ))
+            return Err(GggError::HeaderError(HeaderError::ParseError {
+                location: runlog.into(), 
+                cause: "No format line found in the header".to_string() 
+            }));
         }
     
         // At this point, the file handle will be pointing to the first line of data in the runlog
@@ -330,12 +336,12 @@ impl Runlog {
                 continue;
             }
 
-            let data_rec: RunlogDataRec = from_str_with_fields(&line,fformat, &fields)
+            let mut data_rec: RunlogDataRec = from_str_with_fields(&line,fformat, &fields)
                 .map_err(|e| GggError::DataError { 
                     path: self.rl_handle.path.to_path_buf(),
                     cause: format!("Error deserializing line #{}: {e}", self.curr_line())
                 })?;
-
+            data_rec.file_line_num = self.curr_line();
             
             return Ok(Some(data_rec));
         }
@@ -414,26 +420,37 @@ impl Iterator for FallibleRunlog {
     }
 }
 
+pub struct FallibleRunlogLineIter {
+    runlog: Runlog
+}
+
+impl Iterator for FallibleRunlogLineIter {
+    type Item = (usize, Result<RunlogDataRec, GggError>);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let rec = self.runlog.next_data_record(false).transpose()?;
+        // TODO: verify that this returns the correct line (i.e. doesn't need to be called first)
+        let line_num = self.runlog.curr_line();
+        Some((line_num, rec))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
-
     use rstest::{rstest, fixture};
+    use crate::test_utils::test_data_dir;
     use super::*;
 
     #[fixture]
     fn benchmark_rl_path() -> PathBuf {
-        let test_data_dir = PathBuf::from(file!())
-            .parent().unwrap()
-            .parent().unwrap()
-            .join("test-data");
-        test_data_dir.join("pa_ggg_benchmark.grl")
+        test_data_dir().join("pa_ggg_benchmark.grl")
     }
 
     #[rstest]
     fn test_runlog_data(benchmark_rl_path: PathBuf) {
         let data_rec_1a = RunlogDataRec {
-            commented: false,
+            file_line_num: 0, commented: false,
             spectrum_name: "pa20040721saaaaa.043".to_string(), year: 2004, day: 203, hour: 20.5956, obs_lat: 45.945, obs_lon: -90.273, obs_alt: 0.442,
             asza: 39.684, poff: 0.0, azim: 242.281, osds: 0.138, opd: 45.02, fovi: 0.0024, fovo: 0.0024, amal: 0.0, ifirst: 530991, ilast: 1460226,
             delta_nu: 0.00753308262, pointer: 108232, bpw: -4, zoff: 0.000, snr: 117, apf: utils::ApodizationFxn::BoxCar, tins: 30.3, pins: 0.9, hins: 99.9,
@@ -463,7 +480,7 @@ mod tests {
     #[rstest]
     fn test_zpd_time_conversion() {
         let mut data_rec = RunlogDataRec {
-            commented: false,
+            commented: false, file_line_num: 1,
             spectrum_name: "pa20040721saaaaa.043".to_string(), year: 2004, day: 203, hour: 20.5956, obs_lat: 45.945, obs_lon: -90.273, obs_alt: 0.442,
             asza: 39.684, poff: 0.0, azim: 242.281, osds: 0.138, opd: 45.02, fovi: 0.0024, fovo: 0.0024, amal: 0.0, ifirst: 530991, ilast: 1460226,
             delta_nu: 0.00753308262, pointer: 108232, bpw: -4, zoff: 0.000, snr: 117, apf: utils::ApodizationFxn::BoxCar, tins: 30.3, pins: 0.9, hins: 99.9,
@@ -502,21 +519,5 @@ mod tests {
         chrono::NaiveDate::from_ymd_opt(year, month, day).unwrap()
             .and_hms_nano_opt(hour, minute, second, nanos).unwrap()
             .and_utc()
-    }
-}
-
-
-pub struct FallibleRunlogLineIter {
-    runlog: Runlog
-}
-
-impl Iterator for FallibleRunlogLineIter {
-    type Item = (usize, Result<RunlogDataRec, GggError>);
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let rec = self.runlog.next_data_record(false).transpose()?;
-        // TODO: verify that this returns the correct line (i.e. doesn't need to be called first)
-        let line_num = self.runlog.curr_line();
-        Some((line_num, rec))
     }
 }

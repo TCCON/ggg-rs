@@ -4,6 +4,7 @@ mod interface;
 mod sources;
 mod setup;
 mod dimensions;
+mod attributes;
 
 use std::{path::{PathBuf, Path}, fmt::Debug, process::ExitCode, ffi::OsString};
 
@@ -59,6 +60,9 @@ fn driver(run_dir: &Path, args: WriteNcCli) -> error_stack::Result<OsString, Cli
     dimensions::write_required_dimensions(&mut nc_root, &all_sources)
         .change_context_lazy(|| CliError::Dimension)?;
 
+    // TODO: collect the groups needed. Iterate through the groups and write the variables.
+    // Will need to update the runlog writer to use a function that properly appends suffixes
+    // if writing a flat file.
 
     if args.keep_runlog_name {
         Ok(runlog_name.to_os_string())
@@ -83,6 +87,7 @@ struct WriteNcCli {
     hierachical_file: bool,
 }
 
+/// Finalize the netCDF file; move it from the temporary path to the final path.
 fn finalize(nc_path: &Path, mut final_name_stem: OsString) -> Result<(), std::io::Error> {
     final_name_stem.push(".private.nc");
     let out_path = nc_path.with_file_name(final_name_stem);
@@ -94,6 +99,7 @@ fn cleanup<E: Debug>(err: E) -> ExitCode {
     ExitCode::FAILURE
 }
 
+/// Create the netCDF file at the temporary location
 fn init_nc_file(run_dir: &Path) -> error_stack::Result<netcdf::FileMut, netcdf::Error> {
     let nc_file = temporary_nc_path(run_dir);
     let file = netcdf::create(nc_file)?;

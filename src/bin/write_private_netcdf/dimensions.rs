@@ -162,6 +162,9 @@ impl DimensionWithValues {
         let ntimes = nc.dimension(&Dimension::Time.to_string())
             .ok_or_else(|| netcdf::Error::NotFound(Dimension::Time.to_string()))?
             .len();
+        let speclength = nc.dimension(&Dimension::SpectrumNameLength.to_string())
+            .ok_or_else(|| netcdf::Error::NotFound(Dimension::Time.to_string()))?
+            .len();
 
         if ntimes != specnames.len() {
             return Err(netcdf::Error::DimensionMismatch { wanted: specnames.len(), actual: ntimes })

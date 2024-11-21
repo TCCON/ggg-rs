@@ -3,10 +3,11 @@
     "netcdf", "inprogress"
   ],
   "rust-analyzer.server.extraEnv": {
-    "HDF5_DIR": "/Users/laughner/Documents/Projects/TCCON/ggg-stable/install/.mambaenv",
-    "NETCDF_DIR": "/Users/laughner/Documents/Projects/TCCON/ggg-stable/install/.mambaenv",
-    "RUSTFLAGS": "-C link-args=-Wl,-rpath,/Users/laughner/Documents/Projects/TCCON/ggg-stable/install/.mambaenv/lib"
+    "HDF5_DIR": "/Users/laughner/micromamba/envs/netcdf-for-rust/",
+    "NETCDF_DIR": "/Users/laughner/micromamba/envs/netcdf-for-rust/",
+    "RUSTFLAGS": "-C link-args=-Wl,-rpath,/Users/laughner/micromamba/envs/netcdf-for-rust/lib"
   },
   "rust-analyzer.cargo.noDefaultFeatures": true, 
   "rust-analyzer.showUnlinkedFileNotification": false,
+  "cmake.configureOnOpen": false,
 }
