@@ -2,10 +2,14 @@
   "rust-analyzer.cargo.features": [
     "netcdf", "inprogress"
   ],
+  // To compile with pre-built netCDF and HDF5 libraries,
+  // you would set GGGRS_NCDIR in your shell's .*rc file
+  // to point to the directory that contains a lib subdirectory
+  // with libnetcdf* and libhdf5*.
   "rust-analyzer.server.extraEnv": {
-    "HDF5_DIR": "/Users/laughner/micromamba/envs/netcdf-for-rust/",
-    "NETCDF_DIR": "/Users/laughner/micromamba/envs/netcdf-for-rust/",
-    "RUSTFLAGS": "-C link-args=-Wl,-rpath,/Users/laughner/micromamba/envs/netcdf-for-rust/lib"
+    "HDF5_DIR": "${env:GGGRS_NCDIR}",
+    "NETCDF_DIR": "${env:GGGRS_NCDIR}",
+    "RUSTFLAGS": "-C link-args=-Wl,-rpath,${env:GGGRS_NCDIR}/lib"
   },
   "rust-analyzer.cargo.noDefaultFeatures": true, 
   "rust-analyzer.showUnlinkedFileNotification": false,
