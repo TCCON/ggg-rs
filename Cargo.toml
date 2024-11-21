@@ -8,7 +8,7 @@ resolver = "2"
 
 [dependencies]
 approx = "0.5.1"
-chrono = "0.4.23"
+chrono = {version = "0.4.23", features=["serde"]}
 clap = {version = "4", features = ["derive"]}
 clap-verbosity-flag = "2.2.0"
 encoding = "0.2.33"
@@ -17,7 +17,8 @@ log = "0.4.20"
 log4rs = "1.2.0"
 error-stack = "0.4.1"
 fortformat = {git = "https://github.com/joshua-laughner/fortformat", features = ["serde"]}
-ndarray = "0.15"
+indexmap = "2.5"
+ndarray = {version = "0.15", features = ["approx"]}
 netcdf = {version = "0.9.3", optional=true}
 num-traits = "0.2.16"
 pest = "2.7.5"
@@ -30,6 +31,8 @@ strum = { version = "0.25.0", features = ["derive"] }
 tabled = "0.15.0"
 thiserror = "1.0.50"
 toml = "0.8.8"
+nalgebra = "0.33.0"
+lstsq = "0.6.0"
 
 [dev-dependencies]
 rstest = "0.18.2"
@@ -48,6 +51,9 @@ required-features = ["netcdf"]
 
 [[bin]]
 name = "collate_tccon_results"
+
+[[bin]]
+name = "apply_tccon_airmass_correction"
 
 [[bin]]
 name = "list_spectra"

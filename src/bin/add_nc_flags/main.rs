@@ -1,7 +1,9 @@
-use std::{path::{PathBuf, Path}, str::FromStr, fmt::Display, process::ExitCode};
+use std::{collections::HashMap, fmt::Display, io::{BufRead, Write}, path::{Path, PathBuf}, process::ExitCode, str::FromStr};
 
-use clap::{Parser, Args};
+use clap::{Args, Parser, Subcommand};
 use error_stack::ResultExt;
+use itertools::Itertools;
+use serde::{Deserialize, Serialize};
 
 fn main() -> ExitCode {
     if let Err(e) = main_inner() {
@@ -14,10 +16,36 @@ fn main() -> ExitCode {
 
 fn main_inner() -> error_stack::Result<(), CliError> {
     let args = Cli::parse();
+    match args.command {
+        Commands::Quick(quick_args) => {
+            let no_filters_defined = quick_args.filtering.filter.no_filters();
+            let output = quick_args.output.clone();
+            let nc_file = quick_args.nc_file.clone();
+            let nchanged = driver(output,quick_args.into(), &nc_file)?;
+            if nchanged == 0 && no_filters_defined {
+                println!("Note: nothing flagged because you gave neither the --less-than nor --greater-than argument.");
+            }
+        },
+        Commands::Json(json_args) => {
+            let filter_set = json_args.load_filters()?;
+            let no_filters_defined = filter_set.no_filters();
+            let nchanged = driver(json_args.output, filter_set, &json_args.nc_file)?;
+            if nchanged == 0 && no_filters_defined {
+                println!("Note: nothing flagged because no filters were defined in the given JSON file");
+            }
+        },
+        Commands::JsonTemplate(template_args) => {
+            FilterSet::write_template(&template_args.template_file)?;
+        },
+    }
 
+    Ok(())
+}
+
+fn driver(output: OutputCli, filters: FilterSet, nc_file: &Path) -> error_stack::Result<u64, CliError> {
     // One check - if we are outputting to a new path, make sure that isn't a directory but
     // that its parent directory exists. This way we can give a clearer error message.
-    if let Some(out_file) = &args.output.output {
+    if let Some(out_file) = &output.output {
         if out_file.is_dir() {
             return Err(CliError::UserError("Path given to --output must not be a directory".to_string()).into());
         }
@@ -39,37 +67,33 @@ fn main_inner() -> error_stack::Result<(), CliError> {
     }
 
 
-    let data = load_flags_and_data(&args.nc_file, &args.filtering.filter_var)?;
-    let (data, nchanged) = update_flags(data, &args.filtering, &args.flagging)?;
+    let data = load_flags_and_data(nc_file, &filters.filter_vars())?;
+    let (new_flags, nchanged) = update_flags(data, &filters, &filters.flags)?;
 
     if nchanged == 0 {
-        if args.output.in_place {
-            println!("No flags required update, file {} unchanged.", args.nc_file.display());
-        } else if args.output.always_copy {
+        if output.in_place {
+            println!("No flags required update, file {} unchanged.", nc_file.display());
+        } else if output.always_copy {
             // Ok to unwrap args.output.output - Cli::parse ensures in_place or output is given
-            let out_file = args.output.output.as_deref().unwrap();
-            std::fs::copy(&args.nc_file, out_file)
+            let out_file = output.output.as_deref().unwrap();
+            std::fs::copy(nc_file, out_file)
                 .change_context(CliError::IoError)
                 .attach_printable("Could not copy NC_FILE to the path given by --output")?;
-            println!("No flags required update, copied {} to {}", args.nc_file.display(), out_file.display());
+            println!("No flags required update, copied {} to {}", nc_file.display(), out_file.display());
         } else {
             // Ok to unwrap args.output.output - Cli::parse ensures in_place or output is given
-            println!("No flags required update, did not produce/overwrite output file {}", args.output.output.unwrap().display());
+            println!("No flags required update, did not produce/overwrite output file {}", output.output.unwrap().display());
         }
-
-        if args.filtering.less_than.is_none() && args.filtering.greater_than.is_none() {
-            println!("Note: nothing flagged because you gave neither the --less-than nor --greater-than argument.")
-        }
-        return Ok(());
+        return Ok(nchanged);
     }
 
-    let output_file = if let Some(f) = args.output.output {
-        std::fs::copy(&args.nc_file, &f)
+    let output_file = if let Some(f) = &output.output {
+        std::fs::copy(nc_file, &f)
             .change_context(CliError::IoError)
             .attach_printable("Could not copy NC_FILE to the path given by --output")?;
         f
-    } else if args.output.in_place {
-        args.nc_file
+    } else if output.in_place {
+        nc_file
     } else {
         panic!("One of --in-place or --output must be given");
     };
@@ -80,12 +104,12 @@ fn main_inner() -> error_stack::Result<(), CliError> {
     let mut flags = ds.variable_mut("flag")
         .ok_or_else(|| CliError::MissingReqVariable("flag"))
         .attach_printable("This occurred while trying to get the flag variable in either the new output file or (if --in-place given) the original file")?; // this really shouldn't happen, since we read that variable in already
-    flags.put_values(data.flags.as_slice().unwrap(), netcdf::Extents::All)
+    flags.put_values(new_flags.as_slice().unwrap(), netcdf::Extents::All)
         .change_context(CliError::NcError)
         .attach_printable("This occur write new flag values to either the new output file or (if --in-place given) the original file")?;
 
     println!("{nchanged} flag values updated");
-    Ok(())
+    Ok(nchanged)
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -108,7 +132,7 @@ enum CliError {
     UserError(String),
 }
 
-fn load_flags_and_data(nc_file: &Path, filter_varname: &str ) -> error_stack::Result<TcconData, CliError> {
+fn load_flags_and_data<S: AsRef<str> + ToString>(nc_file: &Path, filter_varnames: &[S] ) -> error_stack::Result<TcconData, CliError> {
     let ds = netcdf::open(nc_file)
         .change_context(CliError::NcError)?;
 
@@ -126,55 +150,62 @@ fn load_flags_and_data(nc_file: &Path, filter_varname: &str ) -> error_stack::Re
         .into_dimensionality::<ndarray::Ix1>()
         .change_context_lazy(|| CliError::WrongDimension("flag".to_string(), 1))?;
 
-    let filter_var = ds.variable(filter_varname)
-        .ok_or_else(|| CliError::MissingFilterVariable(filter_varname.to_string()))?
-        .get::<f32, _>(netcdf::Extents::All)
-        .change_context(CliError::NcError)
-        .attach_printable("This error may be caused by trying to filter on a variable that is not of type 'float'")?
-        .into_dimensionality::<ndarray::Ix1>()
-        .change_context_lazy(|| CliError::WrongDimension(filter_varname.to_string(), 1))?;
+    let mut filter_vars = HashMap::new();
+    for varname in filter_varnames {
+        let data = ds.variable(varname.as_ref())
+            .ok_or_else(|| CliError::MissingFilterVariable(varname.to_string()))?
+            .get::<f32, _>(netcdf::Extents::All)
+            .change_context(CliError::NcError)
+            .attach_printable("This error may be caused by trying to filter on a variable that is not of type 'float'")?
+            .into_dimensionality::<ndarray::Ix1>()
+            .change_context_lazy(|| CliError::WrongDimension(varname.to_string(), 1))?;
+        filter_vars.insert(varname.to_string(), data);
+    }
 
-    Ok(TcconData { filter_var, timestamps, flags })
+
+    Ok(TcconData { filter_vars, timestamps, flags })
 }
 
 
 #[derive(Debug)]
 struct TcconData {
-    filter_var: ndarray::Array1<f32>,
+    filter_vars: HashMap<String, ndarray::Array1<f32>>,
     timestamps: ndarray::Array1<f64>,
     flags: ndarray::Array1<i16>,
 }
 
-fn update_flags(mut data: TcconData, filtering: &FilterCli, flagging: &FlagsCli) -> error_stack::Result<(TcconData, u64), CliError> {
-    let value_check = GreaterLess { 
-        greater_than: filtering.greater_than, 
-        less_than: filtering.less_than, 
-        combination: filtering.value_and_or 
-    };
+impl TcconData {
+    fn into_parts(self) -> (ndarray::Array1<f64>, ndarray::Array1<i16>, HashMap<String, ndarray::Array1<f32>>) {
+        (self.timestamps, self.flags, self.filter_vars)
+    }
+}
 
+fn update_flags(data: TcconData, filtering: &FilterSet, flagging: &Flags) -> error_stack::Result<(ndarray::Array1<i16>, u64), CliError> {
     let timestamp_check = GreaterLess {
-        greater_than: filtering.time_greater_than.map(|dt| dt.timestamp() as f64),
-        less_than: filtering.time_less_than.map(|dt| dt.timestamp() as f64),
-        combination: filtering.time_and_or
+        greater_than: filtering.timespan.time_greater_than.map(|dt| dt.and_utc().timestamp() as f64),
+        less_than: filtering.timespan.time_less_than.map(|dt| dt.and_utc().timestamp() as f64),
+        combination: filtering.timespan.time_mode
     };
 
-    if data.filter_var.len() != data.timestamps.len() || data.filter_var.len() != data.flags.len() {
-        return Err(CliError::MismatchedLengths.into());
+    for data_arr in data.filter_vars.values() {
+        if data_arr.len() != data.timestamps.len() || data_arr.len() != data.flags.len() {
+            return Err(CliError::MismatchedLengths.into());
+        }
     }
 
     let mut nchanged = 0;
+    let (data_timestamps, mut data_flags, filter_data) = data.into_parts();
 
-    for (i, f) in data.flags.iter_mut().enumerate() {
+    for (i, f) in data_flags.iter_mut().enumerate() {
         // We checked the lengths before, so we are okay to unwrap here.
-        let t = data.timestamps.get(i).unwrap();
-        let v = data.filter_var.get(i).unwrap();
+        let t = data_timestamps.get(i).unwrap();
 
         if !timestamp_check.no_limits() && !timestamp_check.do_flag(t) {
             // println!("Skipped for time");
             continue;
         }
 
-        if value_check.do_flag(v) {
+        if filtering.do_flag(&filter_data, i) {
             let new = flagging.flag_type.update_flag(*f, flagging.flag, flagging.existing_flags)
                 .change_context_lazy(|| CliError::FlagReplaceError(i))
                 .attach_printable("Suggestion: this may be because part of the file's timespan already has a manual or release flag set. Either use the date limits to work around that, or allow skipping/overwriting existing flags with the --existing-flags option.")?;
@@ -187,7 +218,7 @@ fn update_flags(mut data: TcconData, filtering: &FilterCli, flagging: &FlagsCli)
     }
 
     
-    Ok((data, nchanged))
+    Ok((data_flags, nchanged))
 }
 
 /// Add manual or release flags in a TCCON private netCDF file.
@@ -204,11 +235,25 @@ fn update_flags(mut data: TcconData, filtering: &FilterCli, flagging: &FlagsCli)
 /// an error, but will not add any flags.
 #[derive(Debug, Parser)]
 struct Cli {
+    #[clap(subcommand)]
+    command: Commands
+}
+
+#[derive(Debug, Clone, Subcommand)]
+enum Commands {
+    Quick(QuickCli),
+    Json(JsonCli),
+    JsonTemplate(TemplateCli)
+}
+
+/// Flag a netCDF file on a single variable with arguments given via the command line
+#[derive(Debug, Clone, Args)]
+struct QuickCli {
     #[command(flatten)]
     output: OutputCli,
 
     #[command(flatten)]
-    flagging: FlagsCli,
+    flagging: Flags,
 
     #[command(flatten)]
     filtering: FilterCli,
@@ -218,7 +263,51 @@ struct Cli {
     nc_file: PathBuf,
 }
 
-#[derive(Debug, Args)]
+/// Flag a netCDF file on multiple variables defined in a JSON file.
+#[derive(Debug, Args, Clone)]
+struct JsonCli {
+    #[command(flatten)]
+    output: OutputCli,
+
+    /// Path to a JSON file containing the filter settings.
+    json_file: PathBuf,
+
+    /// The path to the input netCDF file to add flags to
+    #[clap(long)]
+    nc_file: PathBuf
+}
+
+impl JsonCli {
+    fn load_filters(&self) -> error_stack::Result<FilterSet, CliError> {
+        let f = std::fs::File::open(&self.json_file)
+            .change_context_lazy(|| CliError::IoError)?;
+        let rdr = std::io::BufReader::new(f);
+        let lines: Vec<String> = rdr.lines()
+            .filter(|res| {
+                // Remove comment lines, keep other lines and errors
+                if let Ok(s) = res {
+                    !s.trim_start().starts_with("//")
+                } else {
+                    true
+                }
+            })
+            .try_collect()
+            .change_context_lazy(|| CliError::IoError)?;
+        let contents = lines.join("\n");
+        let filter_set: FilterSet = serde_json::from_str(&contents)
+            .change_context_lazy(|| CliError::IoError)?;
+        Ok(filter_set)
+    }
+}
+
+/// Create an example of the filter JSON file
+#[derive(Debug, Clone, Args)]
+struct TemplateCli {
+    /// Path to write the template to
+    template_file: PathBuf,
+}
+
+#[derive(Debug, Clone, Args)]
 struct OutputCli {
     /// Modify the given netCDF file in place. Either this or --output must
     /// be given. Use --output if you prefer not to modify your original netCDF
@@ -237,8 +326,8 @@ struct OutputCli {
     always_copy: bool,
 }
 
-#[derive(Debug, Args)]
-struct FlagsCli {
+#[derive(Debug, Clone, Args, Deserialize, Serialize)]
+struct Flags {
     /// Value to use when flagging data. This must be a value between 1 and 9,
     /// it will be multiplied by 1000 and added to existing flags, i.e. this will 
     /// be treated as a manual flag. See --existing-flags for how conflicts with
@@ -259,31 +348,78 @@ struct FlagsCli {
     /// it is the 10000s place. IMPORTANT: most users should use the default of "manual". 
     /// Release flags are intended ONLY for Caltech staff to use to flag data in response
     /// to QA/QC feedback.
-    #[clap(long, default_value_t = FlagType::Manual)]
+    #[clap(long, default_value_t = FlagType::default())]
     flag_type: FlagType,
 }
 
-#[derive(Debug, Args)]
+impl Default for Flags {
+    fn default() -> Self {
+        Self { flag: 9, existing_flags: Default::default(), flag_type: Default::default() }
+    }
+}
+
+#[derive(Debug, Clone, Args)]
 struct FilterCli {
+    #[clap(flatten)]
+    filter: Filter,
+    #[clap(flatten)]
+    timespan: Timespan
+}
+
+#[derive(Debug, Clone, Args, Deserialize, Serialize)]
+struct Filter {
     /// For numeric variables, flag observations less than this value.
     /// Negative values are allowed.
     #[clap(short='l', long, allow_negative_numbers=true)]
+    #[serde(default)]
     less_than: Option<f32>,
 
     /// For numeric variables, flag observations greater than this value.
     /// Negative values are allowed.
     #[clap(short='g', long, allow_negative_numbers=true)]
+    #[serde(default)]
     greater_than: Option<f32>,
 
     /// If both --less-than and --greater-than are given, this determines
-    /// whether the observation is flagged if VARIABLE has v >= greater_than
-    /// AND v <= less_than or v >= greater_than OR v <= less_than. If only
-    /// one of --less-than  and --greater-than are given, then only the
+    /// whether the observation is flagged if VARIABLE has a value between
+    /// greater_than and less_than (i.e. greater_than <= v <= less_than) 
+    /// if the value is outside less_than and greater_than (i.e. v >= greater_than
+    /// OR v <= less_than). Passing "in" or "inside" for this flag uses the first
+    /// criterion, passing "out" or "outside" uses the second.
+    /// If only one of --less-than  and --greater-than are given, then only the
     /// respective comparison is used; i.e. --less-than 0 will add a flag 
     /// to all measurements where the filter variable is <= 0.
-    #[clap(long, default_value_t = Combination::And)]
-    value_and_or: Combination,
+    #[clap(long, default_value_t = Combination::default())]
+    #[serde(default)]
+    value_mode: Combination,
 
+    /// This is a required argument, it is the name of the variable to filter on.
+    #[clap(short='x', long)]
+    filter_var: String,
+}
+
+impl Filter {
+    fn do_flag(&self, data: &HashMap<String, ndarray::Array1<f32>>, index: usize) -> bool {
+        let comp = GreaterLess {
+            less_than: self.less_than,
+            greater_than: self.greater_than,
+            combination: self.value_mode,
+        };
+
+        let value = data.get(&self.filter_var)
+            .expect("All filter variables should be loaded before filtering")
+            .get(index)
+            .expect("All filter variables should have the same number of elements as the flag variable");
+        comp.do_flag(value)
+    }
+
+    fn no_filters(&self) -> bool {
+        self.less_than.is_none() && self.greater_than.is_none()
+    }
+}
+
+#[derive(Debug, Clone, Default, Args, Deserialize, Serialize)]
+struct Timespan {
     /// To limit the flags to only a specific time period, use this flag along with
     /// --time-greater-than to specify that time period. See --time-and-or for how these
     /// two arguments are interpreted together. These two arguments are
@@ -295,21 +431,127 @@ struct FilterCli {
     #[clap(long, visible_alias="time-lt", value_parser = parse_cli_time_str)]
     time_less_than: Option<chrono::NaiveDateTime>,
 
-    /// See --time-less-than and --time-and-or.
+    /// See --time-less-than and --time-mode.
     #[clap(long, visible_alias="time-gt", value_parser = parse_cli_time_str)]
     time_greater_than: Option<chrono::NaiveDateTime>,
 
     /// If both --time-less-than and --time-greater-than are given, this controls how
-    /// they are combined. The default, "and", does a logical AND, i.e. a measurement
-    /// is flagged only if its time t is time_greater_than <= t <= time_less_than.
-    /// Set this to "or" to instead flag if t >= time_greater_than OR t <= time_less_than,
+    /// they are combined. The default, "inside", flaggs a measurement only if its time
+    /// time t is between time_greater_than and time_less_than.
+    /// Set this to "outside" to instead flag if t >= time_greater_than OR t <= time_less_than,
     /// useful for flagging all points outside a given time period.
-    #[clap(long, default_value_t = Combination::And)]
-    time_and_or: Combination,
+    #[clap(long, default_value_t = Combination::default())]
+    time_mode: Combination,
+}
 
-    /// This is a required argument, it is the name of the variable to filter on.
-    #[clap(short='x', long)]
-    filter_var: String,
+#[derive(Debug, Clone, Deserialize, Serialize)]
+struct FilterAndGroup {
+    filters: Vec<Filter>
+}
+
+impl FilterAndGroup {
+    fn do_flag(&self, data: &HashMap<String, ndarray::Array1<f32>>, index: usize) -> bool {
+        // Only flag if all of the filters say we should flag.
+        self.filters.iter().all(|f| f.do_flag(data, index))
+    }
+
+    fn no_filters(&self) -> bool {
+        if self.filters.is_empty() {
+            return true;
+        }
+
+        self.filters.iter().all(|f| f.no_filters())
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+struct FilterSet {
+    groups: Vec<FilterAndGroup>,
+    #[serde(default)]
+    timespan: Timespan,
+    #[serde(default)]
+    flags: Flags
+}
+
+impl From<QuickCli> for FilterSet {
+    fn from(value: QuickCli) -> Self {
+        Self { 
+            groups: vec![FilterAndGroup{ filters: vec![value.filtering.filter] }],
+            timespan: value.filtering.timespan,
+            flags: value.flagging
+        }
+    }
+}
+
+impl FilterSet {
+    fn template() -> Self {
+        let cl_filter = Filter{ less_than: Some(0.05), greater_than: None, value_mode: Combination::Inside, filter_var: "o2_7885_cl".to_string() };
+        let rms_filter = Filter{ greater_than: Some(0.5), less_than: None, value_mode: Combination::Inside, filter_var: "o2_7885_rmsocl".to_string() };
+        let sg_filter = Filter{ less_than: Some(-0.1), greater_than: Some(0.1), value_mode: Combination::Outside, filter_var: "o2_7885_sg".to_string() };
+
+        let group1 = FilterAndGroup{ filters: vec![cl_filter, rms_filter ]};
+        let group2 = FilterAndGroup{ filters: vec![sg_filter] };
+        let timespan = Timespan{ 
+            time_less_than: None, 
+            time_greater_than: Some(chrono::NaiveDate::from_ymd_opt(2024, 1, 1).unwrap().and_hms_opt(0, 0, 0).unwrap()),
+            time_mode: Combination::Inside
+        };
+        let flags = Flags::default();
+
+        Self { groups: vec![group1, group2], timespan, flags }
+    }
+
+    fn write_template(path: &Path) -> error_stack::Result<(), CliError> {
+        let comments = [
+            "This is an example filter JSON file.",
+            "The top level field 'groups' is required, 'flags' and 'timespan' are not.",
+            "Each entry in 'groups' represents one filter group, a value will be flagged",
+            "if any of the filter groups returns true. A group returns true if all of the",
+            "individual filters inside it return true.",
+            "A filter must have 'filter_var' and one or both of 'less_than' and 'greater_than',",
+            "value_mode is optional and defaults to 'inside'.",
+            "For timespan, if given, it should have one or both of 'time_less_than' and/or",
+            "'time_greater_than', 'time_mode' is optional.",
+            "All fields in 'flags' are optional.",
+            "The meaning of fields in each individual filter, timespan, and flags mirrors the 'quick' CLI,",
+            "see the quick CLI --help for details.",
+            "Lines beginning with // (like this) are comments, inline comments are not supported.",
+            "Note that error line numbers do not count comment lines."
+        ];
+        let template = Self::template();
+        let mut f = std::fs::File::create(path)
+            .change_context_lazy(|| CliError::IoError)?;
+        for line in comments {
+            writeln!(&mut f, "// {line}").change_context_lazy(|| CliError::IoError)?;
+        }
+        serde_json::to_writer_pretty(&mut f, &template)
+            .change_context_lazy(|| CliError::IoError)?;
+
+        Ok(())
+    }
+
+    fn do_flag(&self, data: &HashMap<String, ndarray::Array1<f32>>, index: usize) -> bool {
+        // Flag if any of the groups says we should flag
+        self.groups.iter().any(|g| g.do_flag(data, index))
+    }
+
+    fn filter_vars(&self) -> Vec<&str> {
+        let mut varnames = vec![];
+        for group in self.groups.iter() {
+            for filter in group.filters.iter() {
+                varnames.push(filter.filter_var.as_str());
+            }
+        }
+        varnames
+    }
+
+    fn no_filters(&self) -> bool {
+        if self.groups.is_empty() {
+            return true;
+        }
+
+        self.groups.iter().all(|g| g.no_filters())
+    }
 }
 
 fn parse_cli_time_str(s: &str) -> Result<chrono::NaiveDateTime, String> {
@@ -341,8 +583,16 @@ fn parse_cli_time_str(s: &str) -> Result<chrono::NaiveDateTime, String> {
     }
 }
 
+// fn deserialize_time_str_opt<'de, D>(deserializer: D) -> Result<Option<chrono::NaiveDateTime>, D::Error>
+// where D: Deserializer<'de> {
+//     let value = Option<String>::deseria?;
+//     let datetime = parse_cli_time_str(&value)
+//         .map_err(|e| de::Error::custom(e.to_string()))?;
+//     Ok(datetime)
+// }
 
-#[derive(Debug, Clone, Copy)]
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
 enum ExistingFlag {
     Error,
     SkipEqual,
@@ -381,10 +631,16 @@ impl Default for ExistingFlag {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
 enum Combination {
-    And,
-    Or
+    Inside,
+    Outside
+}
+
+impl Default for Combination {
+    fn default() -> Self {
+        Self::Inside
+    }
 }
 
 impl FromStr for Combination {
@@ -392,8 +648,16 @@ impl FromStr for Combination {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_ascii_lowercase().as_str() {
-            "and" => Ok(Self::And),
-            "or" => Ok(Self::Or),
+            "in" | "inside" => Ok(Self::Inside),
+            "and" => {
+                log::warn!("'and' is deprecated as a keyword to combine limits, use 'in' or 'inside' instead");
+                Ok(Self::Inside)
+            }
+            "out" | "outside" => Ok(Self::Outside),
+            "or" => {
+                log::warn!("'or' is deprecated as a keyword to combine limits, use 'out' or 'outside' instead");
+                Ok(Self::Outside)
+            },
             _ => Err(format!("'{s}' is not a valid combination variant"))
         }
     }
@@ -402,8 +666,8 @@ impl FromStr for Combination {
 impl Display for Combination {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Combination::And => write!(f, "and"),
-            Combination::Or => write!(f, "or"),
+            Combination::Inside => write!(f, "and"),
+            Combination::Outside => write!(f, "or"),
         }
     }
 }
@@ -421,10 +685,16 @@ impl Display for FlagReplaceError {
 
 impl std::error::Error for FlagReplaceError {}
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
 enum FlagType {
     Manual,
     Release
+}
+
+impl Default for FlagType {
+    fn default() -> Self {
+        Self::Manual
+    }
 }
 
 impl FromStr for FlagType {
@@ -520,8 +790,8 @@ impl<T: PartialOrd> GreaterLess<T> {
             (Some(lim), None) => value >= lim,
             (Some(gt_lim), Some(lt_lim)) => {
                 match self.combination {
-                    Combination::And => value >= gt_lim && value <= lt_lim,
-                    Combination::Or => value >= gt_lim || value <= lt_lim,
+                    Combination::Inside => value >= gt_lim && value <= lt_lim,
+                    Combination::Outside => value >= gt_lim || value <= lt_lim,
                 }
             },
         }

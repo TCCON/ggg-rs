@@ -8,7 +8,6 @@ use ggg_rs::{
     collation::{collate_results, CollationError, CollationIndexer, CollationMode, CollationResult},
     output_files::ProgramVersion, runlogs::{FallibleRunlog, RunlogDataRec},
     tccon::input_config::TcconWindowPrefixes,
-    utils::get_ggg_path
 };
 use log4rs::{encode::pattern::PatternEncoder, append::console::{ConsoleAppender, Target}, Config, config::{Appender, Root}};
 

@@ -1,8 +1,11 @@
 use std::{io::BufRead, path::Path};
 
 use error_stack::ResultExt;
+use fortformat::FortFormat;
+use indexmap::IndexMap;
+use itertools::Itertools;
 
-use crate::{collation::{CollationError, CollationPrefixer}, error::BodyError, utils::{get_ggg_path, parse_window_name}};
+use crate::{collation::{CollationError, CollationPrefixer}, error::BodyError, utils::{self, get_ggg_path, parse_window_name, FileBuf, GggError}};
 
 
 pub struct PrefixEntry {
@@ -112,4 +115,58 @@ impl CollationPrefixer for TcconWindowPrefixes {
             Ok(entry.prefix.as_deref().unwrap_or(""))
         }
     }
+}
+
+
+// Correction files
+
+trait RowWithKey {
+    fn key(&self) -> String;
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct AdcfRow {
+    #[serde(rename = "Gas")]
+    pub gas_or_window: String,
+    #[serde(rename = "ADCF")]
+    pub adcf: f64,
+    #[serde(rename = "ADCF_Err")]
+    pub adcf_error: f64,
+    pub g: Option<f64>,
+    pub p: Option<f64>
+}
+
+impl RowWithKey for AdcfRow {
+    fn key(&self) -> String {
+        self.gas_or_window.clone()
+    }
+}
+
+pub fn read_adcf_file(corr_file: &Path) -> Result<IndexMap<String, AdcfRow>, GggError> {
+    read_correction_file(corr_file)
+}
+
+fn read_correction_file<'de, T: RowWithKey + serde::de::DeserializeOwned>(corr_file: &Path) -> Result<IndexMap<String, T>, GggError> {
+    let mut f = FileBuf::open(corr_file)?;
+    let nhead = utils::get_nhead(&mut f)?;
+    for _ in 1..nhead-1 {
+        f.read_header_line()?;
+    }
+
+    let colname_line = f.read_header_line()?;
+    let colnames = colname_line.split_ascii_whitespace().collect_vec();
+    let mut corrections = IndexMap::new();
+
+    for line in f.lines() {
+        let line = line.map_err(|e| GggError::CouldNotRead { path: corr_file.to_path_buf(), reason: e.to_string() })?;
+        let row: T = fortformat::from_str_with_fields(&line, &FortFormat::ListDirected, &colnames)
+            .map_err(|e| GggError::DataError {
+                path: corr_file.to_path_buf(),
+                cause: format!("While deserializing the line '{line}', error was: {e}")
+            })?;
+        let key = row.key();
+        corrections.insert(key, row);
+    }
+    
+    Ok(corrections)
 }

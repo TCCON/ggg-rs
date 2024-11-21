@@ -15,6 +15,7 @@ use error_stack::ResultExt;
 use fortformat::format_specs::FortFormat;
 use itertools::Itertools;
 use log::debug;
+use ndarray::Array1;
 use serde::Serialize;
 use serde::{Deserialize, Deserializer, de::Error as DeserError};
 
@@ -52,7 +53,9 @@ pub enum GggError {
     /// to the proper type. `path` must be the path to the problematic file and `cause` a description of the problem.
     DataError{path: PathBuf, cause: String},
     /// A generic error for an unimplemented case in the code
-    NotImplemented(String)
+    NotImplemented(String),
+    /// A general error for one-off cases that don't need their own variant
+    Custom(String),
 }
 
 // TODO: break into smaller errors
@@ -82,6 +85,9 @@ impl Display for GggError {
             },
             Self::NotImplemented(case) => {
                 write!(f, "Not implemented: {case}")
+            },
+            Self::Custom(msg) => {
+                write!(f, "{msg}")
             }
         }
     }
@@ -130,6 +136,14 @@ impl GggError {
                 self
             }
         }
+    }
+
+    pub fn not_implemented<S: ToString>(case: S) -> Self {
+        Self::NotImplemented(case.to_string())
+    }
+
+    pub fn custom<S: ToString>(msg: S) -> Self {
+        Self::Custom(msg.to_string())
     }
 }
 
@@ -267,6 +281,60 @@ pub fn get_ggg_path() -> Result<PathBuf, GggError> {
     }
 
     Ok(env_path)
+}
+
+/// Compute effective vertical paths used by GFIT for integrating trace gas profiles.
+/// 
+/// `zmin` is the minimum altitude that the light ray reaches, `z` is the altitude grid,
+/// and `d` is the number density of air profile on that grid. `zmin` and `z` must be in
+/// the same units, `d` is commonly given in molec. cm-3, but any number density unit
+/// is acceptable.
+/// 
+/// # Returns
+/// If successful, returns the effective vertical paths in the same units as `z`.
+/// These can must multiplied by a vector of trace gas number densities to get
+/// per-level effective partial column densities. 
+/// 
+/// Returns an error if (1) `z` and `d` are different lengths, (2) `zmin` is less
+/// than `z[0]`, or (3) if any element of `d` after the first is < 0.
+pub fn effective_vertical_path(zmin: f64, z: &[f64], d: &[f64]) -> Result<Array1<f64>, GggError> {
+    if z.len() != d.len() {
+        return Err(GggError::custom("z and d must have the same number of elements"));
+    }
+
+    let mut vpath = Array1::zeros((z.len(),));
+    let ifirst = z.iter().position(|zi| *zi > zmin)
+        .unwrap_or_else(|| z.len() - 1);
+
+    if ifirst == 0 {
+        return Err(GggError::not_implemented("zmin is less that the first element of z"));
+    }
+
+    let dz = z[ifirst] - z[ifirst - 1];
+    let xo = (zmin - z[ifirst - 1])/dz;
+    let logrp = if d[ifirst] < 0.0 {
+        0.0
+    } else {
+        (d[ifirst-1]/d[ifirst]).ln()
+    };
+    let xl = logrp * (1.0 - xo);
+    vpath[ifirst - 1] = dz * (1.0 - xo) * (1.0 - xo - xl * (1.0 + 2.0 * xo) / 3.0 
+        +xl.powi(2) * ( 1.0 + 3.0 * xo) / 12.0 + xl.powi(3) * (1.0 + 4.0 * xo) / 60.0) / 2.0;
+    vpath[ifirst] = dz * (1.0 - xo ) * (1.0 + xo + xl * (1.0 + 2.0 * xo) / 3.0
+        +xl.powi(2) * (1.0 + 3.0 * xo) / 12.0 - xl.powi(3) * (1.0 + 4.0 * xo) / 60.0) / 2.0;
+
+    for ilev in (ifirst+1)..z.len() {
+        if d[ilev] < 0.0 {
+            return Err(GggError::not_implemented(format!(
+                "d[{}] is less than 0", ilev
+            )));
+        }
+        let dz = z[ilev] - z[ilev-1];
+        let logrp = (d[ilev-1] / d[ilev]).ln();
+        vpath[ilev-1] += dz * (1.0 - logrp / 3.0 + logrp.powi(2) / 12.0 - logrp.powi(3) / 60.0) / 2.0;
+        vpath[ilev] = dz * (1.0 + logrp / 3.0 + logrp.powi(2) / 12.0 + logrp.powi(3) / 60.0) / 2.0;
+    }
+    Ok(vpath)
 }
 
 /// A wrapper around another struct implementing the [`BufRead`] trait that provides some convenience methods.
@@ -599,7 +667,7 @@ pub struct CommonHeader {
 /// 
 /// # See also
 /// * [`get_nhead_ncol`] - shortcut to get the first two numbers (number of header lines and number of data columns)
-/// * [`get_nhead`] - shortcut to get the first numbers (number of header lines)
+/// * [`get_nhead`] - shortcut to get the first number (number of header lines)
 pub fn get_file_shape_info<F: BufRead>(f: &mut FileBuf<F>, min_numbers: usize) -> Result<Vec<usize>, HeaderError> {
     let mut buf = String::new();
     f.read_line(&mut buf)
@@ -736,7 +804,7 @@ pub fn read_common_header<F: BufRead>(f: &mut FileBuf<F>) -> Result<CommonHeader
     Ok(CommonHeader { nhead, ncol, missing, fformat, column_names })
 }
 
-
+/// A structure representing the list of directories where spectra may be stored.
 pub struct DataPartition {
     paths: Vec<PathBuf>,
     previous_index: std::cell::Cell<usize>,
@@ -824,22 +892,11 @@ impl DataPartition {
     /// 
     /// # Returns
     /// If the spectrum was found, then an `Some(p)` is returned, where `p` is the path
-    /// to the spectrum. If the spectrum was *not* found, `Ok(None)` is returned. An `Err`
-    /// is returned if:
-    /// 
-    /// * `$GGGPATH` is not set,
-    /// * `$GGGPATH/config/data_part.lst` does not exist, or
-    /// * a line of `data_part.lst` could not be read.
-    /// 
-    /// The final condition returns an `Err` rather than silently skipping the unreadable line
-    /// to avoid accidentally reading a spectrum from a later directory than it should if the
-    /// `data_part.lst` file was formatted correctly.
-    /// 
+    /// to the spectrum. If the spectrum was *not* found, `None` is returned.
+    ///
     /// # Difference to Fortran
-    /// Unlike the Fortran subroutine that performs this task, this function does not require
-    /// that the paths in `data_part.lst` end in a path separator. Also, this always starts 
-    /// from the first path in the configured data partition, whereas the Fortran may resume
-    /// from its previous line.
+    /// This always starts from the first path in the configured data partition, whereas the
+    /// Fortran (at least in GGG2020) may resume from its previous line.
     pub fn find_spectrum(&self, specname: &str) -> Option<PathBuf> {
         // Try the previous directory where we found a spectrum first - 
         // since runlogs normally keep spectra from the same location together,
@@ -1269,5 +1326,71 @@ mod tests {
     fn datetime(year: i32, month: u32, day: u32, hour: u32, minute: u32) -> chrono::NaiveDateTime {
         let d = chrono::NaiveDate::from_ymd_opt(year, month, day).unwrap();
         d.and_hms_opt(hour, minute, 0).unwrap()
+    }
+
+    #[test]
+    fn test_effective_vertical_path() {
+        let f = std::fs::File::open("test-data/vpath.dat").unwrap();
+        let mut rdr = std::io::BufReader::new(f);
+
+        while let Some(test_case) = load_next_vpath_case(&mut rdr) {
+            let vpath = effective_vertical_path(
+                test_case.zmin, test_case.z.as_slice().unwrap(), test_case.d.as_slice().unwrap()
+            ).unwrap();
+            assert!(
+                // We use an epsilon of 1e-4 because the input data only has 4 digits after the decimal,
+                // so there can be some rounding.
+                vpath.abs_diff_eq(&test_case.vpath, 1e-4),
+                "vpath does not match expected for profile {} zmin = {}.\nOurs = {}\nexpected = {}",
+                test_case.prof_num, test_case.zmin, vpath, test_case.vpath
+            );
+        }
+    }
+
+    struct VpathCase {
+        prof_num: i32,
+        zmin: f64,
+        z: Array1<f64>,
+        d: Array1<f64>,
+        vpath: Array1<f64>
+    }
+
+    fn load_next_vpath_case(rdr: &mut BufReader<std::fs::File>) -> Option<VpathCase> {
+        fn parse_data_line(line: &str, expected_label: &str) -> Array1<f64> {
+            let tmp = line.split_once(':').unwrap();
+            if tmp.0.trim() != expected_label {
+                panic!("In vpath.dat, expected line starting with '{expected_label}', got '{}'", tmp.0.trim());
+            }
+            let values = tmp.1.split_ascii_whitespace()
+                .map(|s| s.trim().parse::<f64>().unwrap());
+            Array1::from_iter(values)
+        }
+        let mut prof_line = String::new();
+        if rdr.read_line(&mut prof_line).unwrap() == 0 {
+            return None;
+        }
+
+        let mut z_line = String::new();
+        rdr.read_line(&mut z_line).unwrap();
+        let mut d_line = String::new();
+        rdr.read_line(&mut d_line).unwrap();
+        let mut vpath_line = String::new();
+        rdr.read_line(&mut vpath_line).unwrap();
+
+        // Profile line should look like "Profile N zmin = XXX"
+        if !prof_line.contains("zmin") {
+            panic!("First line of a block in vpath.dat should include 'zmin'");
+        }
+        let tmp = prof_line.split_once('=').unwrap();
+        let prof_num = tmp.0.trim()
+            .split_ascii_whitespace()
+            .nth(1).unwrap()
+            .parse::<i32>().unwrap();
+        let zmin = tmp.1.trim().parse::<f64>().unwrap();
+        let z = parse_data_line(&z_line, "z");
+        let d = parse_data_line(&d_line, "d");
+        let vpath = parse_data_line(&vpath_line, "vpath");
+
+        Some(VpathCase { prof_num, zmin, z, d, vpath })
     }
 }

@@ -59,9 +59,13 @@ impl FromStr for ColInputData {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProgramVersion {
+    /// The program name, e.g. "GFIT" or "collate_results"
     pub program: String,
+    /// The program version, usually including the word "Version", e.g. "Version 1.0"
     pub version: String,
+    /// The date this version was finalized in YYYY-MM-DD format
     pub date: String,
+    /// The initials of individuals who contributed to this program, e.g. "GCT" or "GCT,JLL"
     pub authors: String,
 }
 
@@ -76,7 +80,7 @@ impl FromStr for ProgramVersion {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let re = PROGRAM_VERSION_REGEX.get_or_init(|| 
-            regex::Regex::new(r"(?<program>\w+)\s+(?<version>[Vv][Ee][Rr][Ss][Ii][Oo][Nn]\s+[\d\.]+)\s+(?<date>[\d\-]+)\s+(?<authors>[\w\,]+)")
+            regex::Regex::new(r"(?<program>\w+)\s+(?<version>[Vv][Ee][Rr][Ss][Ii][Oo][Nn]\s+[\w\.\-]+)\s+(?<date>[\d\-]+)(\s+(?<authors>[\w\,]+))?")
                 .expect("Could not compile program version regex")
         );
 
@@ -88,11 +92,21 @@ impl FromStr for ProgramVersion {
                 cause: "Did not match expected format of program name, version, date, and authors".to_string()
             })?;
 
+        // JLL: I allow authors to be missing because it was in one of the program lines for
+        // the AICF work. Might revert to this being required in the future.
+        let program = caps["program"].to_string();
+        let authors = if let Some(m) = caps.name("authors") {
+            m.as_str().to_string()
+        } else {
+            log::warn!("authors not found in the {program} program version line");
+            "".to_string()
+        };
+        
         Ok(Self { 
-            program: caps["program"].to_string(),
+            program,
             version: caps["version"].to_owned(), 
             date: caps["date"].to_string(),
-            authors: caps["authors"].to_string()
+            authors
         })
     }
 }
@@ -120,6 +134,92 @@ pub struct ColFileHeader {
     pub format: String,
     pub command_line: String,
     pub column_names: Vec<String>
+}
+
+/// Return a vector of paths to the `.col` files to read.
+/// 
+/// The windows will be inferred from the `multiggg_file` and the `.col` files
+/// must exist in `run_dir`.
+pub fn get_col_files(multiggg_file: &Path, run_dir: &Path) -> Result<Vec<PathBuf>, HeaderError> {
+    let col_file_basenames = utils::get_windows_from_multiggg(multiggg_file, true)
+        .map_err(|e| HeaderError::custom(format!(
+            "could not get windows from multiggg file: {e}"
+        )))?;
+    let nwin = col_file_basenames.len();
+
+    let mut col_files = vec![];
+    let mut missing_files = vec![];
+    for basename in col_file_basenames {
+        let cf_path = run_dir.join(format!("{basename}.col"));
+        if cf_path.exists() {
+            col_files.push(cf_path);
+        } else {
+            missing_files.push(basename);
+        }
+    }
+
+    if missing_files.is_empty() {
+        Ok(col_files)
+    } else {
+        let missing_str = missing_files.join(", ");
+        let msg = format!("Missing {} of {} expected .col files, missing windows were: {missing_str}", missing_files.len(), nwin);
+        Err(HeaderError::custom(msg))
+    }
+}
+
+/// Get a path to one file from the `.col` file headers, error if it differs across files.
+/// 
+/// `get_file` is a function that takes ownership of a [`ColFileHeader`] and returns the
+/// desired path as a [`PathBuf`].
+pub fn get_file_from_col_header<F>(col_files: &[PathBuf], run_dir: &Path, get_file: F) -> Result<PathBuf, HeaderError> 
+where F: Fn(ColFileHeader) -> PathBuf
+{
+    if col_files.is_empty() {
+        return Err(HeaderError::custom("no .col files found"));
+    }
+
+    let mut fbuf = FileBuf::open(&col_files[0])
+        .map_err(|e| HeaderError::CouldNotRead { location: col_files[0].clone().into(), cause: e.to_string() })?;
+
+    let first_header = read_col_file_header(&mut fbuf)
+        .map_err(|e| HeaderError::CouldNotRead {
+            location: col_files[0].clone().into(),
+            cause: format!("error reading header: {e}")
+        })?;
+    let expected_file = get_file(first_header);
+
+    for cfile in &col_files[1..] {
+        let mut fbuf = FileBuf::open(cfile)
+            .map_err(|e| HeaderError::CouldNotRead {
+                location: cfile.to_path_buf().into(),
+                cause: format!("could not open this .col file: {e}")
+            })?;
+        let header = read_col_file_header(&mut fbuf)
+            .map_err(|e| HeaderError::CouldNotRead {
+                location: cfile.to_path_buf().into(),
+                cause: format!("error reading .col file header: {e}")
+            })?;
+        let new_file = get_file(header);
+
+        if new_file != expected_file {
+            return Err(HeaderError::custom(
+                format!("mismatched files in .col header: {} gave {}, while {} gave {}",
+                (&col_files[0]).display(), expected_file.display(), cfile.display(), new_file.display())
+            ))?;
+        }
+    }
+
+    if expected_file.is_absolute() {
+        Ok(expected_file)
+    } else {
+        Ok(run_dir.join(expected_file))
+    }
+}
+
+pub fn get_runlog_from_col_files(multiggg_file: &Path, run_dir: &Path) -> Result<PathBuf, HeaderError> {
+    let col_files = get_col_files(multiggg_file, run_dir)?;
+    let runlog = get_file_from_col_header(&col_files, run_dir, |h| h.runlog_file.path)?;
+    Ok(runlog)
 }
 
 /// Parse a "format=(...)" or "format:(...)" line from a post processing file header into a [`FortFormat`]
@@ -381,6 +481,7 @@ pub struct AuxData {
     pub fvsi: f64,
     pub wspd: f64,
     pub wdir: f64,
+    pub o2dmf: Option<f64>,
 }
 
 impl AuxData {
@@ -391,7 +492,7 @@ impl AuxData {
     pub fn postproc_fields_str() -> &'static[&'static str] {
         &["spectrum", "year", "day", "hour", "run", "lat", "long", "zobs", "zmin",
           "solzen", "azim", "osds", "opd", "fovi", "amal", "graw", "tins", "pins",
-          "tout", "pout", "hout", "sia", "fvsi", "wspd", "wdir"]
+          "tout", "pout", "hout", "sia", "fvsi", "wspd", "wdir", "o2dmf"]
     }
 
     /// A fully-owned version of `postproc_fields_str`.
@@ -465,6 +566,7 @@ impl From<&RunlogDataRec> for AuxData {
             fvsi: value.fvsi,
             wspd: value.wspd,
             wdir: value.wdir,
+            o2dmf: None
         }
     }
 }
@@ -726,9 +828,12 @@ pub fn iter_tabular_file(file: &Path) -> Result<GenericRowIter, GggError> {
 /// - `f`: the handle to write to, usually a mutable [`std::io::BufWriter`] or similar.
 /// - `ncol`: the number of columns in the file (including the spectrum name).
 /// - `naux`: the number of columns containing auxiliary data (i.e not retrieved quantities).
-/// - `program_versions`: the list of programs that processed the data in this file. Normally
-///   this should include gsetup and gfit, plus each post processing program up to and including
-///   the current one.
+/// - `program_versions`: the list of programs that generated this file to add to the header.
+///   If using this to write the first post processing file, make sure to include GSETUP and GFIT
+///   from the `.col` files, as well as the program generating the current file. If using this to
+///   write a later post processing file, then usually previous program versions will be included
+///   in the `extra_lines` read from the previous file's header, and this will only include the
+///   new program.
 /// - `extra_lines`: additional lines to include in the header, e.g. AICF or ADCF values.
 /// - `missing_value`: the value to use as a fill value for missing data. Should be *significantly*
 ///   larger than any real value, [`POSTPROC_FILL_VALUE`] is a good default.
@@ -751,23 +856,32 @@ pub fn write_postproc_header<W: Write>(mut f: W, ncol: usize, nrow: usize, naux:
         .map_err(|e| WriteError::convert_error(
             format!("Could not interpret widths in format string: {e}")
         ))?.into_fields()
-        .ok_or_else(|| WriteError::convert_error("Format was list directed, expected fixed width"))?
+        .expect("Fortran format string should contain fixed width fields, not list-directed input (i.e. must not be '*')")
         .into_iter()
         .filter_map(|field| {
-            let width = field.width().expect("Expected fixed width format");
-            if width > 1 { Some(width) } else { None }
+            let width = field.width().expect("write_postproc_header should not receive a format string with non-fixed width fields");
+            if width > 1 { 
+                Some(width)
+            } else {
+                None
+            }
         });
 
-    // 4 = line with nhead etc. + missing + format + colnames
+    // The extra 4 = line with nhead etc. + missing + format + colnames
     let nhead = program_versions.len() + extra_lines.len() + 4;
-    writeln!(f, " {nhead}  {ncol}  {nrow}  {naux}").change_context_lazy(|| WriteError::IoError)?;
+    let first_line_format = fortformat::FortFormat::parse("(i2,i5,i7,i4)")
+        .expect("The (hard coded) Fortran format for the first line of a post-processing output file should be valid");
+    fortformat::to_writer((nhead, ncol, nrow, naux), &first_line_format, &mut f)
+        .change_context_lazy(|| WriteError::IoError)?;
 
     for pver in program_versions.iter() {
         writeln!(f, " {pver}").change_context_lazy(|| WriteError::IoError)?;
     }
 
     for line in extra_lines {
-        writeln!(f, "{line}").change_context_lazy(|| WriteError::IoError)?;
+        // The trim_end protects against newlines being accidentally doubled from lines read in
+        // from a previous file.
+        writeln!(f, "{}", line.trim_end()).change_context_lazy(|| WriteError::IoError)?;
     }
 
     let mvfmt = fortformat::FortFormat::parse("(1pe11.4)").unwrap();
@@ -792,11 +906,12 @@ pub struct PostprocFileHeader {
     pub ncol: usize,
     pub nrec: usize,
     pub naux: usize,
-    program_versions: HashMap<String, ProgramVersion>,
-    correction_factors: HashMap<String, HashMap<String, (f64, f64)>>,
-    missing_value: f64,
-    fformat: FortFormat,
-    column_names: Vec<String>,
+    pub program_versions: HashMap<String, ProgramVersion>,
+    pub correction_factors: HashMap<String, HashMap<String, (f64, f64)>>,
+    pub extra_lines: Vec<String>,
+    pub missing_value: f64,
+    pub fformat: FortFormat,
+    pub column_names: Vec<String>,
 }
 
 impl PostprocFileHeader {
@@ -810,6 +925,7 @@ impl PostprocFileHeader {
 
         let mut program_versions = HashMap::new();
         let mut correction_factors = HashMap::new();
+        let mut extra_lines = vec![];
         let mut missing_value = None;
         let mut fformat = None;
         let mut column_names = None;
@@ -847,6 +963,12 @@ impl PostprocFileHeader {
                 })?;
 
                 program_versions.insert(pv.program.clone(), pv);
+
+                if let Ok(pv) = ProgramVersion::from_str(&line) {
+                    program_versions.insert(pv.program.clone(), pv);
+                } else {
+                    extra_lines.push(line.trim_end().to_string());
+                }
             }
         }
         
@@ -865,7 +987,7 @@ impl PostprocFileHeader {
             cause: "The column names were not found".into()
         })?;
 
-        Ok(Self { nhead, ncol, nrec, naux, program_versions, correction_factors, missing_value, fformat, column_names })
+        Ok(Self { nhead, ncol, nrec, naux, program_versions, correction_factors, missing_value, extra_lines, fformat, column_names })
     }
 
     fn aux_varnames(&self) -> &[String] {
