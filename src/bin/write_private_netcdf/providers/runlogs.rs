@@ -1,33 +1,27 @@
-use std::{collections::HashMap, path::{Path, PathBuf}, str::FromStr};
+use std::{collections::HashMap, fmt::Display, path::{Path, PathBuf}, str::FromStr};
 
 use chrono::{DateTime, Utc};
 use error_stack::ResultExt;
 use ggg_rs::{cit_spectrum_name::{CitSpectrumName, NoDetectorSpecName}, runlogs::FallibleRunlog};
 use ndarray::Array1;
 
-use crate::{dimensions::TIME_DIM_NAME, errors::InputError, interface::{DataProvider, SpectrumIndexer, StdDataGroup, VarToBe}};
+use crate::{dimensions::TIME_DIM_NAME, errors::InputError, interface::{ConcreteVarToBe, DataProvider, SpectrumIndexer, StdDataGroup, VarToBe}};
 
 static DIMS_REQ: [&'static str; 1] = [TIME_DIM_NAME];
 
 pub(crate) struct RunlogProvider {
     runlog_path: PathBuf,
-    spectrum_indexer: SpectrumIndexer,
     times: Array1<DateTime<Utc>>,
 }
 
 impl RunlogProvider {
-    pub(crate) fn new(runlog: PathBuf) -> error_stack::Result<Self, InputError> {
+    pub(crate) fn new(runlog: PathBuf) -> error_stack::Result<(Self, SpectrumIndexer), InputError> {
         if !runlog.exists() {
             return Err(InputError::file_not_found(runlog).into())
         }
 
         let (spectrum_indexer, times) = Self::get_times_and_indexer(&runlog)?;
-        Ok(Self{ runlog_path: runlog, spectrum_indexer, times })
-    }
-
-    pub(crate) fn new_boxed(runlog: PathBuf) -> error_stack::Result<Box<dyn DataProvider>, InputError> {
-        let this = Self::new(runlog)?;
-        Box::new(this)
+        Ok((Self{ runlog_path: runlog, times }, spectrum_indexer))
     }
 
     fn get_times_and_indexer(runlog: &Path) -> error_stack::Result<(SpectrumIndexer, Array1<DateTime<Utc>>), InputError> {
@@ -98,16 +92,23 @@ impl DataProvider for RunlogProvider {
     fn dimensions_required(&self) -> std::borrow::Cow<[&'static str]> {
         std::borrow::Cow::Borrowed(&DIMS_REQ)
     }
-
-    fn write_data_to_nc<W: crate::interface::GroupWriter>(&self, _spec_indexer: &SpectrumIndexer, writer: &mut W) -> error_stack::Result<(), crate::interface::WriteError> {
+    
+    fn write_data_to_nc(&self, _spec_indexer: &SpectrumIndexer, writer: &dyn crate::interface::GroupWriter) -> error_stack::Result<(), crate::interface::WriteError> {
         // Unlike other providers, since the runlog sets the order of data, it doesn't need to use the
         // spectrum indexer to make sure the data are in the correct order.
         // Also, since we only have one variable, there's no benefit to using the "write multiple vars" writer method.
         let data = self.times.mapv(|dt| dt.timestamp());
-        let times_var = VarToBe::new(
+        let mut times_var = ConcreteVarToBe::new(
             TIME_DIM_NAME, DIMS_REQ.to_vec(), data, "time", "seconds since 1970-01-01 00:00:00", &self.runlog_path
         ).map_err(|e| crate::interface::WriteError::from(e))?;
+        times_var.add_attribute("calendar", "gregorian");
         writer.write_variable(&times_var, &StdDataGroup::InGaAs)?;
         Ok(())
+    }
+}
+
+impl Display for RunlogProvider {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "runlog")
     }
 }

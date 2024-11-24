@@ -27,49 +27,74 @@ pub(crate) enum CliError {
 }
 
 impl CliError {
+    /// This error should only be used if the user called the program incorrectly
     pub(crate) fn usage_error<S: ToString>(msg: S) -> Self {
         Self::UsageError(msg.to_string())
     }
 
+    /// This error should be used if there is a problem with the input files, such as
+    /// a file being missing, formatted incorrectly, has duplicate values for one
+    /// observation, etc.
     pub(crate) fn input_error<S: ToString>(msg: S) -> Self {
         Self::InputError(msg.to_string())
     }
 
+    /// This error should indicate a problem that may not necessarily be the user's
+    /// fault, but is a problem with their system; for example, a file existing, but
+    /// not being readable.
     pub(crate) fn runtime_error<S: ToString>(msg: S) -> Self {
         Self::RuntimeError(msg.to_string())
     }
 
+    /// This error should indicate a problem with the design of the netCDF writer itself;
+    /// that is, something which the user should not be expected to fix.
     pub(crate) fn internal_error<S: ToString>(msg: S) -> Self {
         Self::InternalError(msg.to_string())
+    }
+
+    /// This is not an error constructor, it returns a final help message to give
+    /// the user if this kind of error happens. This should be the last thing printed
+    /// before the program exits unsuccessfully.
+    pub(crate) fn user_message(&self) -> &'static str {
+        match self {
+            CliError::UsageError(_) => {
+                "Please double check that you are calling this program correctly. If you cannot find the mistake, reach out to the TCCON algorithm team."
+            },
+            CliError::InputError(_) => {
+                "Please double check the file referenced in the above error message and investigate the root cause of the problem mentioned. If you cannot find the problem, reach out the the TCCON algorithm team and be prepared to provide your full set of input files (from both the run directory and under GGGPATH)."
+            },
+            CliError::RuntimeError(_) => {
+                "This may indicate a temporary problem with you system, an incorrect system setup, or a system setup not well supported by the netCDF write. Wait a few minutes, then try the action that failed again. If the problem persists, please check if there is something on your system causing the problem (e.g. incorrect file permissions) before asking the TCCON algorithm team for assistance."
+            },
+            CliError::InternalError(_) => {
+                "This likely indicates a problem with the netCDF writer. Please assemble a minimal working example of the problem and open an issue on the GGGRS GitHub page"
+            },
+        }
     }
 }
 
 impl Display for CliError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let (type_str, err_msg, fix_msg) = match self {
+        let (type_str, err_msg) = match self {
             CliError::UsageError(msg) => {
                 let typestr = "Usage error";
-                let fix = "Please double check that you are calling this program correctly. If you cannot find the mistake, reach out to the TCCON algorithm team.";
-                (typestr, msg, fix)
+                (typestr, msg)
             },
             CliError::InputError(msg) => {
                 let typestr = "Input error";
-                let fix = "Please double check the file referenced in the above error message and investigate the root cause of the problem mentioned. If you cannot find the problem, reach out the the TCCON algorithm team and be prepared to provide your full set of input files (from both the run directory and under GGGPATH).";
-                (typestr, msg, fix)
+                (typestr, msg)
             },
             CliError::RuntimeError(msg) => {
                 let typestr = "Runtime error";
-                let fix = "This may indicate a temporary problem with you system, an incorrect system setup, or a system setup not well supported by the netCDF write. Wait a few minutes, then try the action that failed again. If the problem persists, please check if there is something on your system causing the problem (e.g. incorrect file permissions) before asking the TCCON algorithm team for assistance.";
-                (typestr, msg, fix)
+                (typestr, msg)
             },
             CliError::InternalError(msg) => {
                 let typestr = "Internal error";
-                let fix = "This likely indicates a problem with the netCDF writer. Please assemble a minimal working example of the problem and open an issue on the GGGRS GitHub page";
-                (typestr, msg, fix)
+                (typestr, msg)
             },
         };
 
-        writeln!(f, "{type_str}: {err_msg}\n\n{fix_msg}")
+        writeln!(f, "{type_str}: {err_msg}")
     }
 }
 

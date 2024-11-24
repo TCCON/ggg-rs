@@ -1,11 +1,20 @@
-use std::{borrow::Cow, cell::RefCell, collections::HashMap, path::{Path, PathBuf}, sync::{Arc, Mutex}};
+use std::{borrow::Cow, cell::RefCell, collections::HashMap, fmt::Display, path::{Path, PathBuf}, sync::{Arc, Mutex}};
 
-use ggg_rs::utils::GggError;
 use ndarray::{Array, ArrayD};
-use netcdf::{AttributeValue, NcPutGet, VariableMut};
+use netcdf::{AttributeValue, GroupMut, NcPutGet};
 
 /// The general trait representing a source of data (usually a GGG output file)
-pub(crate) trait DataProvider {
+/// 
+/// Types implementing this must be [`Send`] so that loading data can be parallelized.
+/// This likely means that the netCDF dataset handle will need to be stored in an
+/// `Arc<Mutex<RefCell<>>>` to ensure each provider can get exclusive access to the
+/// dataset handle while actually writing.
+/// 
+/// These types must also implement [`Display`], and should do so by printing a simple
+/// description of what type of file this provider represents (e.g. "runlog"), not a
+/// long path to said file. This will be used in error messages to indicate that conditions
+/// for a provider to work correctly were not met.
+pub(crate) trait DataProvider: Display + Send {
     /// If this file defines the length for any dimension (e.g. the runlog defines
     /// the length of the "time" dimension by the number of unique observations), then
     /// it must return a list of dimension names and their required lengths. These will
@@ -31,19 +40,27 @@ pub(crate) trait DataProvider {
     /// 
     /// Providers that write along the "time" dimension must ensure that they use `spec_indexer`
     /// to put their data at the right index for its spectrum.
-    fn write_data_to_nc<W: GroupWriter>(&self, spec_indexer: &SpectrumIndexer, writer: &mut W) -> error_stack::Result<(), WriteError>;
-    // fn write_data_to_nc(&self, spec_indexer: &SpectrumIndexer, writer: &mut dyn GroupWriter) -> error_stack::Result<(), WriteError>;
+    fn write_data_to_nc(&self, spec_indexer: &SpectrumIndexer, writer: &dyn GroupWriter) -> error_stack::Result<(), WriteError>;
 }
 
+/// A type that maps spectrum names to indices along the "time" dimension.
 pub(crate) struct SpectrumIndexer {
     spectrum_indices: HashMap<String, usize>
 }
 
 impl SpectrumIndexer {
+    /// Create a new indexer from a hash map of spectrum names to time indices.
+    /// 
+    /// For multi-detector runlogs, all spectra taken simultaneously should have the same
+    /// index. It is expected that any values produced from different detector's spectra for
+    /// the same index will have different variable names (i.e., if both spectra all retrieving
+    /// "xco2", then one will have a prefix to indicate which detector it came from).
     pub(crate) fn new(spectrum_indices: HashMap<String, usize>) -> Self {
         Self { spectrum_indices }
     }
 
+    /// Return the "time" index (0-based) for a given spectrum name, or `None` if the
+    /// spectrum was listed.
     pub(crate) fn get_index_for_spectrum(&self, spectrum: &str) -> Option<usize> {
         self.spectrum_indices.get(spectrum).map(|i| *i)
     }
@@ -123,13 +140,24 @@ pub(crate) enum VarError {
     SourceFileError{name: String, path: PathBuf, problem: String}
 }
 
+/// A trait representing a generic variable to be written to the netCDF file.
+/// This was necessary to allow the `GroupWriter` trait to be object safe by
+/// taking a dynamic trait object of this type instead of having the data type
+/// be a generic parameter. We will pretty much always use instances of
+/// [`ConcreteVarToBe`] to write variables.
+pub(crate) trait VarToBe {
+    /// Given the group to write to, this function must create the variable
+    /// (with the given suffix on its name), write the data, and write any attributes.
+    fn write(&self, ncgrp: &mut GroupMut, var_suffix: &str) -> netcdf::Result<()>;
+}
+
 /// A structure holding the data to be written to a netCDF variable.
 /// 
 /// Because of lifetime limitations, [`GroupWriter`]s cannot return a variable
 /// from a group if they have to get the group out of the file within their functions.
 /// To get around this, [`GroupWriter`] methods taken instances of this struct and 
 /// write to the variable directly in their functions.
-pub(crate) struct VarToBe<T: NcPutGet> {
+pub(crate) struct ConcreteVarToBe<T: NcPutGet> {
     name: String,
     dimensions: Vec<&'static str>,
     data: ArrayD<T>,
@@ -140,8 +168,8 @@ pub(crate) struct VarToBe<T: NcPutGet> {
     extra_attrs: Vec<(String, AttributeValue)>
 }
 
-impl<T: NcPutGet> VarToBe<T> {
-    /// Create a new `VarToBe`, computing the source file checksum automatically.
+impl<T: NcPutGet> ConcreteVarToBe<T> {
+    /// Create a new `ConcreteVarToBe`, computing the source file checksum automatically.
     /// 
     /// If you are creating multiple variables from the same source file, it will be
     /// more efficient to compute the SHA256 checksum once yourself (with the
@@ -239,9 +267,12 @@ impl<T: NcPutGet> VarToBe<T> {
         let attvalue = attvalue.into();
         self.extra_attrs.push((attname, attvalue));
     }
+}
 
-    /// Write this variable's data and it attributes to a netCDF file, in the provided variable.
-    fn write(&self, ncvar: &mut VariableMut) -> netcdf::Result<()> {
+impl<T: NcPutGet> VarToBe for ConcreteVarToBe<T> {
+    fn write(&self, ncgrp: &mut GroupMut, var_suffix: &str) -> netcdf::Result<()> {
+        let full_name = format!("{}{var_suffix}", self.name);
+        let mut ncvar = ncgrp.add_variable::<T>(&full_name, &self.dimensions)?;
         ncvar.put(netcdf::Extents::All, self.data.view())?;
         ncvar.put_attribute("long_name", self.long_name.as_str())?;
         ncvar.put_attribute("units", self.units.as_str())?;
@@ -252,7 +283,7 @@ impl<T: NcPutGet> VarToBe<T> {
         }
         Ok(())
     }
-} 
+}
 
 /// An interface to the underlying netCDF file.
 /// 
@@ -270,14 +301,14 @@ pub(crate) trait GroupWriter: Send + Sync {
     fn get_dim_length(&self, dimname: &str) -> Option<usize>;
 
     /// Write a single variable to the netCDF file
-    fn write_variable<T: NcPutGet>(&mut self, variable: &VarToBe<T>, group: &dyn VarGroup) -> Result<(), WriteError>;
+    fn write_variable(&self, variable: &dyn VarToBe, group: &dyn VarGroup) -> Result<(), WriteError>;
 
     /// Write a list of variables to the netCDF file.
     /// 
     /// Implementors should ensure that these variables will be written together in the netCDF file
     /// even if different data providers are running in parallel and calling this.
-    fn write_many_variables<T: NcPutGet>(&mut self, variables: &[VarToBe<T>], group: &dyn VarGroup) -> Result<(), WriteError> {
-        for variable in variables {
+    fn write_many_variables(&self, variables: &[&dyn VarToBe], group: &dyn VarGroup) -> Result<(), WriteError> {
+        for &variable in variables {
             self.write_variable(variable, group)?;
         }
         Ok(())
@@ -286,6 +317,7 @@ pub(crate) trait GroupWriter: Send + Sync {
 
 
 /// An implementation of [`GroupWriter`] for TCCON and EM27/SUN data.
+#[derive(Debug, Clone)]
 pub(crate) struct StdGroupWriter {
     nc_dset: Arc<Mutex<RefCell<netcdf::FileMut>>>,
     dim_lengths: HashMap<String, usize>,
@@ -307,7 +339,7 @@ impl GroupWriter for StdGroupWriter {
         self.dim_lengths.get(dimname).map(|s| *s)
     }
 
-    fn write_variable<T: NcPutGet>(&mut self, variable: &VarToBe<T>, group: &dyn VarGroup) -> Result<(), WriteError> {
+    fn write_variable(&self, variable: &dyn VarToBe, group: &dyn VarGroup) -> Result<(), WriteError> {
         let nc_lock = self.nc_dset.lock()
             .expect("NetCDF mutex was poisoned");
         let mut nc_dset = nc_lock.borrow_mut();
@@ -320,11 +352,11 @@ impl GroupWriter for StdGroupWriter {
     /// one after the other, with no opportunity for other data providers to intersperse
     /// their own variables, so prefer this function if you want to keep variables from
     /// the same source grouped together in the netCDF file.
-    fn write_many_variables<T: NcPutGet>(&mut self, variables: &[VarToBe<T>], group: &dyn VarGroup) -> Result<(), WriteError> {
+    fn write_many_variables(&self, variables: &[&dyn VarToBe], group: &dyn VarGroup) -> Result<(), WriteError> {
         let nc_lock = self.nc_dset.lock()
             .expect("NetCDF mutex was poisoned");
         let mut nc_dset = nc_lock.borrow_mut();
-        for variable in variables {
+        for &variable in variables {
             Self::write_variable_inner(&mut nc_dset, variable, group, self.use_groups)?;
         }
         Ok(())
@@ -334,7 +366,7 @@ impl GroupWriter for StdGroupWriter {
 }
 
 impl StdGroupWriter {
-    fn write_variable_inner<T: NcPutGet>(nc_dset: &mut netcdf::FileMut, variable: &VarToBe<T>, group: &dyn VarGroup, use_groups: bool) -> Result<(), WriteError> {
+    fn write_variable_inner(nc_dset: &mut netcdf::FileMut, variable: &dyn VarToBe, group: &dyn VarGroup, use_groups: bool) -> Result<(), WriteError> {
         if use_groups {
             let grp_name = group.group_name();
             let mut grp = if grp_name == "/" {
@@ -345,13 +377,11 @@ impl StdGroupWriter {
                 nc_dset.add_group(grp_name)?
             };
 
-            let mut var = grp.add_variable::<T>(&variable.name, &variable.dimensions)?;
-            variable.write(&mut var)?;
+            variable.write(&mut grp, "")?;
         } else {
             let suffix = group.suffix();
-            let varname = format!("{}{suffix}", variable.name);
-            let mut var = nc_dset.add_variable::<T>(&varname, &variable.dimensions)?;
-            variable.write(&mut var)?;
+            let mut grp = nc_dset.root_mut().expect("Should be able to access the root group");
+            variable.write(&mut grp, suffix)?;
         };
 
         Ok(())
