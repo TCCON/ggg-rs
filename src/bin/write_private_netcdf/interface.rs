@@ -1,7 +1,8 @@
-use std::{borrow::Cow, cell::RefCell, collections::HashMap, fmt::Display, path::{Path, PathBuf}, sync::{Arc, Mutex}};
+use std::{borrow::Cow, cell::RefCell, collections::HashMap, fmt::Display, path::Path, sync::{Arc, Mutex}};
 
 use ndarray::{Array, ArrayD};
 use netcdf::{AttributeValue, GroupMut, NcPutGet};
+use crate::errors::{VarError, WriteError};
 
 /// The general trait representing a source of data (usually a GGG output file)
 /// 
@@ -110,34 +111,6 @@ impl VarGroup for StdDataGroup {
             Self::InSb => "_insb",
         }
     }
-}
-
-/// Errors that occur when writing a netCDF variable.
-#[derive(Debug, thiserror::Error)]
-pub(crate) enum WriteError {
-    /// Represents an error returned by the netCDF library.
-    #[error(transparent)]
-    Netcdf(#[from] netcdf::Error),
-
-    /// Represents an error that occurs when creating the variable to be
-    #[error(transparent)]
-    VarCreation(#[from] VarError)
-}
-
-/// An error representing problems creating a variable to be
-#[derive(Debug, thiserror::Error)]
-pub(crate) enum VarError {
-    /// Used if the number of dimension names given does not match the number of dimensions of the data array
-    #[error("Variable {name}: array has {array_ndim} dimensions, {n_dim_names} dimension names were supplied")]
-    DimMismatch{name: String, array_ndim: usize, n_dim_names: usize},
-
-    /// Used if the source file does not exist on disk
-    #[error("Variable {name}: source file {} is missing", .path.display())]
-    SourceFileMissing{name: String, path: PathBuf},
-
-    /// Used for miscellaneous problems accessing the source file (e.g. to compute the checksum)
-    #[error("Variable {name}, source file {}: {problem}", .path.display())]
-    SourceFileError{name: String, path: PathBuf, problem: String}
 }
 
 /// A trait representing a generic variable to be written to the netCDF file.

@@ -80,8 +80,8 @@ fn driver(run_dir: PathBuf) -> error_stack::Result<(), CliError> {
 
     if let Err(e) = &res {
         let new_context = match e.current_context() {
-            interface::WriteError::Netcdf(_) => CliError::runtime_error("a netCDF error occurred"),
-            interface::WriteError::VarCreation(_) => CliError::internal_error("the netCDF writer tried to construct a variable incorrectly"),
+            errors::WriteError::Netcdf(_) => CliError::runtime_error("a netCDF error occurred"),
+            errors::WriteError::VarCreation(_) => CliError::internal_error("the netCDF writer tried to construct a variable incorrectly"),
         };
         return res.change_context(new_context);
     }
