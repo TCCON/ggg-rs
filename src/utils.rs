@@ -1226,6 +1226,29 @@ fn nth_day_of_week(year: i32, month: u32, weekday: chrono::Weekday, n: Nth) -> R
 }
 
 
+pub fn file_sha256_hexdigest(path: &Path) -> std::io::Result<String> {
+    let f = std::fs::File::open(path)?;
+    let rdr = BufReader::new(f);
+    let digest = sha256_digest(rdr)?;
+    Ok(hex::encode(digest.as_ref()))
+}
+
+fn sha256_digest<R: Read>(mut reader: R) -> std::io::Result<ring::digest::Digest> {
+    let mut context = ring::digest::Context::new(&ring::digest::SHA256);
+    let mut buffer = [0; 1024];
+
+    loop {
+        let count = reader.read(&mut buffer)?;
+        if count == 0 {
+            break;
+        }
+        context.update(&buffer[..count]);
+    }
+
+    Ok(context.finish())
+}
+
+
 /// Make a backup of a file.
 ///
 /// With `increment_backup = false`, this will only append `backup_suffix` to the original filename

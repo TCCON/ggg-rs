@@ -401,6 +401,10 @@ impl FallibleRunlog {
         Ok(Self { runlog: rl })
     }
 
+    pub fn header(&self) -> &crate::utils::CommonHeader {
+        &self.runlog.header
+    }
+
     pub fn into_line_iter(self) -> FallibleRunlogLineIter {
         FallibleRunlogLineIter { runlog: self.runlog }
     }
