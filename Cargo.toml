@@ -37,7 +37,7 @@ ring = "0.17.8"
 hex = "0.4.3"
 rayon = "1.10.0"
 tracing = "0.1.40"
-tracing-subscriber = "0.3.18"
+tracing-subscriber = {version = "0.3.18", features = ["json"]}
 
 [dev-dependencies]
 rstest = "0.18.2"

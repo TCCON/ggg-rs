@@ -5,8 +5,7 @@ use errors::CliError;
 use interface::{DataProvider, StdGroupWriter};
 use providers::RunlogProvider;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
-use tracing::{error,info};
-use tracing_subscriber::filter::LevelFilter;
+use tracing::{error,info,Level};
 
 
 mod logging;
@@ -18,14 +17,14 @@ mod providers;
 
 fn main() -> ExitCode {
     let run_dir = PathBuf::from(".");
-    logging::init_logging(&run_dir, LevelFilter::DEBUG);
+    logging::init_logging(&run_dir, Level::DEBUG);
     info!("Logging initialized");
 
     match driver(run_dir) {
         Ok(_) => ExitCode::SUCCESS,
         Err(e) => {
-            error!("{e:?}");
-            eprintln!("\nThe netCDF writer failed:\n\n{e}\n");
+            error!("{e}");
+            eprintln!("\nThe netCDF writer failed:\n\n{e:?}\n");
             eprintln!("{}", e.current_context().user_message());
             ExitCode::FAILURE
         },
