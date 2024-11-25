@@ -1,7 +1,6 @@
 use std::path::Path;
 
-use log::LevelFilter;
-use log4rs::{encode::pattern::PatternEncoder, append::{console::{ConsoleAppender, Target}, file::FileAppender}, Config, config::{Appender, Root}};
+use tracing_subscriber::filter::LevelFilter;
 
 
 /// Set up logging to both stderr and "write_netcdf.log" in the given run directory.
@@ -9,25 +8,16 @@ use log4rs::{encode::pattern::PatternEncoder, append::{console::{ConsoleAppender
 /// Note that any previous write_netcdf.log is overwritten. Panics if setting up the logger
 /// fails, usually because it cannot write to the log file.
 pub(crate) fn init_logging(run_dir: &Path, level: LevelFilter) {
-    let stderr = ConsoleAppender::builder()
-        .encoder(Box::new(PatternEncoder::new("{h({d(%Y-%m-%d %H:%M:%S)} [{l}] from line {L} in {M})} - {m}{n}")))
-        .target(Target::Stderr)
-        .build();
-    let logfile = FileAppender::builder()
-        .encoder(Box::new(PatternEncoder::new("{d(%Y-%m-%d %H:%M:%S)} [{l}] from line {L} in {M} - {m}{n}")))
-        .append(false)
-        .build(run_dir.join("write_netcdf.log"))
-        .expect("Could not create write_netcdf.log file");
-
-    let config = Config::builder()
-        .appender(Appender::builder().build("stderr", Box::new(stderr)))
-        .appender(Appender::builder().build("logfile", Box::new(logfile)))
-        .build(
-            Root::builder()
-                .appender("stderr")
-                .appender("logfile")
-                .build(level)
-        ).expect("Failed to configure logger");
-
-    log4rs::init_config(config).expect("Failed to initialize logger");
+    // TODO: write to log file, possibly integrate with indicatif to use its
+    // println (https://docs.rs/indicatif/latest/indicatif/struct.ProgressBar.html#method.println)
+    // or suspend functions to provide a way to log messages and have a progress bar running.
+    // Would also be nice to have an extra layer that writes warnings to a structured JSON file.
+    let subscriber = tracing_subscriber::fmt()
+        .with_level(true)
+        .with_file(true)
+        .with_line_number(true)
+        .with_max_level(level)
+        .finish();
+    tracing::subscriber::set_global_default(subscriber)
+        .expect("Could not set tracing/logging subscriber");
 }
