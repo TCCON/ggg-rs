@@ -19,7 +19,7 @@ use ndarray::Array1;
 use serde::Serialize;
 use serde::{Deserialize, Deserializer, de::Error as DeserError};
 
-use crate::error::{DateTimeError, FileLocation, BodyError};
+use crate::error::{DateTimeError, BodyError};
 
 use crate::error::HeaderError;
 
@@ -102,42 +102,6 @@ impl From<HeaderError> for GggError {
 impl Error for GggError {}
 
 impl GggError {
-    /// For variants with `path` field, return a new instance with the `path` replaced with a new value. Other variants are returned unchanged.
-    /// 
-    /// This is useful when an inner error may normally need to refer to a path, but it doesn't actually know the path
-    /// of the file that relates to the error. When the outer function that knows the path receives the path, it can
-    /// use this to replace it:
-    /// 
-    /// ```
-    /// use std::path::PathBuf;
-    /// use ggg_rs::utils::GggError;
-    /// fn throw() -> Result<(), GggError> {
-    ///     Err(GggError::CouldNotRead{path: PathBuf::new(), reason: "demo".to_owned()})
-    /// }
-    /// 
-    /// let path = PathBuf::from("~/Documents");
-    /// throw().or_else(
-    ///     |e| Err(e.with_path(path))
-    /// ).unwrap_err();
-    /// ```
-    #[deprecated = "if with_path is needed, consider using error_stack Reports instead"]
-    pub fn with_path(self, new_path: PathBuf) -> Self {
-        match self {
-            Self::CouldNotOpen { descr, path: _, reason } => {
-                Self::CouldNotOpen { descr, path: new_path, reason }
-            },
-            Self::CouldNotRead { path: _, reason } => {
-                Self::CouldNotRead { path: new_path, reason }
-            },
-            Self::DataError { path: _, cause } => {
-                Self::DataError { path: new_path, cause }
-            },
-            _ => {
-                self
-            }
-        }
-    }
-
     pub fn not_implemented<S: ToString>(case: S) -> Self {
         Self::NotImplemented(case.to_string())
     }

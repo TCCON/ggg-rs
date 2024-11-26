@@ -1,6 +1,7 @@
-use std::{path::{PathBuf, Path}, collections::HashMap, cell::Cell};
+use std::{cell::Cell, collections::HashMap, path::{Path, PathBuf}, process::ExitCode};
 
 use clap::Parser;
+use error_stack::ResultExt;
 use ggg_rs::{self, utils::{GggError, self}, runlogs::{RunlogDataRec, Runlog}, opus::Spectrum};
 use netcdf::Extents;
 
@@ -35,43 +36,86 @@ struct Cli {
     data_part_args: utils::DataPartArgs,
 }
 
+#[derive(Debug, thiserror::Error)]
+enum CliError {
+    #[error("Error occurred while reading {}", .0.display())]
+    ReadError(PathBuf),
+    #[error("Error occurred while writing {}", .0.display())]
+    WriteError(PathBuf),
+    #[error("{0}")]
+    Custom(String),
+}
 
+impl CliError {
+    fn read_error<P: Into<PathBuf>>(file: P) -> Self {
+        Self::ReadError(file.into())
+    }
 
-fn main() {
-    let clargs = Cli::parse();
-    let data_part = clargs.data_part_args.get_data_partition()
-        .expect("Unable to set up data partition for spectrum paths");
-    let runlog = ggg_rs::runlogs::Runlog::open(&clargs.runlog).unwrap();
-    if clargs.single_file {
-        let runlog_clone = ggg_rs::runlogs::Runlog::open(&clargs.runlog).unwrap();
-        let writer = MultipleNcWriter::new_with_default_map(&data_part, clargs.output, runlog_clone, true).unwrap();
-        writer_loop(writer, runlog, &data_part, clargs.full_spec_paths);
-    } else {
-        let writer = IndividualNcWriter::new( clargs.output).unwrap();
-        writer_loop(writer, runlog, &data_part, clargs.full_spec_paths);
+    fn write_error<P: Into<PathBuf>>(file: P) -> Self {
+        Self::WriteError(file.into())
+    }
+
+    fn custom<S: ToString>(msg: S) -> Self {
+        Self::Custom(msg.to_string())
     }
 }
 
-fn writer_loop<W: NcWriter>(mut writer: W, runlog: Runlog, data_part: &utils::DataPartition, full_spec_paths: bool) {
+
+fn main() -> ExitCode {
+    let clargs = Cli::parse();
+    if let Err(e) = driver(clargs) {
+        eprintln!("{e:?}");
+        ExitCode::FAILURE
+    } else {
+        ExitCode::SUCCESS
+    }
+}
+
+fn driver(clargs: Cli) -> error_stack::Result<(), CliError> {
+    let data_part = clargs.data_part_args.get_data_partition()
+        .change_context_lazy(|| CliError::custom("Unable to set up data partition for spectrum paths"))?;
+
+    let runlog = ggg_rs::runlogs::Runlog::open(&clargs.runlog)
+        .change_context_lazy(|| CliError::read_error(&clargs.runlog))?;
+
+    if clargs.single_file {
+        let runlog_clone = ggg_rs::runlogs::Runlog::open(&clargs.runlog)
+            .change_context_lazy(|| CliError::read_error(&clargs.runlog))?;
+        let writer = MultipleNcWriter::new_with_default_map(&data_part, clargs.output.clone(), runlog_clone, true)
+            .change_context_lazy(|| CliError::write_error(&clargs.output))?;
+        writer_loop(writer, runlog, &data_part, clargs.full_spec_paths)?;
+    } else {
+        let writer = IndividualNcWriter::new( clargs.output).unwrap();
+        writer_loop(writer, runlog, &data_part, clargs.full_spec_paths)?;
+    }
+
+    Ok(())
+}
+
+fn writer_loop<W: NcWriter>(mut writer: W, runlog: Runlog, data_part: &utils::DataPartition, full_spec_paths: bool)
+-> error_stack::Result<(), CliError> {
     for data_rec in runlog.into_iter() {
-        let spec = ggg_rs::opus::read_spectrum_from_runlog_rec(&data_rec, data_part).unwrap();
-        writer.add_spectrum(&data_rec, &spec, full_spec_paths).unwrap();
+        let spec = ggg_rs::opus::read_spectrum_from_runlog_rec(&data_rec, data_part)
+            .change_context_lazy(|| CliError::custom("Error while reading line from the runlog"))?;
+        writer.add_spectrum(&data_rec, &spec, full_spec_paths)
+            .change_context_lazy(|| CliError::custom(format!("Error while writing spectrum {} to the output file", spec.path.display())))?;
         println!("Wrote spectrum {} as netCDF", data_rec.spectrum_name);
     }
+    Ok(())
 }
 
 trait NcWriter {
-    fn add_spectrum(&mut self, data_rec: &RunlogDataRec, spectrum: &Spectrum, full_spec_paths: bool) -> Result<(), GggError>;
+    fn add_spectrum(&mut self, data_rec: &RunlogDataRec, spectrum: &Spectrum, full_spec_paths: bool) -> error_stack::Result<(), CliError>;
     fn write_0d_var<'f, T: netcdf::NcPutGet>(nc: &'f mut netcdf::GroupMut, varname: &str, spec_idx: usize, value: T, units: &str, description: &str) 
-    -> Result<netcdf::VariableMut<'f>, GggError>;
+    -> error_stack::Result<netcdf::VariableMut<'f>, CliError>;
     fn write_1d_var<'f>(nc: &'f mut netcdf::GroupMut, varname: &str, spec_idx: usize, data: &ndarray::Array1<f32>, units: &str, description: &str) 
-    -> Result<netcdf::VariableMut<'f>, GggError>;
+    -> error_stack::Result<netcdf::VariableMut<'f>, CliError>;
 
     fn freq_dim() -> &'static str {
         "frequency"
     }
 
-    fn write_spectrum_values(nc: &mut netcdf::GroupMut, data_rec: &RunlogDataRec, spectrum: &Spectrum, out_file: &Path, spec_idx: usize, write_freq: bool) -> Result<(), GggError> {
+    fn write_spectrum_values(nc: &mut netcdf::GroupMut, data_rec: &RunlogDataRec, spectrum: &Spectrum, out_file: &Path, spec_idx: usize, write_freq: bool) -> error_stack::Result<(), CliError> {
         // Create the main variables (frequency and intensity)
         let dimname = Self::freq_dim();
 
@@ -83,7 +127,7 @@ trait NcWriter {
                 &spectrum.freq,
                 "cm-1",
                 "Frequency in wavenumbers of the measured intensity"
-            ).or_else(|e| Err(e.with_path(out_file.to_owned())))?;
+            ).change_context_lazy(|| CliError::write_error(out_file))?;
         }
 
         Self::write_1d_var(
@@ -93,97 +137,100 @@ trait NcWriter {
             &spectrum.spec,
             "AU",
             "Measured radiance intensity in arbitrary units"
-        ).or_else(|e| Err(e.with_path(out_file.to_owned())))?;
+        ).change_context_lazy(|| CliError::write_error(out_file))?;
 
         // Create the ancillary variables from the runlog that we actually care about
-        let timestamp = utils::runlog_ydh_to_datetime(data_rec.year, data_rec.day, data_rec.hour).timestamp();
+        let timestamp = data_rec.zpd_time()
+            .ok_or_else(|| CliError::custom(format!(
+                "Error getting the ZPD time for spectrum {}, calculated ZPD time was not a valid time", data_rec.spectrum_name
+            )))?.timestamp();
         Self::write_0d_var(nc, "time", spec_idx, timestamp, "seconds since 1970-01-01", "Zero path difference time for this spectrum")
-        .map_err(|e| e.with_path(out_file.to_owned()))?;
+            .change_context_lazy(|| CliError::write_error(out_file))?;
 
         Self::write_0d_var(nc, "year", spec_idx, data_rec.year, "year", "Year the spectrum was observed")
-        .or_else(|e| Err(e.with_path(out_file.to_owned())))?;
+            .change_context_lazy(|| CliError::write_error(out_file))?;
 
         Self::write_0d_var(nc, "day", spec_idx, data_rec.day, "day", "Day-of-year the spectrum was observed")
-        .or_else(|e| Err(e.with_path(out_file.to_owned())))?;
+            .change_context_lazy(|| CliError::write_error(out_file))?;
 
         Self::write_0d_var(nc, "hour", spec_idx, data_rec.hour, "utc_hour", "Fractional UT hour when zero path difference occurred")
-        .or_else(|e| Err(e.with_path(out_file.to_owned())))?;
+            .change_context_lazy(|| CliError::write_error(out_file))?;
 
         Self::write_0d_var(nc, "latitude", spec_idx, data_rec.obs_lat, "degrees_north", "Latitude where the spectrum was observed")
-        .or_else(|e| Err(e.with_path(out_file.to_owned())))?;
+            .change_context_lazy(|| CliError::write_error(out_file))?;
 
         Self::write_0d_var(nc, "longitude", spec_idx, data_rec.obs_lon, "degrees_east", "Longitude where the spectrum was observed")
-        .or_else(|e| Err(e.with_path(out_file.to_owned())))?;
+            .change_context_lazy(|| CliError::write_error(out_file))?;
 
         Self::write_0d_var(nc, "altitude", spec_idx, data_rec.obs_alt, "km", "Altitude where the spectrum was observed")
-        .or_else(|e| Err(e.with_path(out_file.to_owned())))?;
+            .change_context_lazy(|| CliError::write_error(out_file))?;
 
         Self::write_0d_var(nc, "sza", spec_idx, data_rec.asza, "deg", "Astronomical solar zenith angle during the observation")
-        .or_else(|e| Err(e.with_path(out_file.to_owned())))?;
+            .change_context_lazy(|| CliError::write_error(out_file))?;
 
         Self::write_0d_var(nc, "azi", spec_idx, data_rec.azim, "deg", "Azimuth angle of the observation")
-        .or_else(|e| Err(e.with_path(out_file.to_owned())))?;
+            .change_context_lazy(|| CliError::write_error(out_file))?;
 
         Self::write_0d_var(nc, "pointing_offset", spec_idx, data_rec.poff, "deg", "The pointing offset in degrees")
-        .or_else(|e| Err(e.with_path(out_file.to_owned())))?;
+            .change_context_lazy(|| CliError::write_error(out_file))?;
 
         Self::write_0d_var(nc, "doppler", spec_idx, data_rec.osds, "ppm", "Observer-sun doppler stretch")
-        .or_else(|e| Err(e.with_path(out_file.to_owned())))?;
+            .change_context_lazy(|| CliError::write_error(out_file))?;
 
         Self::write_0d_var(nc, "fov_internal", spec_idx, data_rec.fovi, "radians", "Internal field of view")
-        .or_else(|e| Err(e.with_path(out_file.to_owned())))?;
+            .change_context_lazy(|| CliError::write_error(out_file))?;
 
         Self::write_0d_var(nc, "fov_external", spec_idx, data_rec.fovo, "radians", "External field of view")
-        .or_else(|e| Err(e.with_path(out_file.to_owned())))?;
+            .change_context_lazy(|| CliError::write_error(out_file))?;
 
         // TODO: units for amal
         Self::write_0d_var(nc, "angular_misalignment", spec_idx, data_rec.amal, "", "Angular misalignment")
-        .or_else(|e| Err(e.with_path(out_file.to_owned())))?;
+            .change_context_lazy(|| CliError::write_error(out_file))?;
 
         // TODO: get what the ZLO is a fraction of, just 1?
         Self::write_0d_var(nc, "zlo", spec_idx, data_rec.zoff, "", "Zero level offset as a fraction")
-        .or_else(|e| Err(e.with_path(out_file.to_owned())))?;
+            .change_context_lazy(|| CliError::write_error(out_file))?;
 
         Self::write_0d_var(nc, "snr", spec_idx, data_rec.snr, "", "Signal to noise ratio")
-        .or_else(|e| Err(e.with_path(out_file.to_owned())))?;
+            .change_context_lazy(|| CliError::write_error(out_file))?;
 
         Self::write_0d_var(nc, "apodization", spec_idx, data_rec.apf.as_int(), "flag", 
             &format!("An integer describing what kind of apodization was applied to the spectrum: {}", utils::ApodizationFxn::int_map_string()))
-            .or_else(|e| Err(e.with_path(out_file.to_owned())))?;
+                .change_context_lazy(|| CliError::write_error(out_file))?;
 
         Self::write_0d_var(nc, "instrument_temperature", spec_idx, data_rec.tins, "deg_C", "Temperature inside the instrument")
-        .or_else(|e| Err(e.with_path(out_file.to_owned())))?;
+            .change_context_lazy(|| CliError::write_error(out_file))?;
 
         Self::write_0d_var(nc, "instrumnent_pressure", spec_idx, data_rec.pins, "mbar", "Pressure inside the instrument")
-        .or_else(|e| Err(e.with_path(out_file.to_owned())))?;
+            .change_context_lazy(|| CliError::write_error(out_file))?;
 
         Self::write_0d_var(nc, "instrument_humidity", spec_idx, data_rec.hins, "%", "Relative humidity inside the instrument")
-        .or_else(|e| Err(e.with_path(out_file.to_owned())))?;
+            .change_context_lazy(|| CliError::write_error(out_file))?;
 
         Self::write_0d_var(nc, "outside_temperature", spec_idx, data_rec.tout, "deg_C", "Temperature measured at or near the observation site")
-        .or_else(|e| Err(e.with_path(out_file.to_owned())))?;
+            .change_context_lazy(|| CliError::write_error(out_file))?;
 
         Self::write_0d_var(nc, "outside_pressure", spec_idx, data_rec.pout, "mbar", "Pressure measured at or near the observation")
-        .or_else(|e| Err(e.with_path(out_file.to_owned())))?;
+            .change_context_lazy(|| CliError::write_error(out_file))?;
 
         Self::write_0d_var(nc, "outside_humidity", spec_idx, data_rec.hout, "%", "Relative humidity measured at or near the observation")
-        .or_else(|e| Err(e.with_path(out_file.to_owned())))?;
+            .change_context_lazy(|| CliError::write_error(out_file))?;
 
         Self::write_0d_var(nc, "solar_intensity_average", spec_idx, data_rec.sia, "AU", "Average solar intensity during the observation")
-        .or_else(|e| Err(e.with_path(out_file.to_owned())))?;
+            .change_context_lazy(|| CliError::write_error(out_file))?;
 
         Self::write_0d_var(nc, "solar_intensity_frac_var", spec_idx, data_rec.fvsi, "", "Fractional variation in solar intensity during the observation")
-        .or_else(|e| Err(e.with_path(out_file.to_owned())))?;
+            .change_context_lazy(|| CliError::write_error(out_file))?;
 
         Self::write_0d_var(nc, "wind_speed", spec_idx, data_rec.wspd, "m s-1", "Wind speed measured at or near the observation")
-        .or_else(|e| Err(e.with_path(out_file.to_owned())))?;
+            .change_context_lazy(|| CliError::write_error(out_file))?;
 
         // TODO: confirm wind direction convention
         Self::write_0d_var(nc, "wind_dir", spec_idx, data_rec.wdir, "deg", "Wind direction measured at or near the observation")
-        .or_else(|e| Err(e.with_path(out_file.to_owned())))?;
+            .change_context_lazy(|| CliError::write_error(out_file))?;
 
         Self::write_0d_var(nc, "airmass_independent_path", spec_idx, data_rec.aipl, "km", "Path length independent of sun position, often the distance between the sun tracker mirror and FTS")
-        .or_else(|e| Err(e.with_path(out_file.to_owned())))?;
+            .change_context_lazy(|| CliError::write_error(out_file))?;
 
         Ok(())
     }
@@ -204,61 +251,63 @@ impl IndividualNcWriter {
 }
 
 impl NcWriter for IndividualNcWriter {
-    fn add_spectrum(&mut self, data_rec: &RunlogDataRec, spectrum: &Spectrum, full_spec_paths: bool) -> Result<(), GggError> {
+    fn add_spectrum(&mut self, data_rec: &RunlogDataRec, spectrum: &Spectrum, full_spec_paths: bool) -> error_stack::Result<(), CliError> {
         let out_file = self.save_dir.join(format!("{}.nc", data_rec.spectrum_name));
 
         let mut nc = netcdf::create(&out_file)
-            .or_else(|e| Err(GggError::CouldNotWrite { path: out_file.clone(), reason: format!("{} (while creating netcdf file)", e) }))?;
+            .change_context_lazy(|| CliError::write_error(&out_file))?;
 
         let npts = spectrum.freq.len();
         let dimname = Self::freq_dim();
 
         // Create the only needed dimension
         nc.add_dimension(dimname, npts)
-            .or_else(|e| Err(GggError::CouldNotWrite { path: out_file.clone(), reason: format!("{} (while creating '{}' dimension)", e, dimname) }))?;
+            .change_context_lazy(|| CliError::write_error(&out_file))?;
 
         let mut root = nc.root_mut()
-            .ok_or_else(|| GggError::CouldNotWrite { path: out_file.clone(), reason: "Could not get root group as mutable".to_owned()})?;
+            .ok_or_else(|| CliError::custom(format!("Could not get mutable root group from {}", out_file.display())))?;
         if full_spec_paths {
             let spec_path = format!("{}", spectrum.path.display());
             root.add_attribute("full_spectrum_path", spec_path.as_str())
-                .map_err(|_| GggError::CouldNotWrite { path: out_file.clone(), reason: "Could not add 'full_spectrum_path' attribute to root group".to_string() })?;
+                .change_context_lazy(|| CliError::write_error(&out_file))?;
         }
         Self::write_spectrum_values(&mut root, data_rec, spectrum, &out_file, 0, true)
     }
 
     fn write_0d_var<'f, T: netcdf::NcPutGet>(nc: &'f mut netcdf::GroupMut, varname: &str, _spec_idx: usize, value: T, units: &str, description: &str) 
-    -> Result<netcdf::VariableMut<'f>, GggError> {
+    -> error_stack::Result<netcdf::VariableMut<'f>, CliError> {
+        
         let mut var = nc.add_variable::<T>(varname, &[])
-            .or_else(|e| Err(GggError::CouldNotWrite { path: PathBuf::new(), reason: format!("{e} (while creating the {varname} variable)") }))?;
+            .map_err(|e| CliError::custom(format!("error creating variable '{varname}': {e}")))?;
 
         var.put_value(value, Extents::All)
-            .or_else(|e| Err(GggError::CouldNotWrite { path: PathBuf::new(), reason: format!("{e} (while writing value to {varname})") }))?;
+            .map_err(|e| CliError::custom(format!("error writing values to variable '{varname}': {e}")))?;
 
         var.put_attribute("units", units)
-            .or_else(|e| Err(GggError::CouldNotWrite { path: PathBuf::new(), reason: format!("{} (while adding 'units' attribute to {}", e, varname) }))?;
+            .map_err(|e| CliError::custom(format!("error writing 'units' attribute to variable '{varname}': {e}")))?;
 
         var.put_attribute("description", description)
-            .or_else(|e| Err(GggError::CouldNotWrite { path: PathBuf::new(), reason: format!("{} (while adding 'description' attribute to {}", e, varname) }))?;
+            .map_err(|e| CliError::custom(format!("error writing 'description' attribute to variable '{varname}': {e}")))?;
+
         Ok(var)
     }
 
     fn write_1d_var<'f>(nc: &'f mut netcdf::GroupMut, varname: &str, _spec_idx: usize, data: &ndarray::Array1<f32>, units: &str, description: &str) 
-    -> Result<netcdf::VariableMut<'f>, GggError> {
+    -> error_stack::Result<netcdf::VariableMut<'f>, CliError> {
         let mut var = nc.add_variable::<f32>(varname, &[Self::freq_dim()])
-            .or_else(|e| Err(GggError::CouldNotWrite { path: PathBuf::new(), reason: format!("{} (while creating the {} variable)", e, varname) }))?;
+            .map_err(|e| CliError::custom(format!("error creating variable '{varname}': {e}")))?;
 
         let data_slice = data.as_slice()
-            .ok_or_else(|| GggError::CouldNotWrite{path: PathBuf::new(), reason: "Could not convert frequency to a slice".to_owned()})?;
+            .ok_or_else(|| CliError::custom("Could not convert frequency to a slice"))?;
 
         var.put_values(data_slice, Extents::All)
-            .or_else(|e| Err(GggError::CouldNotWrite { path: PathBuf::new(), reason: format!("{} (while writing values to {})", e, varname) }))?;
+            .map_err(|e| CliError::custom(format!("error writing values to variable '{varname}': {e}")))?;
 
         var.put_attribute("units", units)
-            .or_else(|e| Err(GggError::CouldNotWrite { path: PathBuf::new(), reason: format!("{} (while adding 'units' attribute to {}", e, varname) }))?;
+            .map_err(|e| CliError::custom(format!("error writing 'units' attribute to variable '{varname}': {e}")))?;
 
         var.put_attribute("description", description)
-            .or_else(|e| Err(GggError::CouldNotWrite { path: PathBuf::new(), reason: format!("{} (while adding 'description' attribute to {}", e, varname) }))?;
+            .map_err(|e| CliError::custom(format!("error writing 'description' attribute to variable '{varname}': {e}")))?;
 
         Ok(var)
     }
@@ -390,10 +439,10 @@ impl MultipleNcWriter {
         Ok(groups)
     }
 
-    fn find_spectrum_group(&mut self, runlog_entry: &RunlogDataRec) -> Result<&SpecGroupDef, GggError> {
+    fn find_spectrum_group(&mut self, runlog_entry: &RunlogDataRec) -> error_stack::Result<&SpecGroupDef, CliError> {
         let mut idx = None;
         for (i, grp_def) in self.group_defs.iter().enumerate() {
-            if grp_def.entry_matches_group(runlog_entry)? {
+            if grp_def.entry_matches_group(runlog_entry).change_context_lazy(|| CliError::custom("error occurred while finding group for spectrum"))? {
                 idx = Some(i);
                 break;
             }
@@ -404,7 +453,8 @@ impl MultipleNcWriter {
         if let Some(i) = idx {
             Ok(&self.group_defs[i])
         }else{
-            Err(GggError::NotImplemented(format!("Group for spectrum {} was not created during initialization", runlog_entry.spectrum_name)))
+            let msg = format!("Group for spectrum {} was not created during initialization", runlog_entry.spectrum_name);
+            Err(CliError::custom(msg).into())
         }
     }
 
@@ -456,40 +506,37 @@ impl MultipleNcWriter {
         Ok(())
     }
 
-    fn write_str_var<'f>(nc: &'f mut netcdf::GroupMut, varname: &str, spec_idx: usize, value: &str, description: &str) -> Result<netcdf::VariableMut<'f>, GggError> {
+    fn write_str_var<'f>(nc: &'f mut netcdf::GroupMut, varname: &str, spec_idx: usize, value: &str, description: &str) -> error_stack::Result<netcdf::VariableMut<'f>, CliError> {
         let group_name = nc.name();
 
         let mut var = if nc.variable(varname).is_some() {
             nc.variable_mut(varname).unwrap()
         } else {
             let mut v = nc.add_string_variable(varname, &[Self::spec_dim()])
-            .map_err(|e| GggError::CouldNotWrite { 
-                path: PathBuf::from("?"), 
-                reason: format!("Could not create string variable '{varname}' in group '{group_name}': {e}")
-            })?;
+                .change_context_lazy(|| CliError::custom(format!(
+                    "Could not create string variable '{varname}' in group '{group_name}'"
+                )))?;
 
             v.put_attribute("description", description)
-            .map_err(|e| GggError::CouldNotWrite { 
-                path: PathBuf::from("?"), 
-                reason: format!("Could not add 'units' attribute to string variable '{varname}' in group '{group_name}': {e}")
-            })?;
+                .change_context_lazy(|| CliError::custom(format!(
+                    "Could not add 'units' attribute to string variable '{varname}' in group '{group_name}'"
+                )))?;
 
             v
         };
 
         let ext: Extents = spec_idx.into();
         var.put_string(value, ext)
-        .map_err(|e| GggError::CouldNotWrite { 
-            path: PathBuf::from("?"), 
-            reason: format!("Could not write string value to variable '{varname}' in group '{group_name}' at index {spec_idx}: {e}")
-        })?;
+            .change_context_lazy(|| CliError::custom(format!(
+                "Could not write string value to variable '{varname}' in group '{group_name}' at index {spec_idx}"
+            )))?;
 
         Ok(var)
     }
 }
 
 impl NcWriter for MultipleNcWriter {
-    fn add_spectrum(&mut self, data_rec: &RunlogDataRec, spectrum: &Spectrum, full_spec_paths: bool) -> Result<(), GggError> {
+    fn add_spectrum(&mut self, data_rec: &RunlogDataRec, spectrum: &Spectrum, full_spec_paths: bool) -> error_stack::Result<(), CliError> {
         // For each entry, check if the spectrum can go in one of the existing groups. If we need to create a group, do so.
         // If there's an issue (i.e. the spectrum should go in a certain group based on its detector code but has a different
         // frequency grid) either crash or skip that spectrum.
@@ -501,10 +548,10 @@ impl NcWriter for MultipleNcWriter {
         };
 
         let mut grp = self.nc_file.group_mut(&group_name)
-            .map_err(|e| GggError::NotImplemented(
+            .map_err(|e| CliError::custom(
                 format!("Could not get netCDF group '{}' (this should not happen), error was: {e}", &group_name)
             ))?
-            .ok_or_else(|| GggError::NotImplemented(
+            .ok_or_else(|| CliError::custom(
                 format!("Could not get netCDF group '{}' (this should not happen)", &group_name)
             ))?;
 
@@ -518,7 +565,7 @@ impl NcWriter for MultipleNcWriter {
     }
 
     fn write_0d_var<'f, T: netcdf::NcPutGet>(nc: &'f mut netcdf::GroupMut, varname: &str, spec_idx: usize, value: T, units: &str, description: &str) 
-    -> Result<netcdf::VariableMut<'f>, GggError> {
+    -> error_stack::Result<netcdf::VariableMut<'f>, CliError> {
         let group_name = nc.name();
 
         let mut var = if nc.variable(varname).is_some() {
@@ -528,76 +575,67 @@ impl NcWriter for MultipleNcWriter {
             nc.variable_mut(varname).unwrap()
         }else{
             let mut v = nc.add_variable::<T>(varname, &[Self::spec_dim()])
-            .map_err(|e| GggError::CouldNotWrite { 
-                path: PathBuf::from("?"), 
-                reason: format!("Could not create variable '{varname}' in group '{group_name}': {e}") 
-            })?;
-
+                .change_context_lazy(|| CliError::custom(format!(
+                    "Could not create variable '{varname}' in group '{group_name}'"
+                )))?;
+            
             v.put_attribute("units", units)
-            .map_err(|e| GggError::CouldNotWrite { 
-                path: PathBuf::from("?"), 
-                reason: format!("Could not add 'units' attribute to variable '{varname}' in group '{group_name}': {e}")
-            })?;
+                .change_context_lazy(|| CliError::custom(format!(
+                    "Could not add 'units' attribute to variable '{varname}' in group '{group_name}'"
+                )))?;
 
             v.put_attribute("description", description)
-            .map_err(|e| GggError::CouldNotWrite { 
-                path: PathBuf::from("?"), 
-                reason: format!("Could not add 'units' attribute to variable '{varname}' in group '{group_name}': {e}")
-            })?;
+                .change_context_lazy(|| CliError::custom(format!(
+                    "Could not add 'units' attribute to variable '{varname}' in group '{group_name}'"
+                )))?;
 
             v
         };
 
         let ext: Extents = spec_idx.into();
         var.put_value(value, ext)
-        .map_err(|e| GggError::CouldNotWrite { 
-            path: PathBuf::from("?"), 
-            reason: format!("Could not write scalar value to variable '{varname}' in group '{group_name}' at index {spec_idx}: {e}")
-        })?;
+            .change_context_lazy(|| CliError::custom(format!(
+                "Could not write scalar value to variable '{varname}' in group '{group_name}' at index {spec_idx}"
+            )))?;
 
         Ok(var)
     }
 
     fn write_1d_var<'f>(nc: &'f mut netcdf::GroupMut, varname: &str, spec_idx: usize, data: &ndarray::Array1<f32>, units: &str, description: &str) 
-    -> Result<netcdf::VariableMut<'f>, GggError> {
+    -> error_stack::Result<netcdf::VariableMut<'f>, CliError> {
         let group_name = nc.name();
 
         let mut var = if nc.variable(varname).is_some() {
             nc.variable_mut(varname).unwrap()
         }else{
             let mut v = nc.add_variable::<f32>(varname, &[Self::spec_dim(), Self::freq_dim()])
-            .map_err(|e| GggError::CouldNotWrite { 
-                path: PathBuf::from("?"), 
-                reason: format!("Could not create variable '{varname}' in group '{group_name}': {e}")
-            })?;
+                .change_context_lazy(|| CliError::custom(format!(
+                    "Could not create variable '{varname}' in group '{group_name}'"
+                )))?;
 
             v.put_attribute("units", units)
-            .map_err(|e| GggError::CouldNotWrite { 
-                path: PathBuf::from("?"), 
-                reason: format!("Could not add 'units' attribute to variable '{varname}' in group '{group_name}': {e}")
-            })?;
+                .change_context_lazy(|| CliError::custom(format!(
+                    "Could not add 'units' attribute to variable '{varname}' in group '{group_name}'"
+                )))?;
 
             v.put_attribute("description", description)
-            .map_err(|e| GggError::CouldNotWrite { 
-                path: PathBuf::from("?"), 
-                reason: format!("Could not add 'units' attribute to variable '{varname}' in group '{group_name}': {e}")
-            })?;
+                .change_context_lazy(|| CliError::custom(format!(
+                    "Could not add 'units' attribute to variable '{varname}' in group '{group_name}'"
+                )))?;
 
             v
         };
 
         let values = data.as_slice()
-        .ok_or_else(|| GggError::CouldNotWrite { 
-            path: PathBuf::from("?"), 
-            reason: format!("Could not convert data for variable '{varname}' at spectrum index {spec_idx} in group '{group_name}' to a slice")
-        })?;
+        .ok_or_else(|| CliError::custom(format!(
+            "Could not convert data for variable '{varname}' at spectrum index {spec_idx} in group '{group_name}' to a slice"
+        )))?;
 
         let ext: Extents = [spec_idx..spec_idx+1, 0..values.len()].into();
         var.put_values(values, ext)
-        .map_err(|e| GggError::CouldNotWrite { 
-            path: PathBuf::from("?"),
-            reason: format!("Could not write values for variable '{varname}' at spectrum index {spec_idx} in group '{group_name}': {e}")
-        })?;
+            .change_context_lazy(|| CliError::custom(format!(
+                "Could not write values for variable '{varname}' at spectrum index {spec_idx} in group '{group_name}'"
+            )))?;
 
         Ok(var)
     }
