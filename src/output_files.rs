@@ -526,6 +526,7 @@ impl AuxData {
             "fvsi" => Some(self.fvsi),
             "wspd" => Some(self.wspd),
             "wdir" => Some(self.wdir),
+            "o2dmf" => self.o2dmf,
             _ => None
         }
     }
@@ -907,7 +908,6 @@ pub struct PostprocFileHeader {
     pub nrec: usize,
     pub naux: usize,
     pub program_versions: HashMap<String, ProgramVersion>,
-    pub correction_factors: HashMap<String, HashMap<String, (f64, f64)>>,
     pub extra_lines: Vec<String>,
     pub missing_value: f64,
     pub fformat: FortFormat,
@@ -924,7 +924,6 @@ impl PostprocFileHeader {
         let naux = sizes[3];
 
         let mut program_versions = HashMap::new();
-        let mut correction_factors = HashMap::new();
         let mut extra_lines = vec![];
         let mut missing_value = None;
         let mut fformat = None;
@@ -934,10 +933,7 @@ impl PostprocFileHeader {
         while iline < nhead {
             iline += 1;
             let line = file.read_header_line()?;
-            if line.contains("Correction Factors") {
-                let (key, cf_map) = parse_corr_fac_block(file, line, &mut iline)?;
-                correction_factors.insert(key, cf_map);
-            } else if line.starts_with("missing:") {
+            if line.starts_with("missing:") {
                 let (_, v) = line.split_once(":").unwrap();
                 missing_value = Some(
                     v.trim().parse::<f64>().change_context_lazy(|| HeaderError::ParseError { 
@@ -956,14 +952,6 @@ impl PostprocFileHeader {
             } else if iline == nhead {
                 column_names = Some(line.split_whitespace().map(|s| s.to_string()).collect_vec());
             } else {
-                dbg!((iline, nhead));
-                let pv = ProgramVersion::from_str(&line).change_context_lazy(|| HeaderError::ParseError {
-                    location: FileLocation::new(Some(file.path.clone()), Some(iline+1), Some(line.clone())),
-                    cause: "Could not parse program version".into(),
-                })?;
-
-                program_versions.insert(pv.program.clone(), pv);
-
                 if let Ok(pv) = ProgramVersion::from_str(&line) {
                     program_versions.insert(pv.program.clone(), pv);
                 } else {
@@ -987,7 +975,7 @@ impl PostprocFileHeader {
             cause: "The column names were not found".into()
         })?;
 
-        Ok(Self { nhead, ncol, nrec, naux, program_versions, correction_factors, missing_value, extra_lines, fformat, column_names })
+        Ok(Self { nhead, ncol, nrec, naux, program_versions, missing_value, extra_lines, fformat, column_names })
     }
 
     fn aux_varnames(&self) -> &[String] {
@@ -997,61 +985,6 @@ impl PostprocFileHeader {
     fn gas_varnames(&self) -> &[String] {
         &self.column_names[self.naux..]
     }
-}
-
-fn parse_corr_fac_block<F: BufRead>(file: &mut FileBuf<F>, first_line: String, iline: &mut usize) 
--> error_stack::Result<(String, HashMap<String, (f64, f64)>), HeaderError> {
-    let (cf_name, cf_nums) = first_line.split_once(":")
-        .ok_or_else(|| HeaderError::ParseError { 
-            location: FileLocation::new(Some(file.path.clone()), Some(*iline+1), Some(first_line.clone())), 
-            cause: "Line containing 'Correction Factors' must have a colon in it".to_string()
-        })?;
-
-    let s = cf_nums.split_whitespace().nth(0)
-        .ok_or_else(|| HeaderError::ParseError { 
-            location: FileLocation::new(Some(file.path.clone()), Some(*iline+1), Some(first_line.clone())),
-            cause: "A corrections file line did not have at least one number after the colon".into()
-        })?;
-
-    let nfactor = s.parse::<usize>()
-        .change_context_lazy(|| HeaderError::ParseError {
-            location: FileLocation::new(Some(file.path.clone()), Some(*iline+1), Some(first_line.clone())),
-            cause: "Could not parse first value after colon in correction factor line as an unsiged integer".into()
-        })?;
-
-    let mut cf_map = HashMap::new();
-    for _ in 0..nfactor {
-        let line = file.read_header_line()?;
-        *iline += 1;
-        if let Some((key, value, uncertainty)) = line.split_whitespace().collect_tuple() {
-            let value = value.parse::<f64>()
-            .change_context_lazy(|| HeaderError::ParseError { 
-                location: FileLocation::new(Some(file.path.clone()), Some(*iline+1), Some(line.clone())),
-                cause: format!("Could not parse the {key} value into a float"),
-            })?;
-
-            let uncertainty = uncertainty.parse::<f64>()
-            .change_context_lazy(|| HeaderError::ParseError { 
-                location: FileLocation::new(Some(file.path.clone()), Some(*iline+1), Some(line.clone())),
-                cause: format!("Could not parse the {key} uncertainty into a float"),
-            })?;
-
-            let key = key.to_string();
-            cf_map.insert(key, (value, uncertainty));
-        } else {
-            let n = line.split_whitespace().count();
-            return Err(HeaderError::ParseError {
-                location: FileLocation::new(Some(file.path.clone()), Some(*iline+1), Some(line)),
-                cause: format!("A line with correction factor values should have 3 whitespace separated values, this one had {n}.")
-            }.into())
-        }
-    }
-
-    let cf_name = cf_name.split("Correction").nth(0)
-        .expect("Correction factor header line should have 'Correction' in it")
-        .trim()
-        .to_string();
-    Ok((cf_name, cf_map))
 }
 
 
@@ -1245,27 +1178,27 @@ mod tests {
 
         assert_eq!(f.header.program_versions, ex_pgrm_vers);
 
-        test_correction(&f.header.correction_factors["Airmass-Independent/In-Situ"], "xco2", 0.9898, 0.0010);
-        test_correction(&f.header.correction_factors["Airmass-Independent/In-Situ"], "xch4", 0.9765, 0.0020);
-        test_correction(&f.header.correction_factors["Airmass-Independent/In-Situ"], "xn2o", 0.9638, 0.0100);
-        test_correction(&f.header.correction_factors["Airmass-Independent/In-Situ"], "xco",  1.0672, 0.0200);
-        test_correction(&f.header.correction_factors["Airmass-Independent/In-Situ"], "xh2o", 1.0183, 0.0100);
-        test_correction(&f.header.correction_factors["Airmass-Independent/In-Situ"], "xluft", 1.000, 0.0000);
+        // test_correction(&f.header.correction_factors["Airmass-Independent/In-Situ"], "xco2", 0.9898, 0.0010);
+        // test_correction(&f.header.correction_factors["Airmass-Independent/In-Situ"], "xch4", 0.9765, 0.0020);
+        // test_correction(&f.header.correction_factors["Airmass-Independent/In-Situ"], "xn2o", 0.9638, 0.0100);
+        // test_correction(&f.header.correction_factors["Airmass-Independent/In-Situ"], "xco",  1.0672, 0.0200);
+        // test_correction(&f.header.correction_factors["Airmass-Independent/In-Situ"], "xh2o", 1.0183, 0.0100);
+        // test_correction(&f.header.correction_factors["Airmass-Independent/In-Situ"], "xluft", 1.000, 0.0000);
 
-        test_correction(&f.header.correction_factors["Airmass-Dependent"], "xco2_6220", -0.0068, 0.0050);
-        test_correction(&f.header.correction_factors["Airmass-Dependent"], "xco2_6339", -0.0068, 0.0050);
-        test_correction(&f.header.correction_factors["Airmass-Dependent"], "xlco2_4852", 0.0000, 0.0000);
-        test_correction(&f.header.correction_factors["Airmass-Dependent"], "xwco2_6073", 0.0000, 0.0000);
-        test_correction(&f.header.correction_factors["Airmass-Dependent"], "xwco2_6500", 0.0000, 0.0000);
-        test_correction(&f.header.correction_factors["Airmass-Dependent"], "xch4_5938", 0.0053, 0.0080);
-        test_correction(&f.header.correction_factors["Airmass-Dependent"], "xch4_6002", 0.0053, 0.0080);
-        test_correction(&f.header.correction_factors["Airmass-Dependent"], "xch4_6076", 0.0053, 0.0080);
-        test_correction(&f.header.correction_factors["Airmass-Dependent"], "xn2o_4395", 0.0039, 0.0100);
-        test_correction(&f.header.correction_factors["Airmass-Dependent"], "xn2o_4430", 0.0039, 0.0100);
-        test_correction(&f.header.correction_factors["Airmass-Dependent"], "xn2o_4719", 0.0039, 0.0100);
-        test_correction(&f.header.correction_factors["Airmass-Dependent"], "xco_4233", -0.0483, 0.1000);
-        test_correction(&f.header.correction_factors["Airmass-Dependent"], "xco_4290", -0.0483, 0.1000);
-        test_correction(&f.header.correction_factors["Airmass-Dependent"], "xluft_6146", -0.0000, 0.0000);
+        // test_correction(&f.header.correction_factors["Airmass-Dependent"], "xco2_6220", -0.0068, 0.0050);
+        // test_correction(&f.header.correction_factors["Airmass-Dependent"], "xco2_6339", -0.0068, 0.0050);
+        // test_correction(&f.header.correction_factors["Airmass-Dependent"], "xlco2_4852", 0.0000, 0.0000);
+        // test_correction(&f.header.correction_factors["Airmass-Dependent"], "xwco2_6073", 0.0000, 0.0000);
+        // test_correction(&f.header.correction_factors["Airmass-Dependent"], "xwco2_6500", 0.0000, 0.0000);
+        // test_correction(&f.header.correction_factors["Airmass-Dependent"], "xch4_5938", 0.0053, 0.0080);
+        // test_correction(&f.header.correction_factors["Airmass-Dependent"], "xch4_6002", 0.0053, 0.0080);
+        // test_correction(&f.header.correction_factors["Airmass-Dependent"], "xch4_6076", 0.0053, 0.0080);
+        // test_correction(&f.header.correction_factors["Airmass-Dependent"], "xn2o_4395", 0.0039, 0.0100);
+        // test_correction(&f.header.correction_factors["Airmass-Dependent"], "xn2o_4430", 0.0039, 0.0100);
+        // test_correction(&f.header.correction_factors["Airmass-Dependent"], "xn2o_4719", 0.0039, 0.0100);
+        // test_correction(&f.header.correction_factors["Airmass-Dependent"], "xco_4233", -0.0483, 0.1000);
+        // test_correction(&f.header.correction_factors["Airmass-Dependent"], "xco_4290", -0.0483, 0.1000);
+        // test_correction(&f.header.correction_factors["Airmass-Dependent"], "xluft_6146", -0.0000, 0.0000);
 
         approx::assert_abs_diff_eq!(f.header.missing_value, 9.8755E+35);
 

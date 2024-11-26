@@ -3,7 +3,7 @@ use std::{collections::HashMap, ffi::OsString, path::{Path, PathBuf}, process::E
 use error_stack::ResultExt;
 use errors::CliError;
 use interface::{DataProvider, StdGroupWriter};
-use providers::RunlogProvider;
+use providers::{AiaFile, RunlogProvider};
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use tracing::{error,info,Level};
 
@@ -43,7 +43,8 @@ fn driver(run_dir: PathBuf) -> error_stack::Result<(), CliError> {
         .change_context_lazy(|| CliError::input_error("error occurred while reading the runlog"))?;
     let spec_indexer = Arc::new(spec_indexer);
     let providers: Vec<Box<dyn DataProvider>> = vec![
-        Box::new(runlog)
+        Box::new(runlog),
+        Box::new(AiaFile::new(file_paths.aia_file, file_paths.qc_file))
     ];
 
     // Initialize the temporary netCDF file with a name that clearly indicates it is not complete.
@@ -82,6 +83,19 @@ fn driver(run_dir: PathBuf) -> error_stack::Result<(), CliError> {
         let new_context = match e.current_context() {
             errors::WriteError::Netcdf(_) => CliError::runtime_error("a netCDF error occurred"),
             errors::WriteError::VarCreation(_) => CliError::internal_error("the netCDF writer tried to construct a variable incorrectly"),
+            errors::WriteError::FileReadError(path_buf) => CliError::InputError(
+                format!("reading input file {} failed", path_buf.display())
+            ),
+            errors::WriteError::DetailedReadError(path_buf, msg) => CliError::InputError(
+                format!("reading input file {} failed: {msg}", path_buf.display())
+            ),
+            errors::WriteError::MissingDimError { requiring_file, dimname } => CliError::InternalError(
+                format!("the '{dimname}' dimension (required by the {requiring_file} file) was not created correctly")
+            ),
+            errors::WriteError::Custom(msg) => CliError::RuntimeError(
+                msg.to_string()
+            ),
+            
         };
         return res.change_context(new_context);
     }

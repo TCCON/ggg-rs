@@ -144,7 +144,43 @@ pub(crate) enum WriteError {
 
     /// Represents an error that occurs when creating the variable to be
     #[error(transparent)]
-    VarCreation(#[from] VarError)
+    VarCreation(#[from] VarError),
+
+    /// Represents an error that occurs from reading a file, it is assumed that
+    /// this will wrap a lower level error
+    #[error("Error reading file {}", .0.display())]
+    FileReadError(PathBuf),
+
+    /// Similar to FileReadError but with the ability to provide more information
+    /// as to the context of the error
+    #[error("Error reading {}: {1}", .0.display())]
+    DetailedReadError(PathBuf, String),
+
+    /// Error to use if a dimension required by a provider was not created in the netCDF file
+    #[error("Dimension '{dimname}', required by the {requiring_file} file, was not created properly")]
+    MissingDimError{requiring_file: String, dimname: &'static str},
+
+    /// General-purpose error
+    #[error("{0}")]
+    Custom(String),
+}
+
+impl WriteError {
+    pub(crate) fn file_read_error<P: Into<PathBuf>>(p: P) -> Self {
+        Self::FileReadError(p.into())
+    }
+
+    pub(crate) fn detailed_read_error<P: Into<PathBuf>, S: ToString>(p: P, reason: S) -> Self {
+        Self::DetailedReadError(p.into(), reason.to_string())
+    }
+
+    pub(crate) fn missing_dim_error<S: ToString>(req_file: S, dimname: &'static str) -> Self {
+        Self::MissingDimError { requiring_file: req_file.to_string(), dimname }
+    }
+
+    pub(crate) fn custom<S: ToString>(msg: S) -> Self {
+        Self::Custom(msg.to_string())
+    }
 }
 
 

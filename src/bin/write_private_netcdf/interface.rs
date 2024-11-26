@@ -81,7 +81,7 @@ pub(crate) trait VarGroup {
 }
 
 /// The allowed variable groups for standard TCCON and EM27/SUN data.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
 pub(crate) enum StdDataGroup {
     /// Standard, well-validated variables retrieved from near-IR InGaAs spectra
     InGaAs,
@@ -239,6 +239,10 @@ impl<T: NcPutGet> ConcreteVarToBe<T> {
         let attname = attname.to_string();
         let attvalue = attvalue.into();
         self.extra_attrs.push((attname, attvalue));
+    }
+
+    pub(crate) fn name(&self) -> &str {
+        &self.name
     }
 }
 
