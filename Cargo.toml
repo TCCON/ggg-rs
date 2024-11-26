@@ -85,11 +85,6 @@ name = "write_private_netcdf"
 required-features = ["netcdf", "inprogress"]
 
 [[bin]]
-# TODO: remove this once any useful old work has been moved into the new writer
-name = "write_private_netcdf_first_rust"
-required-features = ["netcdf", "inprogress"]
-
-[[bin]]
 name = "write_public_netcdf"
 required-features = ["netcdf", "inprogress"]
 
