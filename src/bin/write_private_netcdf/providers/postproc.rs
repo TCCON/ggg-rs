@@ -435,16 +435,18 @@ fn split_ret_vars_to_groups(variables: Vec<ConcreteVarToBe<f32>>)
     > {
     let mut grouped_vars = HashMap::new();
 
-    // TODO: parse the group definition file in $GGGPATH/tccon instead of hardcoding these groups
+    // TODO: parse the group definition file in $GGGPATH/tccon instead of hardcoding these groups.
+    // until that's done, this won't properly divide things into groups unless they duplicate InGaAs
+    // names.
     let aux_vars = ggg_rs::output_files::AuxData::postproc_fields_str();
     for var in variables {
         let group = if aux_vars.contains(&var.name()) {
             // Auxiliary variables (e.g. solzen, lat, lon, etc.) should all go in the regular
             // group.
             StdDataGroup::InGaAs
-        } else if var.name().starts_with("xv") {
+        } else if var.name().starts_with("xv") || var.name().starts_with("v") {
             StdDataGroup::Si
-        } else if var.name().starts_with("xm") {
+        } else if var.name().starts_with("xm") || var.name().starts_with("m") {
             StdDataGroup::InSb
         } else {
             StdDataGroup::InGaAsExperimental
