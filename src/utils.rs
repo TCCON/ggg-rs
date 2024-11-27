@@ -16,6 +16,7 @@ use fortformat::format_specs::FortFormat;
 use itertools::Itertools;
 use log::debug;
 use ndarray::Array1;
+use regex::Regex;
 use serde::Serialize;
 use serde::{Deserialize, Deserializer, de::Error as DeserError};
 
@@ -1015,6 +1016,23 @@ pub fn get_windows_from_multiggg(multiggg_file: &Path, include_runlog_name: bool
         debug!("{nskipped} lines in {} skipped as commented out", multiggg_file.display());
     }
     Ok(windows)
+}
+
+/// Given a column name like "co2_6220" or "co2_6220_error", return the
+/// gas name ("co2") and window ("6220"). The window is returned as a
+/// string to allow for windows like "4852a". If there are not at least
+/// two parts when split on an underscore, or the second part does not
+/// start with a digit, this will return `None`.
+pub fn split_gas_and_window(colname: &str) -> Option<(&str, &str)> {
+    let mut parts = colname.split("_");
+    let gas = parts.next()?;
+    let window = parts.next()?;
+    if !window.chars().next().is_some_and(|c| c.is_ascii_digit()) {
+        // This catches something like "co2_error"
+        None
+    } else {
+        Some((gas, window))
+    }
 }
 
 pub struct DateIter {

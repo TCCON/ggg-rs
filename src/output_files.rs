@@ -685,9 +685,20 @@ pub fn open_and_iter_postproc_file(path: &Path) -> error_stack::Result<(Postproc
         BodyError::could_not_read("error getting information from postprocessing file header", Some(path.into()), None, None)
     })?;
 
+    // We don't deserialize the comment character which can come after the spectrum name - if
+    // there's an a1 format string in the second spot, that will cause a problem so convert it
+    // to a skip.
+    let mut fformat = header.fformat.clone();
+    if let Some(fortformat::FortField::Char { width }) = fformat.get_field(1) {
+        if width.is_none() || width.is_some_and(|w| w == 1) {
+            fformat.set_field(1, fortformat::FortField::Skip)
+                .expect("should be able to override the second format field");
+        }
+    }
+
     let it = PostprocRowIter {
         lines: fbuf.lines(),
-        fmt: header.fformat.clone(),
+        fmt: fformat,
         colnames: header.column_names.clone(),
         src_path: path.to_path_buf()
     };

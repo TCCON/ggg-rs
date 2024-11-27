@@ -3,7 +3,7 @@ use std::{collections::HashMap, ffi::OsString, path::{Path, PathBuf}, process::E
 use error_stack::ResultExt;
 use errors::CliError;
 use interface::{DataProvider, StdGroupWriter};
-use providers::{AiaFile, RunlogProvider};
+use providers::{AiaFile, PostprocFile, RunlogProvider};
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use tracing::{error,info,Level};
 
@@ -42,9 +42,19 @@ fn driver(run_dir: PathBuf) -> error_stack::Result<(), CliError> {
     let (runlog, spec_indexer) = RunlogProvider::new(file_paths.runlog)
         .change_context_lazy(|| CliError::input_error("error occurred while reading the runlog"))?;
     let spec_indexer = Arc::new(spec_indexer);
+
+    // Since we allow the .vsw.ada file to be missing, check if it is present. Eventually whether
+    // this is an error will depend on whether we are in TCCON or EM27 mode.
+    let vsw_ada_file = file_paths.vsw_ada_file
+        .ok_or_else(|| CliError::input_error("expected .vsw.ada file ({}) does not exist"))?;
     let providers: Vec<Box<dyn DataProvider>> = vec![
         Box::new(runlog),
-        Box::new(AiaFile::new(file_paths.aia_file, file_paths.qc_file))
+        Box::new(AiaFile::new(file_paths.aia_file, file_paths.qc_file)),
+        Box::new(PostprocFile::new(file_paths.vsw_file)?),
+        Box::new(PostprocFile::new(file_paths.vav_file)?),
+        Box::new(PostprocFile::new(file_paths.tav_file)?),
+        Box::new(PostprocFile::new(vsw_ada_file)?),
+        Box::new(PostprocFile::new(file_paths.vav_ada_file)?),
     ];
 
     // Initialize the temporary netCDF file with a name that clearly indicates it is not complete.

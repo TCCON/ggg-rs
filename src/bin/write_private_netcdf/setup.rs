@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::{ffi::OsStr, path::{Path, PathBuf}};
 
 use error_stack::ResultExt;
 use ggg_rs::output_files::{get_col_files, get_file_from_col_header};
@@ -8,6 +8,12 @@ use crate::errors::CliError;
 pub(crate) struct InputFiles {
     pub(crate) runlog: PathBuf,
     pub(crate) col_files: Vec<PathBuf>,
+    pub(crate) vsw_file: PathBuf,
+    pub(crate) tsw_file: PathBuf,
+    pub(crate) vav_file: PathBuf,
+    pub(crate) tav_file: PathBuf,
+    pub(crate) vsw_ada_file: Option<PathBuf>,
+    pub(crate) vav_ada_file: PathBuf,
     pub(crate) aia_file: PathBuf,
     pub(crate) qc_file: PathBuf,
 }
@@ -39,12 +45,15 @@ impl InputFiles {
             .ok_or_else(|| CliError::input_error("failed to get the runlog name from the path to the runlog"))?;
         let site_id: String = runlog_name.to_string_lossy().chars().take(2).collect();
 
-        let mut aia_name = runlog_name.to_os_string();
-        aia_name.push(".vav.ada.aia");
-        let aia_file = run_dir.join(aia_name);
-        if !aia_file.exists() {
-            return Err(CliError::input_error(format!("expected .aia file ({}) does not exist", aia_file.display())).into());
-        }
+        // All the postprocessing files
+        let vsw_file = find_req_output_file(run_dir, runlog_name, ".vsw")?;
+        let tsw_file = find_req_output_file(run_dir, runlog_name, ".tsw")?;
+        let vav_file = find_req_output_file(run_dir, runlog_name, ".vav")?;
+        let tav_file = find_req_output_file(run_dir, runlog_name, ".tav")?;
+        // Allow the .vsw.ada file to be missing; the EM27s don't generate this
+        let vsw_ada_file = find_req_output_file(run_dir, runlog_name, ".vsw.ada").ok();
+        let vav_ada_file = find_req_output_file(run_dir, runlog_name, ".vav.ada")?;
+        let aia_file = find_req_output_file(run_dir, runlog_name, ".vav.ada.aia")?;
 
         let qc_file = ggg_path.join("tccon").join(format!("{site_id}_qc.dat"));
         if !qc_file.exists() {
@@ -52,6 +61,17 @@ impl InputFiles {
         }
         
 
-        Ok(Self { runlog, col_files, aia_file, qc_file })
+        Ok(Self { runlog, col_files, aia_file, vsw_file, tsw_file, vav_file, tav_file, vsw_ada_file, vav_ada_file, qc_file })
+    }
+}
+
+fn find_req_output_file(run_dir: &Path, runlog_name: &OsStr, ext: &str) -> Result<PathBuf, CliError> {
+    let mut name = runlog_name.to_os_string();
+    name.push(ext);
+    let file = run_dir.join(name);
+    if file.exists() {
+        Ok(file)
+    } else {
+        Err(CliError::input_error(format!("expected {ext} file ({}) does not exist", file.display())))
     }
 }
