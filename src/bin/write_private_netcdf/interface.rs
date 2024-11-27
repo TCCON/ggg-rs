@@ -1,5 +1,6 @@
 use std::{borrow::Cow, cell::RefCell, collections::HashMap, fmt::Display, path::Path, sync::{Arc, Mutex}};
 
+use indicatif::ProgressBar;
 use ndarray::{Array, ArrayD};
 use netcdf::{AttributeValue, GroupMut, NcPutGet};
 use crate::errors::{VarError, WriteError};
@@ -39,9 +40,13 @@ pub(crate) trait DataProvider: Display + Send {
     /// a [`GroupWriter`] to write the variable instead of directly accessing the netCDF file
     /// allows `writer` to handle putting variables in the correct groups.
     /// 
+    /// This will also receive a progress bar instance that it can use to indicate the progress
+    /// of reading and writing. See the [`crate::progress`] module for helper functions to set up
+    /// the progress bar consistently.
+    /// 
     /// Providers that write along the "time" dimension must ensure that they use `spec_indexer`
     /// to put their data at the right index for its spectrum.
-    fn write_data_to_nc(&self, spec_indexer: &SpectrumIndexer, writer: &dyn GroupWriter) -> error_stack::Result<(), WriteError>;
+    fn write_data_to_nc(&self, spec_indexer: &SpectrumIndexer, writer: &dyn GroupWriter, pb: ProgressBar) -> error_stack::Result<(), WriteError>;
 }
 
 /// A type that maps spectrum names to indices along the "time" dimension.
@@ -119,6 +124,8 @@ impl VarGroup for StdDataGroup {
 /// be a generic parameter. We will pretty much always use instances of
 /// [`ConcreteVarToBe`] to write variables.
 pub(crate) trait VarToBe {
+    fn name(&self) -> &str;
+
     /// Given the group to write to, this function must create the variable
     /// (with the given suffix on its name), write the data, and write any attributes.
     fn write(&self, ncgrp: &mut GroupMut, var_suffix: &str) -> netcdf::Result<()>;
@@ -247,6 +254,10 @@ impl<T: NcPutGet> ConcreteVarToBe<T> {
 }
 
 impl<T: NcPutGet> VarToBe for ConcreteVarToBe<T> {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
     fn write(&self, ncgrp: &mut GroupMut, var_suffix: &str) -> netcdf::Result<()> {
         let full_name = format!("{}{var_suffix}", self.name);
         let mut ncvar = ncgrp.add_variable::<T>(&full_name, &self.dimensions)?;
@@ -283,9 +294,15 @@ pub(crate) trait GroupWriter: Send + Sync {
     /// Write a list of variables to the netCDF file.
     /// 
     /// Implementors should ensure that these variables will be written together in the netCDF file
-    /// even if different data providers are running in parallel and calling this.
-    fn write_many_variables(&self, variables: &[&dyn VarToBe], group: &dyn VarGroup) -> Result<(), WriteError> {
+    /// even if different data providers are running in parallel and calling this. If it received
+    /// a progress bar instance, it should increment the bar for each variable written and set the
+    /// message to the name of the variable being written.
+    fn write_many_variables(&self, variables: &[&dyn VarToBe], group: &dyn VarGroup, pb: Option<&ProgressBar>) -> Result<(), WriteError> {
         for &variable in variables {
+            if let Some(pb) = pb {
+                pb.inc(1);
+                pb.set_message(variable.name().to_string());
+            }
             self.write_variable(variable, group)?;
         }
         Ok(())
@@ -329,11 +346,15 @@ impl GroupWriter for StdGroupWriter {
     /// one after the other, with no opportunity for other data providers to intersperse
     /// their own variables, so prefer this function if you want to keep variables from
     /// the same source grouped together in the netCDF file.
-    fn write_many_variables(&self, variables: &[&dyn VarToBe], group: &dyn VarGroup) -> Result<(), WriteError> {
+    fn write_many_variables(&self, variables: &[&dyn VarToBe], group: &dyn VarGroup, pb: Option<&ProgressBar>) -> Result<(), WriteError> {
         let nc_lock = self.nc_dset.lock()
             .expect("NetCDF mutex was poisoned");
         let mut nc_dset = nc_lock.borrow_mut();
         for &variable in variables {
+            if let Some(pb) = pb {
+                pb.inc(1);
+                pb.set_message(variable.name().to_string());
+            }
             Self::write_variable_inner(&mut nc_dset, variable, group, self.use_groups)?;
         }
         Ok(())

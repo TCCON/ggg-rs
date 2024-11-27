@@ -38,6 +38,7 @@ hex = "0.4.3"
 rayon = "1.10.0"
 tracing = "0.1.40"
 tracing-subscriber = {version = "0.3.18", features = ["json"]}
+indicatif = "0.17.9"
 
 [dev-dependencies]
 rstest = "0.18.2"

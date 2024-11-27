@@ -3,6 +3,7 @@ use std::{collections::HashMap, fmt::Display, path::{Path, PathBuf}, str::FromSt
 use chrono::{DateTime, Utc};
 use error_stack::ResultExt;
 use ggg_rs::{cit_spectrum_name::{CitSpectrumName, NoDetectorSpecName}, runlogs::FallibleRunlog};
+use indicatif::ProgressBar;
 use ndarray::Array1;
 
 use crate::{dimensions::TIME_DIM_NAME, errors::{InputError, WriteError}, interface::{ConcreteVarToBe, DataProvider, SpectrumIndexer, StdDataGroup}};
@@ -93,7 +94,7 @@ impl DataProvider for RunlogProvider {
         std::borrow::Cow::Borrowed(&DIMS_REQ)
     }
     
-    fn write_data_to_nc(&self, _spec_indexer: &SpectrumIndexer, writer: &dyn crate::interface::GroupWriter) -> error_stack::Result<(), WriteError> {
+    fn write_data_to_nc(&self, _spec_indexer: &SpectrumIndexer, writer: &dyn crate::interface::GroupWriter, _pb: ProgressBar) -> error_stack::Result<(), WriteError> {
         // Unlike other providers, since the runlog sets the order of data, it doesn't need to use the
         // spectrum indexer to make sure the data are in the correct order.
         // Also, since we only have one variable, there's no benefit to using the "write multiple vars" writer method.

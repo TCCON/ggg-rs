@@ -1,5 +1,6 @@
-use std::path::Path;
+use std::{path::Path, sync::{Arc, Mutex}};
 
+use indicatif::MultiProgress;
 use tracing::Level;
 use tracing_subscriber::{Registry,fmt::writer::MakeWriterExt,prelude::*};
 
@@ -8,7 +9,7 @@ use tracing_subscriber::{Registry,fmt::writer::MakeWriterExt,prelude::*};
 /// 
 /// Note that any previous write_netcdf.log is overwritten. Panics if setting up the logger
 /// fails, usually because it cannot write to the log file.
-pub(crate) fn init_logging(run_dir: &Path, level: Level) {
+pub(crate) fn init_logging(run_dir: &Path, level: Level, mpbar: Arc<MultiProgress>) {
     // TODO: Possibly integrate with indicatif to use its
     // println (https://docs.rs/indicatif/latest/indicatif/struct.ProgressBar.html#method.println)
     // or suspend functions to provide a way to log messages and have a progress bar running.
@@ -16,7 +17,9 @@ pub(crate) fn init_logging(run_dir: &Path, level: Level) {
     // a weak progress bar to print the messages.
 
     // Log to the screen with the user-requested verbosity
-    let stderr = std::io::stderr.with_max_level(level);
+    // The Mutex is required by tracing_subscriber to make something that implements
+    // std::io::Write implement tracing_subscriber::writer::MakeWriter.
+    let stderr = Mutex::new(ConsoleLogger::new(mpbar)).with_max_level(level);
     let stderr_layer = tracing_subscriber::fmt::layer()
         .with_level(true)
         .with_file(true)
@@ -53,4 +56,34 @@ pub(crate) fn init_logging(run_dir: &Path, level: Level) {
 
     tracing::subscriber::set_global_default(subscriber)
         .expect("Could not set tracing/logging subscriber");
+}
+
+struct ConsoleLogger {
+    stderr: std::io::Stderr,
+    mpbar: Arc<MultiProgress>,
+}
+
+impl ConsoleLogger {
+    fn new(mpbar: Arc<MultiProgress>) -> Self {
+        let stderr = std::io::stderr();
+        Self { stderr, mpbar }
+    }
+}
+
+impl std::io::Write for ConsoleLogger {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let mut res = Ok(0);
+        self.mpbar.suspend(|| {
+            res = self.stderr.write(buf);
+        });
+        res
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        let mut res = Ok(());
+        self.mpbar.suspend(|| {
+            res = self.stderr.flush();
+        });
+        res
+    }
 }

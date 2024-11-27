@@ -3,12 +3,13 @@ use std::{borrow::Cow, collections::HashMap, fmt::Display, hash::RandomState, io
 use error_stack::ResultExt;
 use ggg_rs::{output_files::{open_and_iter_postproc_file, PostprocType, POSTPROC_FILL_VALUE}, utils::{get_nhead_ncol, FileBuf}};
 use indexmap::IndexMap;
+use indicatif::ProgressBar;
 use itertools::Itertools;
 use ndarray::Array1;
 use serde::Deserialize;
 use tracing::instrument;
 
-use crate::{dimensions::TIME_DIM_NAME, errors::{CliError, WriteError}, interface::{ConcreteVarToBe, DataProvider, GroupWriter, SpectrumIndexer, StdDataGroup, VarToBe}};
+use crate::{dimensions::TIME_DIM_NAME, errors::{CliError, WriteError}, interface::{ConcreteVarToBe, DataProvider, GroupWriter, SpectrumIndexer, StdDataGroup, VarToBe}, progress::{setup_read_pb, setup_write_pb}};
 
 /// Provider for .vav.ada.aia files
 /// 
@@ -25,11 +26,12 @@ impl AiaFile {
         Self { aia_path, qc_path }
     }
 
-    fn read_variables(postproc_file: &Path, ntimes: usize, spec_indexer: &SpectrumIndexer, qc_rows: HashMap<String, QcRow>)
+    fn read_variables(postproc_file: &Path, ntimes: usize, spec_indexer: &SpectrumIndexer, qc_rows: HashMap<String, QcRow>, pb: &ProgressBar)
     -> error_stack::Result<Vec<ConcreteVarToBe<f32>>, WriteError> {
 
         let (header, row_iter) = open_and_iter_postproc_file(postproc_file)
             .change_context_lazy(|| WriteError::file_read_error(postproc_file))?;
+        setup_read_pb(pb, header.nrec, ".vav.ada.aia");
 
         // Create arrays for all of the numeric variables
         let it = header.column_names.iter()
@@ -54,6 +56,8 @@ impl AiaFile {
         // and apply the scale from the QC file. Since this is the .aia file, we will get the numeric
         // auxiliary variables as well as the xgas ones.
         for (irow, row) in row_iter.enumerate() {
+            pb.inc(1);
+
             let line_num = header.nhead + irow + 1;
             let row = row.change_context_lazy(|| WriteError::detailed_read_error(
                 postproc_file, format!("could not read line {line_num}")
@@ -143,16 +147,18 @@ impl DataProvider for AiaFile {
     }
 
     #[instrument(name = "aia_file_writer", skip_all)]
-    fn write_data_to_nc(&self, spec_indexer: &crate::interface::SpectrumIndexer, writer: &dyn GroupWriter) -> error_stack::Result<(), WriteError> {
+    fn write_data_to_nc(&self, spec_indexer: &crate::interface::SpectrumIndexer, writer: &dyn GroupWriter, pb: ProgressBar) -> error_stack::Result<(), WriteError> {
         let qc_rows = load_qc_file(&self.qc_path)?;
         let ntimes = writer.get_dim_length(TIME_DIM_NAME)
             .ok_or_else(|| WriteError::missing_dim_error(".aia", TIME_DIM_NAME))?;
         // TODO: compute flag variable
-        let variables = Self::read_variables(&self.aia_path, ntimes, spec_indexer, qc_rows)?;
+        let variables = Self::read_variables(&self.aia_path, ntimes, spec_indexer, qc_rows, &pb)?;
+        let nvar = variables.len();
         let grouped_variables = split_ret_vars_to_groups(variables)?;
+        setup_write_pb(&pb, nvar, ".vav.ada.aia");
         for (group, vars) in grouped_variables {
             let tmp = vars.iter().map(|v| v.as_ref()).collect_vec();
-            writer.write_many_variables(&tmp, &group)?;
+            writer.write_many_variables(&tmp, &group, Some(&pb))?;
         }
         Ok(())
     }
@@ -179,7 +185,7 @@ impl PostprocFile {
         Ok(Self { file_path, postproc_type })
     }
 
-    fn read_variables(&self, ntimes: usize, spec_indexer: &SpectrumIndexer)
+    fn read_variables(&self, ntimes: usize, spec_indexer: &SpectrumIndexer, pb: &ProgressBar)
     -> error_stack::Result<Vec<ConcreteVarToBe<f32>>, WriteError> {
         // Every variable will need the file basename and checksum for the source file, so we get those
         // now to save recomputing the checksum every time.
@@ -192,7 +198,7 @@ impl PostprocFile {
         let (header, row_iter) = open_and_iter_postproc_file(&self.file_path)
             .change_context_lazy(|| WriteError::file_read_error(&self.file_path))?;
 
-        
+        setup_read_pb(pb, header.nrec, &self.postproc_type);
 
         // Create arrays for all of the retrieved variables. We deliberately skip the auxiliary
         // variables; those should only be provided by the AiaFile provider.
@@ -210,6 +216,8 @@ impl PostprocFile {
         // For each row, find the correct index along the time dimension given the spectrum name.
         // Unlike the AiaFile provider, we don't apply any scaling - just keep the values as they are.
         for (irow, row) in row_iter.enumerate() {
+            pb.inc(1);
+
             let line_num = header.nhead + irow + 1;
             let row = row.change_context_lazy(|| WriteError::detailed_read_error(
                 &self.file_path, format!("could not read line {line_num}")
@@ -345,14 +353,17 @@ impl DataProvider for PostprocFile {
     }
 
     #[instrument(name = "postproc_file_writer", skip(spec_indexer, writer))]
-    fn write_data_to_nc(&self, spec_indexer: &crate::interface::SpectrumIndexer, writer: &dyn GroupWriter) -> error_stack::Result<(), WriteError> {
+    fn write_data_to_nc(&self, spec_indexer: &crate::interface::SpectrumIndexer, writer: &dyn GroupWriter, pb: ProgressBar) -> error_stack::Result<(), WriteError> {
         let ntimes = writer.get_dim_length(TIME_DIM_NAME)
             .ok_or_else(|| WriteError::missing_dim_error(".aia", TIME_DIM_NAME))?;
-        let variables = self.read_variables(ntimes, spec_indexer)?;
+        let variables = self.read_variables(ntimes, spec_indexer, &pb)?;
+        let nvar = variables.len();
         let grouped_variables = split_ret_vars_to_groups(variables)?;
+
+        setup_write_pb(&pb, nvar, &self.postproc_type);
         for (group, vars) in grouped_variables {
             let tmp = vars.iter().map(|v| v.as_ref()).collect_vec();
-            writer.write_many_variables(&tmp, &group)?;
+            writer.write_many_variables(&tmp, &group, Some(&pb))?;
         }
         Ok(())
     }

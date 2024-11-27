@@ -10,17 +10,22 @@ use tracing::{error,info,Level};
 
 mod logging;
 mod errors;
+mod progress;
 mod interface;
 mod setup;
 mod dimensions;
 mod providers;
 
 fn main() -> ExitCode {
+    // We need the multi progress bar before we set up logging, because the logging to
+    // stderr will need to interact with the progress bar to avoid comingling the progress
+    // bar and log messages.
+    let mpbar = Arc::new(indicatif::MultiProgress::new());
     let run_dir = PathBuf::from(".");
-    logging::init_logging(&run_dir, Level::DEBUG);
+    logging::init_logging(&run_dir, Level::DEBUG, Arc::clone(&mpbar));
     info!("Logging initialized");
 
-    match driver(run_dir) {
+    match driver(run_dir, mpbar) {
         Ok(_) => ExitCode::SUCCESS,
         Err(e) => {
             error!("{e}");
@@ -31,7 +36,7 @@ fn main() -> ExitCode {
     }
 }
 
-fn driver(run_dir: PathBuf) -> error_stack::Result<(), CliError> {
+fn driver(run_dir: PathBuf, mpbar: Arc<indicatif::MultiProgress>) -> error_stack::Result<(), CliError> {
     let file_paths = setup::InputFiles::from_run_dir(&run_dir)?;
     let runlog_name = file_paths.runlog.file_stem()
         .ok_or_else(|| CliError::input_error(format!(
@@ -85,7 +90,10 @@ fn driver(run_dir: PathBuf) -> error_stack::Result<(), CliError> {
         providers.into_par_iter().try_for_each(|provider| {
             let local_writer = writer.clone();
             let local_indexer = Arc::clone(&spec_indexer);
-            provider.write_data_to_nc(&local_indexer, &local_writer)
+            let local_mpbar = Arc::clone(&mpbar);
+            let pbar = indicatif::ProgressBar::no_length();
+            let pbar = local_mpbar.add(pbar);
+            provider.write_data_to_nc(&local_indexer, &local_writer, pbar)
         })
     };
 
