@@ -2,7 +2,7 @@ use std::{cell::Cell, collections::HashMap, path::{Path, PathBuf}, process::Exit
 
 use clap::Parser;
 use error_stack::ResultExt;
-use ggg_rs::{self, utils::{GggError, self}, runlogs::{RunlogDataRec, Runlog}, opus::Spectrum};
+use ggg_rs::{self, utils::{GggError, self}, readers::runlogs::{RunlogDataRec, Runlog}, opus::Spectrum};
 use netcdf::Extents;
 
 /// Generate netCDF versions of binary TCCON spectra listed in a given runlog
@@ -75,11 +75,11 @@ fn driver(clargs: Cli) -> error_stack::Result<(), CliError> {
     let data_part = clargs.data_part_args.get_data_partition()
         .change_context_lazy(|| CliError::custom("Unable to set up data partition for spectrum paths"))?;
 
-    let runlog = ggg_rs::runlogs::Runlog::open(&clargs.runlog)
+    let runlog = ggg_rs::readers::runlogs::Runlog::open(&clargs.runlog)
         .change_context_lazy(|| CliError::read_error(&clargs.runlog))?;
 
     if clargs.single_file {
-        let runlog_clone = ggg_rs::runlogs::Runlog::open(&clargs.runlog)
+        let runlog_clone = ggg_rs::readers::runlogs::Runlog::open(&clargs.runlog)
             .change_context_lazy(|| CliError::read_error(&clargs.runlog))?;
         let writer = MultipleNcWriter::new_with_default_map(&data_part, clargs.output.clone(), runlog_clone, true)
             .change_context_lazy(|| CliError::write_error(&clargs.output))?;

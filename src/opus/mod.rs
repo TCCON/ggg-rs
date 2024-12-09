@@ -2,7 +2,7 @@ use std::{path::{Path, PathBuf}, fs::File, io::{Seek, Read}, str::FromStr, slice
 
 use itertools::Itertools;
 use ndarray::Array1;
-use crate::{runlogs, utils::{self,GggError}, opus::constants::bruker::BrukerParType};
+use crate::{opus::constants::bruker::BrukerParType, readers::runlogs, utils::{self,GggError}};
 
 use self::constants::bruker::{BrukerParValue, BrukerBlockType};
 

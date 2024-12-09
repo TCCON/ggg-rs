@@ -5,7 +5,7 @@ use fortformat::de::from_str_with_fields;
 use itertools::Itertools;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-use crate::{error::{FileLocation, HeaderError}, utils::{self, GggError}};
+use crate::{error::HeaderError, utils::{self, GggError}};
 
 pub const NUM_RUNLOG_COLS: usize = 36;
 

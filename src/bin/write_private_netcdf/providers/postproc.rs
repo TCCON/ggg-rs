@@ -1,7 +1,7 @@
 use std::{borrow::Cow, collections::HashMap, fmt::Display, hash::RandomState, path::{Path, PathBuf}};
 
 use error_stack::ResultExt;
-use ggg_rs::output_files::{open_and_iter_postproc_file, PostprocType, POSTPROC_FILL_VALUE};
+use ggg_rs::readers::{postproc_files::{open_and_iter_postproc_file, PostprocType}, POSTPROC_FILL_VALUE};
 use indexmap::IndexMap;
 use indicatif::ProgressBar;
 use itertools::Itertools;
@@ -73,7 +73,7 @@ impl AiaFile {
                 ))?;
 
             // Aux variables first
-            for &varname in ggg_rs::output_files::AuxData::postproc_fields_str() {
+            for &varname in ggg_rs::readers::postproc_files::AuxData::postproc_fields_str() {
                 if let Some(value) = row.auxiliary.get_numeric_field(varname) {
                     let arr = data_arrays.get_mut(varname)
                         .ok_or_else(|| WriteError::custom(format!(
@@ -102,7 +102,7 @@ impl AiaFile {
                         "retrieved variable {varname} from the .aia file was not included in the qc.dat file"
                     )))?;
                 
-                if !ggg_rs::output_files::is_postproc_fill(*value) {
+                if !ggg_rs::readers::postproc_files::is_postproc_fill(*value) {
                     arr[itime] = (value * scale) as f32;
                 } else {
                     arr[itime] = *value as f32;
@@ -211,7 +211,7 @@ impl PostprocFile {
 
         // Create arrays for all of the retrieved variables. We deliberately skip the auxiliary
         // variables; those should only be provided by the AiaFile provider.
-        let aux_fields = ggg_rs::output_files::AuxData::postproc_fields_str();
+        let aux_fields = ggg_rs::readers::postproc_files::AuxData::postproc_fields_str();
         let it = header.column_names.iter()
             .filter_map(|colname| {
                 if !aux_fields.contains(&colname.as_str()) {
@@ -390,7 +390,7 @@ fn split_ret_vars_to_groups(variables: Vec<ConcreteVarToBe<f32>>)
     // TODO: parse the group definition file in $GGGPATH/tccon instead of hardcoding these groups.
     // until that's done, this won't properly divide things into groups unless they duplicate InGaAs
     // names.
-    let aux_vars = ggg_rs::output_files::AuxData::postproc_fields_str();
+    let aux_vars = ggg_rs::readers::postproc_files::AuxData::postproc_fields_str();
     for var in variables {
         let group = if aux_vars.contains(&var.name()) {
             // Auxiliary variables (e.g. solzen, lat, lon, etc.) should all go in the regular

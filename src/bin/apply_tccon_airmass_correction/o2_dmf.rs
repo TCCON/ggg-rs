@@ -2,8 +2,8 @@ use std::{collections::HashMap, fmt::Debug, io::BufRead, path::{Path, PathBuf}};
 
 use chrono::Datelike;
 use error_stack::ResultExt;
-use ggg_rs::output_files::get_runlog_from_col_files;
-use ggg_rs::runlogs::FallibleRunlog;
+use ggg_rs::readers::col_files::get_runlog_from_col_files;
+use ggg_rs::readers::runlogs::FallibleRunlog;
 use itertools::Itertools;
 use nalgebra::{self, OMatrix, OVector};
 

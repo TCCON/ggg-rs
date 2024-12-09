@@ -99,7 +99,7 @@ impl FlagCalculator {
             let value = flag_vars.get(varname)
                 .expect("All variables required for flagged should have been loaded")[spec_index] as f64;
 
-            if ggg_rs::output_files::is_postproc_fill(value as f64) {
+            if ggg_rs::readers::postproc_files::is_postproc_fill(value as f64) {
                 // don't flag on fill values
                 continue;
             }

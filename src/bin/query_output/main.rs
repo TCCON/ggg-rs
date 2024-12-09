@@ -2,7 +2,7 @@ use std::{fmt::Display, path::PathBuf, process::ExitCode};
 
 use clap::Parser;
 use error_stack::ResultExt;
-use ggg_rs::output_files;
+use ggg_rs::readers::postproc_files::open_and_iter_postproc_file;
 
 fn main() -> ExitCode {
     if let Err(e) = main_inner() {
@@ -16,7 +16,7 @@ fn main() -> ExitCode {
 
 fn main_inner() -> error_stack::Result<(), CliError> {
     let clargs = Cli::parse();
-    let (_, it) = output_files::open_and_iter_postproc_file(&clargs.file)
+    let (_, it) = open_and_iter_postproc_file(&clargs.file)
         .change_context_lazy(|| "Error opening file".into())?;
 
     for col in clargs.columns.iter() {

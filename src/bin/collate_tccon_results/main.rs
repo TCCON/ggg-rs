@@ -6,7 +6,7 @@ use error_stack::ResultExt;
 use ggg_rs::{
     cit_spectrum_name::{CitDetector, CitSpectrumName, NoDetectorSpecName},
     collation::{collate_results, CollationError, CollationIndexer, CollationMode, CollationResult},
-    output_files::ProgramVersion, runlogs::{FallibleRunlog, RunlogDataRec},
+    readers::ProgramVersion, readers::runlogs::{FallibleRunlog, RunlogDataRec},
     tccon::input_config::TcconWindowPrefixes,
 };
 use log4rs::{encode::pattern::PatternEncoder, append::console::{ConsoleAppender, Target}, Config, config::{Appender, Root}};
@@ -199,7 +199,7 @@ impl CollationIndexer for TcconColIndexer {
         )).map(|i| *i)
     }
 
-    fn get_runlog_data(&self) -> CollationResult<&[ggg_rs::runlogs::RunlogDataRec]> {
+    fn get_runlog_data(&self) -> CollationResult<&[ggg_rs::readers::runlogs::RunlogDataRec]> {
         Ok(&self.runlog_data)
     }
 
@@ -211,7 +211,7 @@ impl CollationIndexer for TcconColIndexer {
         // For standard TCCON use, we want auxiliary data like the time, met, zmin, etc. to come from
         // the primary detector (usually InGaAs) because that detector provides the key CO2 and CH4
         // products.
-        if ggg_rs::output_files::AuxData::postproc_fields_str().contains(&column_name) {
+        if ggg_rs::readers::postproc_files::AuxData::postproc_fields_str().contains(&column_name) {
             let new_spectrum: CitSpectrumName = new_spectrum.parse().map_err(|e| CollationError::parsing_error(
                 format!("could not parse spectrum name '{new_spectrum}': {e}")
             ))?;

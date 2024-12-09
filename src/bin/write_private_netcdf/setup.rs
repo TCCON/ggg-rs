@@ -1,7 +1,7 @@
 use std::{ffi::OsStr, path::{Path, PathBuf}};
 
 use error_stack::ResultExt;
-use ggg_rs::output_files::{get_col_files, get_file_from_col_header};
+use ggg_rs::readers::col_files::{get_col_files, get_file_from_col_header};
 
 use crate::errors::CliError;
 

@@ -4,7 +4,7 @@ use clap::Parser;
 
 use error_stack::{Report, ResultExt};
 use fortformat::FortFormat;
-use ggg_rs::{output_files::{self, ProgramVersion}, tccon::input_config::{self, AdcfRow}};
+use ggg_rs::{readers::{postproc_files::open_and_iter_postproc_file, ProgramVersion}, tccon::input_config::{self, AdcfRow}, writers::postproc_files::write_postproc_header};
 use indexmap::IndexMap;
 use o2_dmf::{O2DmfProvider, O2DmfError};
 
@@ -111,7 +111,7 @@ fn driver(clargs: AirmassCorrCli) -> error_stack::Result<(), CliError> {
 
     // Read in the header of the previous postproc file, add the airmass correction factors
     // to it. Write out to a temporary file to avoid confusion with a completed *.ada file.
-    let (mut header, rows) = output_files::open_and_iter_postproc_file(&clargs.upstream_file)
+    let (mut header, rows) = open_and_iter_postproc_file(&clargs.upstream_file)
         .change_context_lazy(|| CliError::ReadError(clargs.upstream_file.to_path_buf()))?;
 
     // Make sure we found a number of auxiliary column, if so, add 1 to account for the new
@@ -188,7 +188,7 @@ fn driver(clargs: AirmassCorrCli) -> error_stack::Result<(), CliError> {
         .change_context_lazy(|| CliError::WriteError { path: out_file.to_path_buf(), cause: "creating file failed".to_string() })?;
     let mut fw = std::io::BufWriter::new(fw);
 
-    output_files::write_postproc_header(
+    write_postproc_header(
         &mut fw,
         col_names.len(),
         nrow,

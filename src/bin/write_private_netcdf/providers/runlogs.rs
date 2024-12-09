@@ -2,7 +2,7 @@ use std::{collections::HashMap, fmt::Display, path::{Path, PathBuf}, str::FromSt
 
 use chrono::{DateTime, Utc};
 use error_stack::ResultExt;
-use ggg_rs::{cit_spectrum_name::{CitSpectrumName, NoDetectorSpecName}, runlogs::FallibleRunlog};
+use ggg_rs::{cit_spectrum_name::{CitSpectrumName, NoDetectorSpecName}, readers::runlogs::FallibleRunlog};
 use indicatif::ProgressBar;
 use ndarray::Array1;
 

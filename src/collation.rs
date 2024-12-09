@@ -39,9 +39,12 @@ use error_stack::ResultExt;
 use log::{info, warn};
 
 use crate::error::FileLocation;
-use crate::output_files::{get_col_files, get_file_from_col_header, iter_tabular_file, open_and_iter_col_file, read_col_file_header, write_postproc_header, AuxData, ColFileHeader, ColRetQuantity, PostprocRow, ProgramVersion, POSTPROC_FILL_VALUE};
-use crate::runlogs::RunlogDataRec;
+use crate::readers::col_files::{get_col_files, get_file_from_col_header, open_and_iter_col_file, read_col_file_header, ColFileHeader, ColRetQuantity};
+use crate::readers::postproc_files::{iter_tabular_file, AuxData, PostprocRow};
+use crate::readers::{ProgramVersion, POSTPROC_FILL_VALUE};
+use crate::readers::runlogs::RunlogDataRec;
 use crate::utils::{self, FileBuf};
+use crate::writers::postproc_files::write_postproc_header;
 
 pub type CollationResult<T> = Result<T, CollationError>;
 
