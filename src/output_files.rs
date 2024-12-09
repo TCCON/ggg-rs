@@ -18,6 +18,12 @@ pub const POSTPROC_FILL_VALUE: f64 = 9.8765e35;
 static PROGRAM_VERSION_REGEX: OnceLock<regex::Regex> = OnceLock::new();
 static INPUT_MD5_REGEX: OnceLock<regex::Regex> = OnceLock::new();
 
+
+/// Return `true` if the given value is a fill (assuming it came from a post-processing file)
+pub fn is_postproc_fill(v: f64) -> bool {
+    v > POSTPROC_FILL_VALUE * 0.99
+}
+
 pub struct ColInputData {
     pub path: PathBuf,
     pub md5sum: String,

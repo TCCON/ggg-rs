@@ -1,9 +1,9 @@
 use std::{borrow::Cow, cell::RefCell, collections::HashMap, fmt::Display, path::Path, sync::{Arc, Mutex}};
 
 use indicatif::ProgressBar;
-use ndarray::{Array, ArrayD};
+use ndarray::{Array, Array1, ArrayD};
 use netcdf::{AttributeValue, GroupMut, NcPutGet};
-use crate::errors::{VarError, WriteError};
+use crate::errors::{ReadError, VarError, WriteError};
 
 /// The general trait representing a source of data (usually a GGG output file)
 /// 
@@ -47,6 +47,26 @@ pub(crate) trait DataProvider: Display + Send {
     /// Providers that write along the "time" dimension must ensure that they use `spec_indexer`
     /// to put their data at the right index for its spectrum.
     fn write_data_to_nc(&self, spec_indexer: &SpectrumIndexer, writer: &dyn GroupWriter, pb: ProgressBar) -> error_stack::Result<(), WriteError>;
+}
+
+
+/// The general trait for types that calculate new variables based on data already written to the netCDF file.
+/// 
+/// In most cases, we prefer to have [`DataProvider`] types only copy data from an existing file over to the
+/// netCDF file, and [`DataCalculator`] types handle computing any derived variables. This helps keep the overall
+/// program structure more cleanly separated. However, if there is a case where a derived variable needs information
+/// from an output file that won't get written to the netCDF file, it is acceptable to have a provider calculate
+/// a derived value.
+/// 
+/// Currently, this trait does not require the dimensions methods that [`DataProvider`] does, since we expect that
+/// any derived variables will have the same dimensions as their inputs. However, this may change in the future if
+/// we find a case where a derived variable needs to create new dimension.
+pub(crate) trait DataCalculator: Send {
+    /// Write all the data for this source to the netCDF file.
+    /// 
+    /// Generally, this will load the data it needs from the netCDF file, compute the derived variable,
+    /// and write the new variable(s). It can access existing variables and dimensions through the `accessor`.
+    fn write_data_to_nc(&self, spec_indexer: &SpectrumIndexer, accessor: &dyn GroupAccessor, pb: ProgressBar) -> error_stack::Result<(), WriteError>;
 }
 
 /// A type that maps spectrum names to indices along the "time" dimension.
@@ -238,6 +258,35 @@ impl<T: NcPutGet> ConcreteVarToBe<T> {
         }
     }
 
+    /// A constructor for variables calculated/derived from existing variables.
+    /// 
+    /// This will put "N/A" for the source checksum and make the source attribute
+    /// indicate that it is a calculated variable. The `calculator` value should
+    /// generally be the name of the type that calculated it, to make it easy
+    /// to match up variables written to the part of the code that did so.
+    /// You can use `std::any::type_name::<Self>()` inside a calculator type to
+    /// get this name programmatically and thus avoid potential future mismatches
+    /// due to type renaming.
+    pub(crate) fn new_calculated<N: ToString, L: ToString, U: ToString, S: Display>(
+        name: N,
+        dimensions: Vec<&'static str>,
+        data: ArrayD<T>,
+        long_name: L,
+        units: U,
+        calculator: S
+    ) -> Self {
+        Self {
+            name: name.to_string(),
+            dimensions,
+            data,
+            long_name: long_name.to_string(),
+            units: units.to_string(),
+            source_file_name: format!("calculated by {calculator}"),
+            source_file_sha256: "N/A".to_string(),
+            extra_attrs: vec![]
+        }
+    }
+
     /// Add an additional attribute to the variable to be.
     /// 
     /// `attname` will be the attribute name and `attvalue` its value. Note that "long_name", "units",
@@ -262,6 +311,90 @@ impl<T: NcPutGet> VarToBe for ConcreteVarToBe<T> {
         let full_name = format!("{}{var_suffix}", self.name);
         let mut ncvar = ncgrp.add_variable::<T>(&full_name, &self.dimensions)?;
         ncvar.put(netcdf::Extents::All, self.data.view())?;
+        ncvar.put_attribute("long_name", self.long_name.as_str())?;
+        ncvar.put_attribute("units", self.units.as_str())?;
+        ncvar.put_attribute("source_file_name", self.source_file_name.as_str())?;
+        ncvar.put_attribute("source_file_sha256", self.source_file_sha256.as_str())?;
+        for (attname, attvalue) in self.extra_attrs.iter() {
+            ncvar.put_attribute(&attname, attvalue.to_owned())?;
+        }
+        Ok(())
+    }
+}
+
+/// Another [`VarToBe`] implementor for string data.
+/// 
+/// Currently this assumes (1) that your string data will be 1D
+/// (excluding the string length as a dimension) and (2) you want
+/// the variable written as strings, not a character array. 
+pub(crate) struct StrVarToBe<S: AsRef<str>> {
+    name: String,
+    dimension: &'static str,
+    data: Array1<S>,
+    long_name: String,
+    units: String,
+    source_file_name: String,
+    source_file_sha256: String,
+    extra_attrs: Vec<(String, AttributeValue)>
+}
+
+impl <S: AsRef<str>> StrVarToBe<S> {
+    /// A constructor for variables calculated/derived from existing variables.
+    /// 
+    /// This will put "N/A" for the source checksum and make the source attribute
+    /// indicate that it is a calculated variable. The `calculator` value should
+    /// generally be the name of the type that calculated it, to make it easy
+    /// to match up variables written to the part of the code that did so.
+    /// You can use `std::any::type_name::<Self>()` inside a calculator type to
+    /// get this name programmatically and thus avoid potential future mismatches
+    /// due to type renaming.
+    pub(crate) fn new_calculated<N: ToString, L: ToString, U: ToString, C: Display>(
+        name: N,
+        dimension: &'static str,
+        data: Array1<S>,
+        long_name: L,
+        units: U,
+        calculator: C
+    ) -> Self {
+        Self {
+            name: name.to_string(),
+            dimension,
+            data,
+            long_name: long_name.to_string(),
+            units: units.to_string(),
+            source_file_name: format!("calculated by {calculator}"),
+            source_file_sha256: "N/A".to_string(),
+            extra_attrs: vec![]
+        }
+    }
+
+    /// Add an additional attribute to the variable to be.
+    /// 
+    /// `attname` will be the attribute name and `attvalue` its value. Note that "long_name", "units",
+    /// "source_file_name", and "source_file_sha256" attributes will always be added.
+    pub(crate) fn add_attribute<N: ToString, V: Into<AttributeValue>>(&mut self, attname: N, attvalue: V) {
+        let attname = attname.to_string();
+        let attvalue = attvalue.into();
+        self.extra_attrs.push((attname, attvalue));
+    }
+}
+
+impl<S: AsRef<str>> VarToBe for StrVarToBe<S> {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn write(&self, ncgrp: &mut GroupMut, var_suffix: &str) -> netcdf::Result<()> {
+        let full_name = format!("{}{var_suffix}", self.name);
+        let mut ncvar = ncgrp.add_string_variable(&full_name, &[self.dimension])?;
+        
+        for (i, s) in self.data.iter().enumerate() {
+            let ex = netcdf::Extents::Extent(
+                vec![netcdf::Extent::Index(i)]
+            );
+            ncvar.put_string(s.as_ref(), ex)?;
+        }
+
         ncvar.put_attribute("long_name", self.long_name.as_str())?;
         ncvar.put_attribute("units", self.units.as_str())?;
         ncvar.put_attribute("source_file_name", self.source_file_name.as_str())?;
@@ -383,5 +516,87 @@ impl StdGroupWriter {
         };
 
         Ok(())
+    }
+}
+
+/// A struct representing data returned from the netCDF file.
+/// 
+/// If a `units` attribute was not found, then the `units` field will be `None`.
+pub(crate) struct VarData<T: NcPutGet> {
+    pub(crate) data: ArrayD<T>,
+    pub(crate) units: Option<String>,
+}
+
+/// A trait that allows callers to get a variable back from the netCDF file.
+/// 
+/// This is used when we need to compute variables separately from where their
+/// inputs are read. Generally, it is preferred to have a data provider only
+/// copy data from one of GGG's files (possibly with some reindexing) and leave
+/// any computation of new data to a separate type.
+pub(crate) trait GroupAccessor: GroupWriter {
+    /// Return the length of the given dimension, or an error if it could not be found.
+    fn read_dim_length(&self, dimname: &str) -> Result<usize, ReadError>;
+
+    /// Return the data and units of a given variable.
+    fn read_f32_variable(&self, varname: &str, group: &dyn VarGroup) -> Result<VarData<f32>, ReadError>;
+}
+
+impl GroupAccessor for StdGroupWriter {
+    fn read_dim_length(&self, dimname: &str) -> Result<usize, ReadError> {
+        let nc_lock = self.nc_dset.lock()
+            .expect("NetCDF mutex was poisoned");
+        let nc_dset = nc_lock.borrow();
+
+        // All dimensions should be in the root group.
+        let dim = nc_dset.dimension(dimname)
+            .ok_or_else(|| ReadError::dim_not_found(dimname))?;
+
+        Ok(dim.len())
+    }
+
+    fn read_f32_variable(&self, varname: &str, group: &dyn VarGroup) -> Result<VarData<f32>, ReadError> {
+        self.read_variable::<f32>(varname, group)
+    }
+}
+
+impl StdGroupWriter {
+    fn read_variable<T: NcPutGet>(&self, varname: &str, group: &dyn VarGroup) -> Result<VarData<T>, ReadError> {
+        let nc_lock = self.nc_dset.lock()
+            .expect("NetCDF mutex was poisoned");
+        let nc_dset = nc_lock.borrow();
+
+        if self.use_groups {
+            let grp_name = group.group_name();
+            let grp = if grp_name == "/" {
+                nc_dset.root().expect("Should be able to access the root group")
+            } else {
+                nc_dset.group(grp_name)?.ok_or_else(|| ReadError::var_not_found(varname, grp_name))?
+            };
+
+            let var = grp.variable(varname).ok_or_else(|| ReadError::var_not_found(varname, grp_name))?;
+            let data = var.get::<T, _>(netcdf::Extents::All)?;
+            let units = var.attribute_value("units")
+                .transpose()?
+                .map(|v| if let AttributeValue::Str(s) = v {
+                    Some(s)
+                } else {
+                    None
+                }).flatten();
+            Ok(VarData{ data, units })
+        } else {
+            let suffix = group.suffix();
+            let grp = nc_dset.root().expect("Should be able to access the root group");
+            let varname = format!("{varname}{suffix}");
+            let var = grp.variable(&varname).ok_or_else(|| ReadError::var_not_found(varname, "/"))?;
+            let data = var.get::<T, _>(netcdf::Extents::All)?;
+            let units = var.attribute_value("units")
+                .transpose()?
+                .map(|v| if let AttributeValue::Str(s) = v {
+                    Some(s)
+                } else {
+                    None
+                }).flatten();
+            Ok(VarData { data, units })
+        }
     }
 }

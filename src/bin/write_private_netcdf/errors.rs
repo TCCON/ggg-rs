@@ -160,6 +160,11 @@ pub(crate) enum WriteError {
     #[error("Dimension '{dimname}', required by the {requiring_file} file, was not created properly")]
     MissingDimError{requiring_file: String, dimname: &'static str},
 
+    /// Error to use if trying to get information back out of the netCDF file to calculate
+    /// new quantities failed.
+    #[error("Error reading variable back from netCDF file: {0}")]
+    NcReadError(#[from] ReadError),
+
     /// General-purpose error
     #[error("{0}")]
     Custom(String),
@@ -180,6 +185,32 @@ impl WriteError {
 
     pub(crate) fn custom<S: ToString>(msg: S) -> Self {
         Self::Custom(msg.to_string())
+    }
+}
+
+/// Represents an error that occurred when trying to get information back out of the netCDF file.
+#[derive(Debug, thiserror::Error)]
+pub enum ReadError {
+    /// Represents an error returned by the netCDF library.
+    #[error(transparent)]
+    Netcdf(#[from] netcdf::Error),
+
+    /// The requested variable was not found in the expected group.
+    #[error("Variable '{name}' not found in group '{group_name}'")]
+    VarNotFound{name: String, group_name: String},
+
+    /// The requested dimension was not found in the root of the file.
+    #[error("Dimension '{0}' not found")]
+    DimNotFound(String),
+}
+
+impl ReadError {
+    pub(crate) fn var_not_found<N: ToString, G: ToString>(name: N, group_name: G) -> Self {
+        Self::VarNotFound { name: name.to_string(), group_name: group_name.to_string() }
+    }
+
+    pub(crate) fn dim_not_found<N: ToString>(name: N) -> Self {
+        Self::DimNotFound(name.to_string())
     }
 }
 

@@ -1,8 +1,9 @@
 use std::{collections::HashMap, ffi::OsString, path::{Path, PathBuf}, process::ExitCode, sync::Arc};
 
+use calculators::FlagCalculator;
 use error_stack::ResultExt;
-use errors::CliError;
-use interface::{DataProvider, StdGroupWriter};
+use errors::{CliError, WriteError};
+use interface::{DataCalculator, DataProvider, SpectrumIndexer, StdGroupWriter};
 use providers::{AiaFile, PostprocFile, RunlogProvider};
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use tracing::{error,info,Level};
@@ -13,8 +14,10 @@ mod errors;
 mod progress;
 mod interface;
 mod setup;
+mod qc;
 mod dimensions;
 mod providers;
+mod calculators;
 
 fn main() -> ExitCode {
     // We need the multi progress bar before we set up logging, because the logging to
@@ -54,12 +57,17 @@ fn driver(run_dir: PathBuf, mpbar: Arc<indicatif::MultiProgress>) -> error_stack
         .ok_or_else(|| CliError::input_error("expected .vsw.ada file ({}) does not exist"))?;
     let providers: Vec<Box<dyn DataProvider>> = vec![
         Box::new(runlog),
-        Box::new(AiaFile::new(file_paths.aia_file, file_paths.qc_file)),
+        Box::new(AiaFile::new(file_paths.aia_file, file_paths.qc_file.clone())),
         Box::new(PostprocFile::new(file_paths.vsw_file)?),
         Box::new(PostprocFile::new(file_paths.vav_file)?),
         Box::new(PostprocFile::new(file_paths.tav_file)?),
         Box::new(PostprocFile::new(vsw_ada_file)?),
         Box::new(PostprocFile::new(file_paths.vav_ada_file)?),
+    ];
+
+    // Set up our calculators as well
+    let calculators: Vec<Box<dyn DataCalculator>> = vec![
+        Box::new(FlagCalculator::new(&file_paths.qc_file)?)
     ];
 
     // Initialize the temporary netCDF file with a name that clearly indicates it is not complete.
@@ -85,17 +93,9 @@ fn driver(run_dir: PathBuf, mpbar: Arc<indicatif::MultiProgress>) -> error_stack
     // Actually write the variables to the netCDF file.
     // Do so in an inner scope so that `writer` is dropped and our netCDF file is closed. 
     // TODO: allow users to limit the number of processes used.
-    let res = {
-        let writer = StdGroupWriter::new(nc_dset, false);
-        providers.into_par_iter().try_for_each(|provider| {
-            let local_writer = writer.clone();
-            let local_indexer = Arc::clone(&spec_indexer);
-            let local_mpbar = Arc::clone(&mpbar);
-            let pbar = indicatif::ProgressBar::no_length();
-            let pbar = local_mpbar.add(pbar);
-            provider.write_data_to_nc(&local_indexer, &local_writer, pbar)
-        })
-    };
+    let res = execute_providers_and_calculators(
+        nc_dset, providers, calculators, spec_indexer, mpbar
+    );
 
     if let Err(e) = &res {
         let new_context = match e.current_context() {
@@ -109,6 +109,9 @@ fn driver(run_dir: PathBuf, mpbar: Arc<indicatif::MultiProgress>) -> error_stack
             ),
             errors::WriteError::MissingDimError { requiring_file, dimname } => CliError::InternalError(
                 format!("the '{dimname}' dimension (required by the {requiring_file} file) was not created correctly")
+            ),
+            errors::WriteError::NcReadError(inner) => CliError::InternalError(
+                format!("one of the variables that should have been written to the netCDF file by now could not be found ({inner})")  
             ),
             errors::WriteError::Custom(msg) => CliError::RuntimeError(
                 msg.to_string()
@@ -132,6 +135,37 @@ fn init_nc_file(run_dir: &Path) -> error_stack::Result<netcdf::FileMut, netcdf::
     file.add_attribute("writing_was_completed", 0)?;
     Ok(file)
 }
+
+/// Helper function that runs the data providers then the data calculators.
+fn execute_providers_and_calculators(
+    nc_dset: netcdf::FileMut,
+    providers: Vec<Box<dyn DataProvider>>,
+    calculators: Vec<Box<dyn DataCalculator>>,
+    spec_indexer: Arc<SpectrumIndexer>,
+    mpbar: Arc<indicatif::MultiProgress>
+) -> error_stack::Result<(), WriteError> {
+        let writer = StdGroupWriter::new(nc_dset, false);
+
+        providers.into_par_iter().try_for_each(|provider| {
+            let local_writer = writer.clone();
+            let local_indexer = Arc::clone(&spec_indexer);
+            let local_mpbar = Arc::clone(&mpbar);
+            let pbar = indicatif::ProgressBar::no_length();
+            let pbar = local_mpbar.add(pbar);
+            provider.write_data_to_nc(&local_indexer, &local_writer, pbar)
+        })?;
+
+        calculators.into_par_iter().try_for_each(|calculator| {
+            let local_writer = writer.clone();
+            let local_indexer = Arc::clone(&spec_indexer);
+            let local_mpbar = Arc::clone(&mpbar);
+            let pbar = indicatif::ProgressBar::no_length();
+            let pbar = local_mpbar.add(pbar);
+            calculator.write_data_to_nc(&local_indexer, &local_writer, pbar)
+        })?;
+
+        Ok(())
+    }
 
 fn finalize_nc_file(nc_path: &Path, mut final_name_stem: OsString) -> error_stack::Result<(), CliError> {
     // Does this work? If not, I don't see a way to edit attributes, which is weird.

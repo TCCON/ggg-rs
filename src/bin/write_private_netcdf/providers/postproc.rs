@@ -1,15 +1,20 @@
-use std::{borrow::Cow, collections::HashMap, fmt::Display, hash::RandomState, io::BufRead, path::{Path, PathBuf}};
+use std::{borrow::Cow, collections::HashMap, fmt::Display, hash::RandomState, path::{Path, PathBuf}};
 
 use error_stack::ResultExt;
-use ggg_rs::{output_files::{open_and_iter_postproc_file, PostprocType, POSTPROC_FILL_VALUE}, utils::{get_nhead_ncol, FileBuf}};
+use ggg_rs::output_files::{open_and_iter_postproc_file, PostprocType, POSTPROC_FILL_VALUE};
 use indexmap::IndexMap;
 use indicatif::ProgressBar;
 use itertools::Itertools;
 use ndarray::Array1;
-use serde::Deserialize;
 use tracing::instrument;
 
-use crate::{dimensions::TIME_DIM_NAME, errors::{CliError, WriteError}, interface::{ConcreteVarToBe, DataProvider, GroupWriter, SpectrumIndexer, StdDataGroup, VarToBe}, progress::{setup_read_pb, setup_write_pb}};
+use crate::{
+    dimensions::TIME_DIM_NAME,
+    errors::{CliError, WriteError},
+    interface::{ConcreteVarToBe, DataProvider, GroupWriter, SpectrumIndexer, StdDataGroup, VarToBe},
+    progress::{setup_read_pb, setup_write_pb},
+    qc::{load_qc_file_hashmap, QcRow}
+};
 
 /// Provider for .vav.ada.aia files
 /// 
@@ -97,7 +102,11 @@ impl AiaFile {
                         "retrieved variable {varname} from the .aia file was not included in the qc.dat file"
                     )))?;
                 
-                arr[itime] = (value * scale) as f32;
+                if !ggg_rs::output_files::is_postproc_fill(*value) {
+                    arr[itime] = (value * scale) as f32;
+                } else {
+                    arr[itime] = *value as f32;
+                }
             }
         }
 
@@ -148,7 +157,7 @@ impl DataProvider for AiaFile {
 
     #[instrument(name = "aia_file_writer", skip_all)]
     fn write_data_to_nc(&self, spec_indexer: &crate::interface::SpectrumIndexer, writer: &dyn GroupWriter, pb: ProgressBar) -> error_stack::Result<(), WriteError> {
-        let qc_rows = load_qc_file(&self.qc_path)?;
+        let qc_rows = load_qc_file_hashmap(&self.qc_path)?;
         let ntimes = writer.get_dim_length(TIME_DIM_NAME)
             .ok_or_else(|| WriteError::missing_dim_error(".aia", TIME_DIM_NAME))?;
         // TODO: compute flag variable
@@ -369,63 +378,6 @@ impl DataProvider for PostprocFile {
     }
 }
 
-/// Represents one row in a qc.dat file
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "PascalCase")]
-struct QcRow {
-    variable: String,
-    output: u8,
-    scale: f64,
-    #[allow(unused)]
-    format: String,
-    unit: String,
-    vmin: f64,
-    vmax: f64,
-    description: String,
-}
-
-impl QcRow {
-    fn do_output(&self) -> bool {
-        self.output > 0
-    }
-}
-
-/// Load a qc.dat file. The returned HashMap will have the variable names as its keys
-/// (which will match) the variable name in the [`QcRow`]).
-fn load_qc_file(qc_file_path: &Path) -> error_stack::Result<HashMap<String, QcRow>, WriteError> {
-    let mut rdr = FileBuf::open(qc_file_path)
-        .change_context_lazy(|| WriteError::file_read_error(qc_file_path))?;
-    let (nhead, _) = get_nhead_ncol(&mut rdr)
-        .change_context_lazy(|| WriteError::file_read_error(qc_file_path))?;
-    
-    // We've read the first header line, and we want to get the column names from the last header line
-    for _ in 1..nhead-1 {
-        rdr.read_header_line().change_context_lazy(|| WriteError::file_read_error(qc_file_path))?;
-    }
-
-    let colnames = rdr.read_header_line()
-        .change_context_lazy(|| WriteError::file_read_error(qc_file_path))?;
-    let colnames = colnames.split_ascii_whitespace()
-        .collect_vec();
-
-    let mut qc_rows = HashMap::new();
-    let ff = fortformat::FortFormat::ListDirected;
-    for (iline, line) in rdr.lines().enumerate() {
-        let line_num = iline + nhead + 1;
-        let line = line.change_context_lazy(|| 
-            WriteError::detailed_read_error(qc_file_path, format!("failed to read line {line_num}"))
-        )?;
-
-        let this_row: QcRow = fortformat::from_str_with_fields(&line, &ff, &colnames)
-            .change_context_lazy(|| WriteError::detailed_read_error(
-                qc_file_path, format!("error deserializing line {line_num}")
-            ))?;
-        let varname = this_row.variable.clone();
-        qc_rows.insert(varname, this_row);
-    }
-
-    Ok(qc_rows)
-}
 
 /// Given a list of variables, split them into the standard TCCON groups.
 fn split_ret_vars_to_groups(variables: Vec<ConcreteVarToBe<f32>>) 

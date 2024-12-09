@@ -1,5 +1,5 @@
 //! Helper functions to set up consistent progress bars
-use std::fmt::Display;
+use std::{borrow::Cow, fmt::Display};
 
 use indicatif::{ProgressBar, ProgressStyle};
 
@@ -34,6 +34,23 @@ pub(crate) fn setup_write_pb<D: Display>(pb: &ProgressBar, nvar: usize, file_des
     ).unwrap();
     pb.set_style(style);
     pb.set_prefix(format!("Writing {file_desc} variable"));
+    pb.set_message("");
+    pb.tick(); // force a redraw
+}
+
+/// Set up a progress bar for more general use.
+/// 
+/// This will configure progress bar `pb` to have the given arbitrary prefix,
+/// followed by the bar's message (which is empty to start) and set it to
+/// have length `n`.
+pub(crate) fn setup_generic_pb(pb: &ProgressBar, n: usize, prefix: impl Into<Cow<'static, str>>) {
+    pb.set_length(n as u64);
+    pb.set_position(0);
+    let style = ProgressStyle::with_template(
+        "{prefix} {msg} {wide_bar} [{human_pos}/{human_len}]"
+    ).unwrap();
+    pb.set_style(style);
+    pb.set_prefix(prefix);
     pb.set_message("");
     pb.tick(); // force a redraw
 }
