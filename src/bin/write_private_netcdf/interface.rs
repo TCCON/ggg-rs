@@ -310,6 +310,7 @@ impl<T: NcPutGet> VarToBe for ConcreteVarToBe<T> {
     fn write(&self, ncgrp: &mut GroupMut, var_suffix: &str) -> netcdf::Result<()> {
         let full_name = format!("{}{var_suffix}", self.name);
         let mut ncvar = ncgrp.add_variable::<T>(&full_name, &self.dimensions)?;
+        ncvar.set_compression(9, true)?;
         ncvar.put(netcdf::Extents::All, self.data.view())?;
         ncvar.put_attribute("long_name", self.long_name.as_str())?;
         ncvar.put_attribute("units", self.units.as_str())?;
@@ -534,26 +535,11 @@ pub(crate) struct VarData<T: NcPutGet> {
 /// copy data from one of GGG's files (possibly with some reindexing) and leave
 /// any computation of new data to a separate type.
 pub(crate) trait GroupAccessor: GroupWriter {
-    /// Return the length of the given dimension, or an error if it could not be found.
-    fn read_dim_length(&self, dimname: &str) -> Result<usize, ReadError>;
-
     /// Return the data and units of a given variable.
     fn read_f32_variable(&self, varname: &str, group: &dyn VarGroup) -> Result<VarData<f32>, ReadError>;
 }
 
 impl GroupAccessor for StdGroupWriter {
-    fn read_dim_length(&self, dimname: &str) -> Result<usize, ReadError> {
-        let nc_lock = self.nc_dset.lock()
-            .expect("NetCDF mutex was poisoned");
-        let nc_dset = nc_lock.borrow();
-
-        // All dimensions should be in the root group.
-        let dim = nc_dset.dimension(dimname)
-            .ok_or_else(|| ReadError::dim_not_found(dimname))?;
-
-        Ok(dim.len())
-    }
-
     fn read_f32_variable(&self, varname: &str, group: &dyn VarGroup) -> Result<VarData<f32>, ReadError> {
         self.read_variable::<f32>(varname, group)
     }

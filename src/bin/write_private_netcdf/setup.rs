@@ -7,6 +7,7 @@ use crate::errors::CliError;
 
 pub(crate) struct InputFiles {
     pub(crate) runlog: PathBuf,
+    pub(crate) mav_file: PathBuf,
     pub(crate) col_files: Vec<PathBuf>,
     pub(crate) vsw_file: PathBuf,
     pub(crate) tsw_file: PathBuf,
@@ -45,6 +46,9 @@ impl InputFiles {
             .ok_or_else(|| CliError::input_error("failed to get the runlog name from the path to the runlog"))?;
         let site_id: String = runlog_name.to_string_lossy().chars().take(2).collect();
 
+        // Gsetup files
+        let mav_file = find_req_output_file(run_dir, runlog_name, ".mav")?;
+
         // All the postprocessing files
         let vsw_file = find_req_output_file(run_dir, runlog_name, ".vsw")?;
         let tsw_file = find_req_output_file(run_dir, runlog_name, ".tsw")?;
@@ -61,7 +65,7 @@ impl InputFiles {
         }
         
 
-        Ok(Self { runlog, col_files, aia_file, vsw_file, tsw_file, vav_file, tav_file, vsw_ada_file, vav_ada_file, qc_file })
+        Ok(Self { runlog, mav_file, col_files, aia_file, vsw_file, tsw_file, vav_file, tav_file, vsw_ada_file, vav_ada_file, qc_file })
     }
 }
 

@@ -103,6 +103,10 @@ impl From<HeaderError> for GggError {
 impl Error for GggError {}
 
 impl GggError {
+    pub fn could_not_read<S: ToString>(path: PathBuf, reason: S) -> Self {
+        Self::CouldNotRead { path: path.to_owned(), reason: reason.to_string() }
+    }
+
     pub fn not_implemented<S: ToString>(case: S) -> Self {
         Self::NotImplemented(case.to_string())
     }

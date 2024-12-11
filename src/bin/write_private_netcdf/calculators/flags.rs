@@ -150,8 +150,8 @@ impl DataCalculator for FlagCalculator {
     fn write_data_to_nc(&self, _spec_indexer: &crate::interface::SpectrumIndexer, accessor: &dyn GroupAccessor, pb: ProgressBar) -> error_stack::Result<(), WriteError> {
         let flag_vars = self.load_vars_to_flag_on(accessor)?;
 
-        let ntime = accessor.read_dim_length(TIME_DIM_NAME)
-            .map_err(|e| WriteError::NcReadError(e))?;
+        let ntime = accessor.get_dim_length(TIME_DIM_NAME)
+            .ok_or_else(|| WriteError::missing_dim_error("FlagCalculator", TIME_DIM_NAME))?;
 
         let (flags, flag_var_names, flag_var_counts) = self.make_flag_arrays(ntime, &flag_vars, pb);
 

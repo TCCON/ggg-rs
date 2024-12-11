@@ -2,9 +2,10 @@ use std::{fmt::Display, str::FromStr, sync::OnceLock};
 
 use crate::error::HeaderError;
 
+pub mod runlogs;
+pub mod mav_files;
 pub mod col_files;
 pub mod postproc_files;
-pub mod runlogs;
 
 pub const POSTPROC_FILL_VALUE: f64 = 9.8765e35;
 static PROGRAM_VERSION_REGEX: OnceLock<regex::Regex> = OnceLock::new();

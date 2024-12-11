@@ -4,7 +4,7 @@ use calculators::FlagCalculator;
 use error_stack::ResultExt;
 use errors::{CliError, WriteError};
 use interface::{DataCalculator, DataProvider, SpectrumIndexer, StdGroupWriter};
-use providers::{AiaFile, PostprocFile, RunlogProvider};
+use providers::{AiaFile, MavFile, PostprocFile, RunlogProvider};
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use tracing::{error,info,Level};
 
@@ -57,6 +57,7 @@ fn driver(run_dir: PathBuf, mpbar: Arc<indicatif::MultiProgress>) -> error_stack
         .ok_or_else(|| CliError::input_error("expected .vsw.ada file ({}) does not exist"))?;
     let providers: Vec<Box<dyn DataProvider>> = vec![
         Box::new(runlog),
+        Box::new(MavFile::new(file_paths.mav_file)?),
         Box::new(AiaFile::new(file_paths.aia_file, file_paths.qc_file.clone())),
         Box::new(PostprocFile::new(file_paths.vsw_file)?),
         Box::new(PostprocFile::new(file_paths.vav_file)?),
