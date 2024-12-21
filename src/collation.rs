@@ -422,7 +422,7 @@ pub fn collate_results<I: CollationIndexer, P: CollationPrefixer>(
     Ok(())
 }
 
-fn get_window_from_col_file(col_file: &Path) -> Result<&str, CollationError> {
+pub fn get_window_from_col_file(col_file: &Path) -> Result<&str, CollationError> {
     let window = col_file.file_name()
         .ok_or_else(|| CollationError::parsing_error(
             format!("Could not get base name of .col file {}", col_file.display())

@@ -129,7 +129,8 @@ impl DataProvider for MavFile {
         std::borrow::Cow::Borrowed(&DIMS_REQ)
     }
 
-    fn write_data_to_nc(&self, spec_indexer: &crate::interface::SpectrumIndexer, writer: &dyn crate::interface::GroupWriter, pb: indicatif::ProgressBar) -> error_stack::Result<(), crate::errors::WriteError> {
+    fn write_data_to_nc(&self, spec_indexer: &crate::interface::SpectrumIndexer, writer: &dyn crate::interface::GroupWriter,
+                        group_selector: &dyn crate::interface::GroupSelector, pb: indicatif::ProgressBar) -> error_stack::Result<(), crate::errors::WriteError> {
         let mav_data = self.build_mav_arrays(spec_indexer, writer)?;
 
         let mav_basename = self.mav_file_path.file_name().expect("Couldn't get the basename of the .mav file")
@@ -142,6 +143,7 @@ impl DataProvider for MavFile {
 
         let mut variables: Vec<Box<dyn VarToBe>> = vec![Box::new(ConcreteVarToBe::new_with_checksum(
             "prior_altitude",
+            group_selector.boxed_main_group(),
             vec![PRIOR_ALT_DIM_NAME],
             mav_data.height.into_dyn(),
             "prior altitude",
@@ -167,6 +169,7 @@ impl DataProvider for MavFile {
 
             let cell_var = ConcreteVarToBe::new_with_checksum(
                 format!("cell_{varname}"),
+                group_selector.boxed_main_group(),
                 vec![TIME_DIM_NAME, CELL_INDEX_DIM_NAME],
                 mav_data.cell_profs.get(&colname).expect("All .mav columns should have a corresponding entry in the cell array hash map").clone().into_dyn(),
                 format!("cell {varname}"),
@@ -177,6 +180,7 @@ impl DataProvider for MavFile {
             
             let atm_var = ConcreteVarToBe::new_with_checksum(
                 format!("prior_{varname}"),
+                group_selector.boxed_main_group(),
                 vec![TIME_DIM_NAME, PRIOR_ALT_DIM_NAME],
                 mav_data.atm_profs.get(&colname).expect("All .mav columns should have a corresponding entry in the atmoshpere array hash map").clone().into_dyn(),
                 format!("prior {varname}"),
@@ -190,7 +194,8 @@ impl DataProvider for MavFile {
         }
 
         let tmp = variables.iter().map(|v| v.as_ref()).collect_vec();
-        Ok(writer.write_many_variables(&tmp, &StdDataGroup::InGaAs, Some(&pb))?)
+        let group = group_selector.get_main_group();
+        Ok(writer.write_many_variables(&tmp, Some(&pb))?)
     }
 }
 

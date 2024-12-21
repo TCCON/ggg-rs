@@ -12,6 +12,7 @@ pub struct PrefixEntry {
     pub start_wn: f32,
     pub end_wn: f32,
     pub prefix: Option<String>,
+    pub nc_suffix: Option<String>,
     pub nc_group: Option<String>,
 }
 
@@ -62,6 +63,7 @@ impl TcconWindowPrefixes {
                 "line did not include an ending wavenumber", Some(prefix_file.to_path_buf()), Some(iline+1), None
             ))?;
             let prefix = parts.next().map(|s| s.to_string());
+            let nc_suffix = parts.next().map(|s| s.to_string());
             let nc_group = parts.next().map(|s| s.to_string());
 
             let start_wn = start_wn.parse::<f32>().change_context_lazy(|| BodyError::could_not_read(
@@ -74,7 +76,7 @@ impl TcconWindowPrefixes {
             if let Some(ref p) = prefix {
                 all_prefixes.push(p.to_string());
             }
-            ranges.push(PrefixEntry{start_wn, end_wn, prefix, nc_group})
+            ranges.push(PrefixEntry{start_wn, end_wn, prefix, nc_suffix, nc_group})
         }
         
         Ok(Self { ranges, all_prefixes })

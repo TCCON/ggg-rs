@@ -6,7 +6,7 @@ use indicatif::ProgressBar;
 use itertools::Itertools;
 use ndarray::{Array1, Ix1};
 
-use crate::{dimensions::TIME_DIM_NAME, errors::{CliError, WriteError}, interface::{ConcreteVarToBe, DataCalculator, GroupAccessor, StdDataGroup, StrVarToBe}, progress, qc::{load_qc_file, QcRow}};
+use crate::{dimensions::TIME_DIM_NAME, errors::{CliError, WriteError}, interface::{ConcreteVarToBe, DataCalculator, GroupAccessor, GroupSelector, StrVarToBe}, progress, qc::{load_qc_file, QcRow}};
 
 /// Data calculator for the flag variables (e.g. flag and flagged_var_name)
 pub(crate) struct FlagCalculator {
@@ -26,7 +26,7 @@ impl FlagCalculator {
     /// 
     /// Only variables listed in the qc.dat file _and_ which are configured for output are returned.
     /// The intention is that if a variable is not being output then it should not be flagged on.
-    fn load_vars_to_flag_on(&self, accessor: &dyn GroupAccessor) -> error_stack::Result<HashMap<String, Array1<f32>>, WriteError> {
+    fn load_vars_to_flag_on(&self, accessor: &dyn GroupAccessor, group_selector: &dyn GroupSelector) -> error_stack::Result<HashMap<String, Array1<f32>>, WriteError> {
         let mut vars = HashMap::new();
         for qc_row in self.qc_limits.iter() {
             if !qc_row.do_output() {
@@ -35,16 +35,19 @@ impl FlagCalculator {
                 continue;
             }
 
-            // TODO: get the correct data group for the variable. What we'll probably need to do is have an object that figures
-            // that out and pass it around.
             let varname = qc_row.variable.clone();
-            let data = accessor.read_f32_variable(&varname, &StdDataGroup::InGaAs)
-                .map_err(|e| WriteError::NcReadError(e))?;
-            let arr = data.data.into_dimensionality::<Ix1>()
-                .map_err(|e| WriteError::custom(format!(
-                    "expected variable '{varname}' to be a 1D array, but was not ({e})"
-                )))?;
-            vars.insert(varname, arr);
+            let group_opt = group_selector.get_group_for_var(&varname, None);
+            if let Some(group) = group_opt {
+                // If the selector returns `None` for the group, then it should mean that this variable was not one of the
+                // .col files we found, so it is not a variable we should flag on.
+                let data = accessor.read_f32_variable(&varname, group)
+                    .map_err(|e| WriteError::NcReadError(e))?;
+                let arr = data.data.into_dimensionality::<Ix1>()
+                    .map_err(|e| WriteError::custom(format!(
+                        "expected variable '{varname}' to be a 1D array, but was not ({e})"
+                    )))?;
+                vars.insert(varname, arr);
+            }
         }
         Ok(vars)
     }
@@ -147,8 +150,8 @@ impl FlagCalculator {
 }
 
 impl DataCalculator for FlagCalculator {
-    fn write_data_to_nc(&self, _spec_indexer: &crate::interface::SpectrumIndexer, accessor: &dyn GroupAccessor, pb: ProgressBar) -> error_stack::Result<(), WriteError> {
-        let flag_vars = self.load_vars_to_flag_on(accessor)?;
+    fn write_data_to_nc(&self, _spec_indexer: &crate::interface::SpectrumIndexer, accessor: &dyn GroupAccessor, group_selector: &dyn GroupSelector, pb: ProgressBar) -> error_stack::Result<(), WriteError> {
+        let flag_vars = self.load_vars_to_flag_on(accessor, group_selector)?;
 
         let ntime = accessor.get_dim_length(TIME_DIM_NAME)
             .ok_or_else(|| WriteError::missing_dim_error("FlagCalculator", TIME_DIM_NAME))?;
@@ -159,6 +162,7 @@ impl DataCalculator for FlagCalculator {
 
         let flag_var = ConcreteVarToBe::new_calculated(
             "flag",
+            group_selector.boxed_main_group(),
             vec![TIME_DIM_NAME],
             flags.into_dyn(),
             "flag",
@@ -168,6 +172,7 @@ impl DataCalculator for FlagCalculator {
 
         let flag_name_var = StrVarToBe::new_calculated(
             "flagged_var_name",
+            group_selector.boxed_main_group(),
             TIME_DIM_NAME,
             flag_var_names,
             "flagged variable name",
@@ -175,8 +180,8 @@ impl DataCalculator for FlagCalculator {
             std::any::type_name::<Self>()
         );
 
-        accessor.write_variable(&flag_var, &StdDataGroup::InGaAs)?;
-        accessor.write_variable(&flag_name_var, &StdDataGroup::InGaAs)?;
+        accessor.write_variable(&flag_var)?;
+        accessor.write_variable(&flag_name_var)?;
 
         Self::print_flag_table(flag_var_counts, ntime);
 

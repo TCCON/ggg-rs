@@ -6,7 +6,7 @@ use ggg_rs::{cit_spectrum_name::{CitSpectrumName, NoDetectorSpecName}, readers::
 use indicatif::ProgressBar;
 use ndarray::Array1;
 
-use crate::{dimensions::TIME_DIM_NAME, errors::{InputError, WriteError}, interface::{ConcreteVarToBe, DataProvider, SpectrumIndexer, StdDataGroup}};
+use crate::{dimensions::TIME_DIM_NAME, errors::{InputError, WriteError}, interface::{ConcreteVarToBe, DataProvider, GroupSelector, SpectrumIndexer, StdDataGroup}};
 
 static DIMS_REQ: [&'static str; 1] = [TIME_DIM_NAME];
 
@@ -94,16 +94,22 @@ impl DataProvider for RunlogProvider {
         std::borrow::Cow::Borrowed(&DIMS_REQ)
     }
     
-    fn write_data_to_nc(&self, _spec_indexer: &SpectrumIndexer, writer: &dyn crate::interface::GroupWriter, _pb: ProgressBar) -> error_stack::Result<(), WriteError> {
+    fn write_data_to_nc(&self, _spec_indexer: &SpectrumIndexer, writer: &dyn crate::interface::GroupWriter, group_selector: &dyn GroupSelector, _pb: ProgressBar) -> error_stack::Result<(), WriteError> {
         // Unlike other providers, since the runlog sets the order of data, it doesn't need to use the
         // spectrum indexer to make sure the data are in the correct order.
         // Also, since we only have one variable, there's no benefit to using the "write multiple vars" writer method.
         let data = self.times.mapv(|dt| dt.timestamp());
         let mut times_var = ConcreteVarToBe::new(
-            TIME_DIM_NAME, DIMS_REQ.to_vec(), data, "time", "seconds since 1970-01-01 00:00:00", &self.runlog_path
+            TIME_DIM_NAME,
+            group_selector.boxed_main_group(),
+            DIMS_REQ.to_vec(),
+            data,
+            "time",
+            "seconds since 1970-01-01 00:00:00",
+            &self.runlog_path
         ).map_err(|e| WriteError::from(e))?;
         times_var.add_attribute("calendar", "gregorian");
-        writer.write_variable(&times_var, &StdDataGroup::InGaAs)?;
+        writer.write_variable(&times_var)?;
         Ok(())
     }
 }

@@ -1,7 +1,7 @@
 use std::{borrow::Cow, collections::HashMap, fmt::Display, hash::RandomState, path::{Path, PathBuf}};
 
 use error_stack::ResultExt;
-use ggg_rs::readers::{postproc_files::{open_and_iter_postproc_file, PostprocType}, POSTPROC_FILL_VALUE};
+use ggg_rs::readers::{postproc_files::{open_and_iter_postproc_file, AuxData, PostprocType}, POSTPROC_FILL_VALUE};
 use indexmap::IndexMap;
 use indicatif::ProgressBar;
 use itertools::Itertools;
@@ -11,7 +11,7 @@ use tracing::instrument;
 use crate::{
     dimensions::TIME_DIM_NAME,
     errors::{CliError, WriteError},
-    interface::{ConcreteVarToBe, DataProvider, GroupWriter, SpectrumIndexer, StdDataGroup, VarToBe},
+    interface::{ConcreteVarToBe, DataProvider, GroupSelector, GroupWriter, SpectrumIndexer, StdDataGroup, VarToBe},
     progress::{setup_read_pb, setup_write_pb},
     qc::{load_qc_file_hashmap, QcRow}
 };
@@ -31,7 +31,7 @@ impl AiaFile {
         Self { aia_path, qc_path }
     }
 
-    fn read_variables(postproc_file: &Path, ntimes: usize, spec_indexer: &SpectrumIndexer, qc_rows: HashMap<String, QcRow>, pb: &ProgressBar)
+    fn read_variables(postproc_file: &Path, ntimes: usize, spec_indexer: &SpectrumIndexer, qc_rows: HashMap<String, QcRow>, group_selector: &dyn GroupSelector, pb: &ProgressBar)
     -> error_stack::Result<Vec<ConcreteVarToBe<f32>>, WriteError> {
 
         let (header, row_iter) = open_and_iter_postproc_file(postproc_file)
@@ -73,7 +73,7 @@ impl AiaFile {
                 ))?;
 
             // Aux variables first
-            for &varname in ggg_rs::readers::postproc_files::AuxData::postproc_fields_str() {
+            for &varname in AuxData::postproc_fields_str() {
                 if let Some(value) = row.auxiliary.get_numeric_field(varname) {
                     let arr = data_arrays.get_mut(varname)
                         .ok_or_else(|| WriteError::custom(format!(
@@ -120,8 +120,22 @@ impl AiaFile {
                 continue;
             }
 
+            // TODO: need to decide what to do about prefixes. It's not finding xtco2, I think because it's looking for
+            // xmtco2. Currently, Coleen has "xtco2" in the qc.dat file, because there is no tco2 in the InGaAs range.
+            // So, either I need to make the group selector smart enough to check with and without the prefix, or I need
+            // to force every gas to have the right prefix.
+            let group = if AuxData::postproc_fields_str().contains(&varname.as_str()) {
+                group_selector.boxed_main_group()
+            } else {
+                group_selector.boxed_group_for_var(&varname, Some(&varname))
+                    .ok_or_else(|| WriteError::custom(format!(
+                        "Could not get a group for .aia file variable '{varname}'. Either your $GGGPATH/tccon/secondary_prefixes.dat file does not cover all frequency ranges, or this gas was not one of the windows listed and uncommented in your multiggg.sh file."
+                    )))?
+            };
+
             let mut this_var = ConcreteVarToBe::new_with_checksum(
-                varname.to_string(),
+                varname.clone(),
+                group,
                 vec![TIME_DIM_NAME],
                 array.into_dyn(),
                 varname.replace("_", " "),
@@ -156,19 +170,16 @@ impl DataProvider for AiaFile {
     }
 
     #[instrument(name = "aia_file_writer", skip_all)]
-    fn write_data_to_nc(&self, spec_indexer: &crate::interface::SpectrumIndexer, writer: &dyn GroupWriter, pb: ProgressBar) -> error_stack::Result<(), WriteError> {
+    fn write_data_to_nc(&self, spec_indexer: &crate::interface::SpectrumIndexer, writer: &dyn GroupWriter, group_selector: &dyn GroupSelector, pb: ProgressBar) -> error_stack::Result<(), WriteError> {
         let qc_rows = load_qc_file_hashmap(&self.qc_path)?;
         let ntimes = writer.get_dim_length(TIME_DIM_NAME)
             .ok_or_else(|| WriteError::missing_dim_error(".aia", TIME_DIM_NAME))?;
         // TODO: compute flag variable
-        let variables = Self::read_variables(&self.aia_path, ntimes, spec_indexer, qc_rows, &pb)?;
+        let variables = Self::read_variables(&self.aia_path, ntimes, spec_indexer, qc_rows, group_selector, &pb)?;
         let nvar = variables.len();
-        let grouped_variables = split_ret_vars_to_groups(variables)?;
         setup_write_pb(&pb, nvar, ".vav.ada.aia");
-        for (group, vars) in grouped_variables {
-            let tmp = vars.iter().map(|v| v.as_ref()).collect_vec();
-            writer.write_many_variables(&tmp, &group, Some(&pb))?;
-        }
+        let tmp = variables.iter().map(|v| v as &dyn VarToBe).collect_vec();
+        writer.write_many_variables(&tmp, Some(&pb))?;
         Ok(())
     }
 }
@@ -194,7 +205,7 @@ impl PostprocFile {
         Ok(Self { file_path, postproc_type })
     }
 
-    fn read_variables(&self, ntimes: usize, spec_indexer: &SpectrumIndexer, pb: &ProgressBar)
+    fn read_variables(&self, ntimes: usize, spec_indexer: &SpectrumIndexer, group_selector: &dyn GroupSelector, pb: &ProgressBar)
     -> error_stack::Result<Vec<ConcreteVarToBe<f32>>, WriteError> {
         // Every variable will need the file basename and checksum for the source file, so we get those
         // now to save recomputing the checksum every time.
@@ -249,12 +260,22 @@ impl PostprocFile {
 
         // As in AiaFile, now we go through all the data arrays and construct the variables with metadata for them.
         // Unlike AiaFile, we define the attributes ourselves rather than relying on the qc.dat file.
+        // TODO: implement a .warn_if_relaxed method on Results that checks if running in a relaxed mode and turns an
+        // error into a warning if so (and returns some default value of type T in Result<T,E>). That way we can have
+        // this run in strict mode by default, which will error if it cannot find a group for a variable (which might be
+        // because it's no longer in the multiggg.sh file) but allow a relaxed mode that puts such variables in some default
+        // group (maybe main, maybe an orphan group).
         let mut variables = vec![];
         for (input_varname, array) in data_arrays.into_iter() {
             let varname = self.ret_var_name(&input_varname);
             let long_name = varname.replace("_", " ");
+            let group = group_selector.boxed_group_for_var(&varname, Some(&input_varname))
+                .ok_or_else(|| WriteError::custom(format!(
+                    "Could not get a group for .aia file variable '{varname}'. Either your $GGGPATH/tccon/secondary_prefixes.dat file does not cover all frequency ranges, or this gas was not one of the windows listed and uncommented in your multiggg.sh file."
+                )))?;
             let mut this_var = ConcreteVarToBe::new_with_checksum(
-                varname,
+                varname.clone(),
+                group,
                 vec![TIME_DIM_NAME],
                 array.into_dyn(),
                 long_name,
@@ -361,57 +382,18 @@ impl DataProvider for PostprocFile {
         Cow::Owned(vec![TIME_DIM_NAME])
     }
 
-    #[instrument(name = "postproc_file_writer", skip(spec_indexer, writer))]
-    fn write_data_to_nc(&self, spec_indexer: &crate::interface::SpectrumIndexer, writer: &dyn GroupWriter, pb: ProgressBar) -> error_stack::Result<(), WriteError> {
+    #[instrument(name = "postproc_file_writer", skip_all)]
+    fn write_data_to_nc(&self, spec_indexer: &crate::interface::SpectrumIndexer, writer: &dyn GroupWriter, group_selector: &dyn GroupSelector, pb: ProgressBar) -> error_stack::Result<(), WriteError> {
         let ntimes = writer.get_dim_length(TIME_DIM_NAME)
             .ok_or_else(|| WriteError::missing_dim_error(".aia", TIME_DIM_NAME))?;
-        let variables = self.read_variables(ntimes, spec_indexer, &pb)?;
+        let variables = self.read_variables(ntimes, spec_indexer, group_selector, &pb)?;
         let nvar = variables.len();
-        let grouped_variables = split_ret_vars_to_groups(variables)?;
 
         setup_write_pb(&pb, nvar, &self.postproc_type);
-        for (group, vars) in grouped_variables {
-            let tmp = vars.iter().map(|v| v.as_ref()).collect_vec();
-            writer.write_many_variables(&tmp, &group, Some(&pb))?;
-        }
+        let tmp = variables.iter().map(|v| v as &dyn VarToBe).collect_vec();
+        writer.write_many_variables(&tmp, Some(&pb))?;
         Ok(())
     }
-}
-
-
-/// Given a list of variables, split them into the standard TCCON groups.
-fn split_ret_vars_to_groups(variables: Vec<ConcreteVarToBe<f32>>) 
-    -> error_stack::Result<
-        HashMap<StdDataGroup, Vec<Box<dyn VarToBe>>>,
-        WriteError
-    > {
-    let mut grouped_vars = HashMap::new();
-
-    // TODO: parse the group definition file in $GGGPATH/tccon instead of hardcoding these groups.
-    // until that's done, this won't properly divide things into groups unless they duplicate InGaAs
-    // names.
-    let aux_vars = ggg_rs::readers::postproc_files::AuxData::postproc_fields_str();
-    for var in variables {
-        let group = if aux_vars.contains(&var.name()) {
-            // Auxiliary variables (e.g. solzen, lat, lon, etc.) should all go in the regular
-            // group.
-            StdDataGroup::InGaAs
-        } else if var.name().starts_with("xv") || var.name().starts_with("v") {
-            StdDataGroup::Si
-        } else if var.name().starts_with("xm") || var.name().starts_with("m") {
-            StdDataGroup::InSb
-        } else {
-            StdDataGroup::InGaAsExperimental
-        };
-
-        if !grouped_vars.contains_key(&group) {
-            grouped_vars.insert(group, vec![]);
-        }
-        let boxed_var: Box<dyn VarToBe> = Box::new(var);
-        grouped_vars.get_mut(&group).unwrap().push(boxed_var);
-    }
-
-    Ok(grouped_vars)
 }
 
 // TODO: update this to handle ADCFs that may have three or five values, and use it to write the ADCFs

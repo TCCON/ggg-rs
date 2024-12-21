@@ -1,14 +1,18 @@
 use std::{ffi::OsStr, path::{Path, PathBuf}};
 
 use error_stack::ResultExt;
-use ggg_rs::readers::col_files::{get_col_files, get_file_from_col_header};
+use ggg_rs::readers::col_files::{get_all_col_files, get_col_files, get_file_from_col_header};
 
 use crate::errors::CliError;
 
 pub(crate) struct InputFiles {
     pub(crate) runlog: PathBuf,
+    pub(crate) window_prefix_file: PathBuf,
     pub(crate) mav_file: PathBuf,
-    pub(crate) col_files: Vec<PathBuf>,
+    /// Col files listed in the multiggg.sh file and not commented out
+    pub(crate) selected_col_files: Vec<PathBuf>,
+    /// All .col files present in the directory, whether listed in the multiggg.sh file or not
+    pub(crate) all_col_files: Vec<PathBuf>,
     pub(crate) vsw_file: PathBuf,
     pub(crate) tsw_file: PathBuf,
     pub(crate) vav_file: PathBuf,
@@ -29,16 +33,28 @@ impl InputFiles {
             )).into())
         }
 
+        let window_prefix_file = ggg_path.join("tccon").join("secondary_prefixes.dat");
+        if !window_prefix_file.exists() {
+            return Err(CliError::input_error(format!(
+                "Window prefix file not found at {}", window_prefix_file.display()
+            )).into())
+        }
+
         let multiggg_file = run_dir.join("multiggg.sh");
         if !multiggg_file.exists() {
             return Err(CliError::input_error(format!(
                 "No multiggg.sh file found in {}", run_dir.display()
             )).into())
         }
-        let col_files = get_col_files(&multiggg_file, run_dir)
+        let selected_col_files = get_col_files(&multiggg_file, run_dir)
             .change_context_lazy(|| CliError::input_error("failed to get the list of .col file by parsing the multiggg.sh file"))?;
 
-        let runlog = get_file_from_col_header(&col_files, run_dir, |h| h.runlog_file.path)
+        let all_col_files = get_all_col_files(run_dir)
+            .change_context_lazy(|| CliError::runtime_error(format!(
+                "failed to get the list of all .col files present in {}", run_dir.display()
+            )))?;
+
+        let runlog = get_file_from_col_header(&selected_col_files, run_dir, |h| h.runlog_file.path)
             .change_context_lazy(|| CliError::runtime_error("failed to get the runlog from the .col file headers; may indicate a file system problem or inconsistent runlogs listed"))?;
 
 
@@ -65,7 +81,7 @@ impl InputFiles {
         }
         
 
-        Ok(Self { runlog, mav_file, col_files, aia_file, vsw_file, tsw_file, vav_file, tav_file, vsw_ada_file, vav_ada_file, qc_file })
+        Ok(Self { runlog, window_prefix_file, mav_file, selected_col_files, all_col_files, aia_file, vsw_file, tsw_file, vav_file, tav_file, vsw_ada_file, vav_ada_file, qc_file })
     }
 }
 

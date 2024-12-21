@@ -3,7 +3,7 @@ use std::{collections::HashMap, ffi::OsString, path::{Path, PathBuf}, process::E
 use calculators::FlagCalculator;
 use error_stack::ResultExt;
 use errors::{CliError, WriteError};
-use interface::{DataCalculator, DataProvider, SpectrumIndexer, StdGroupWriter};
+use interface::{DataCalculator, DataProvider, GroupSelector, SpectrumIndexer, StdGroupSelector, StdGroupWriter};
 use providers::{AiaFile, MavFile, PostprocFile, RunlogProvider};
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use tracing::{error,info,Level};
@@ -91,11 +91,19 @@ fn driver(run_dir: PathBuf, mpbar: Arc<indicatif::MultiProgress>) -> error_stack
     // Check that all the dimensions we need were written
     report_missing_dimensions(&known_dims, &providers)?;
 
+    // Create the type that determines which group variables go in. This uses only the .col
+    // files for windows listed in the multiggg.sh file because those should be the only ones
+    // that go into the netCDF file.
+    let group_selector = StdGroupSelector::new(
+        &file_paths.window_prefix_file,
+        &file_paths.selected_col_files
+    )?;
+    
     // Actually write the variables to the netCDF file.
     // Do so in an inner scope so that `writer` is dropped and our netCDF file is closed. 
     // TODO: allow users to limit the number of processes used.
     let res = execute_providers_and_calculators(
-        nc_dset, providers, calculators, spec_indexer, mpbar
+        nc_dset, &group_selector, providers, calculators, spec_indexer, mpbar
     );
 
     if let Err(e) = &res {
@@ -140,6 +148,7 @@ fn init_nc_file(run_dir: &Path) -> error_stack::Result<netcdf::FileMut, netcdf::
 /// Helper function that runs the data providers then the data calculators.
 fn execute_providers_and_calculators(
     nc_dset: netcdf::FileMut,
+    group_selector: &dyn GroupSelector,
     providers: Vec<Box<dyn DataProvider>>,
     calculators: Vec<Box<dyn DataCalculator>>,
     spec_indexer: Arc<SpectrumIndexer>,
@@ -153,7 +162,7 @@ fn execute_providers_and_calculators(
             let local_mpbar = Arc::clone(&mpbar);
             let pbar = indicatif::ProgressBar::no_length();
             let pbar = local_mpbar.add(pbar);
-            provider.write_data_to_nc(&local_indexer, &local_writer, pbar)
+            provider.write_data_to_nc(&local_indexer, &local_writer, group_selector, pbar)
         })?;
 
         calculators.into_par_iter().try_for_each(|calculator| {
@@ -162,7 +171,7 @@ fn execute_providers_and_calculators(
             let local_mpbar = Arc::clone(&mpbar);
             let pbar = indicatif::ProgressBar::no_length();
             let pbar = local_mpbar.add(pbar);
-            calculator.write_data_to_nc(&local_indexer, &local_writer, pbar)
+            calculator.write_data_to_nc(&local_indexer, &local_writer, group_selector, pbar)
         })?;
 
         Ok(())

@@ -104,6 +104,22 @@ pub fn get_col_files(multiggg_file: &Path, run_dir: &Path) -> Result<Vec<PathBuf
     }
 }
 
+pub fn get_all_col_files(run_dir: &Path) -> error_stack::Result<Vec<PathBuf>, GggError> {
+    let mut col_files = vec![];
+    let res = run_dir.read_dir()
+        .change_context_lazy(|| GggError::custom(format!("error occurred while listing directory contents of {}", run_dir.display())))?;
+    for entry_res in res {
+        let entry = entry_res.change_context_lazy(|| GggError::custom(format!(
+            "error occurred while getting information about a directory entry in {}", run_dir.display()
+        )))?;
+
+        if entry.path().extension().is_some_and(|ext| ext == "col") {
+            col_files.push(entry.path());
+        }
+    }
+    Ok(col_files)
+}
+
 /// Get a path to one file from the `.col` file headers, error if it differs across files.
 /// 
 /// `get_file` is a function that takes ownership of a [`ColFileHeader`] and returns the
