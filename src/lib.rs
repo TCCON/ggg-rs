@@ -14,6 +14,8 @@ pub mod cit_spectrum_name;
 pub mod readers;
 /// Utilities for writing GGG files
 pub mod writers;
+/// Interfaces for calculating the mean atmospheric O2 mole fraction
+pub mod o2_dmf;
 /// Common code for `collate-*-results` programs.
 pub mod collation;
 /// Code supporting TCCON-focused programs

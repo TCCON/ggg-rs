@@ -4,10 +4,7 @@ use clap::Parser;
 use clap_verbosity_flag::{Verbosity, InfoLevel};
 use error_stack::ResultExt;
 use ggg_rs::{
-    cit_spectrum_name::{CitDetector, CitSpectrumName, NoDetectorSpecName},
-    collation::{collate_results, CollationError, CollationIndexer, CollationMode, CollationResult},
-    readers::ProgramVersion, readers::runlogs::{FallibleRunlog, RunlogDataRec},
-    tccon::input_config::TcconWindowPrefixes,
+    cit_spectrum_name::{CitDetector, CitSpectrumName, NoDetectorSpecName}, collation::{collate_results, CollationError, CollationIndexer, CollationMode, CollationResult}, o2_dmf::{make_boxed_o2_dmf_provider, O2DmfCli}, readers::{runlogs::{FallibleRunlog, RunlogDataRec}, ProgramVersion}, tccon::input_config::TcconWindowPrefixes
 };
 use log4rs::{encode::pattern::PatternEncoder, append::console::{ConsoleAppender, Target}, Config, config::{Appender, Root}};
 
@@ -49,7 +46,15 @@ fn main_inner() -> error_stack::Result<(), CollationError> {
         TcconWindowPrefixes::new_standard_opt()
         .change_context_lazy(|| CollationError::custom("Error getting the detector prefixes from the standard file"))?
     };
-    collate_results(&multiggg_file, indexer, prefixer, clargs.mode, collate_version, clargs.write_nts)
+
+    let run_dir = clargs.multiggg_file.parent()
+        .ok_or_else(|| CollationError::CouldNotFind("parent directory of the multiggg.sh file".to_string()))?;
+    let o2_provider = make_boxed_o2_dmf_provider(
+        &clargs.o2_dmf_args,
+        run_dir
+    ).change_context_lazy(|| CollationError::custom("An error occurred while setting up the O2 mean mole fraction provider"))?;
+
+    collate_results(&multiggg_file, indexer, prefixer, o2_provider, clargs.mode, collate_version, clargs.write_nts)
 }
 
 #[derive(Debug, clap::Parser)]
@@ -90,6 +95,9 @@ struct CollateCli {
     /// if it exists. Giving a path to this argument that does not exist is an error.
     #[clap(long)]
     prefix_file: Option<PathBuf>,
+
+    #[command(flatten)]
+    o2_dmf_args: O2DmfCli,
 
     #[command(flatten)]
     verbosity: Verbosity<InfoLevel>,
@@ -139,7 +147,7 @@ impl CollationIndexer for TcconColIndexer {
 
 
         for rec in runlog_iter {
-            let mut rec = rec.map_err(|e| CollationError::could_not_read_file(
+            let rec = rec.map_err(|e| CollationError::could_not_read_file(
                 format!("error occurred while reading one line of the runlog: {e}"), runlog
             ))?;
 
@@ -172,10 +180,6 @@ impl CollationIndexer for TcconColIndexer {
                     rec.spectrum_name
                 )));
             } else {
-                // TODO: fix fortran format to handle left-aligning - there's something broken that's not propagating 
-                // settings through when serializing a structure it seems. For now this is a workaround to make sure
-                // the spectrum names are left aligned.
-                rec.spectrum_name = format!("{:57}", rec.spectrum_name);
                 self.index_map.insert(nd_spec.clone(), idx);
                 self.runlog_data.push(rec.clone());
                 idx += 1;

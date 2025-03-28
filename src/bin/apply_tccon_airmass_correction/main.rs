@@ -6,9 +6,7 @@ use error_stack::{Report, ResultExt};
 use fortformat::FortFormat;
 use ggg_rs::{readers::{postproc_files::open_and_iter_postproc_file, ProgramVersion}, tccon::input_config::{self, AdcfRow}, writers::postproc_files::write_postproc_header};
 use indexmap::IndexMap;
-use o2_dmf::{O2DmfProvider, O2DmfError};
 
-mod o2_dmf;
 mod adcf;
 
 const DEFAULT_G: f64 = 0.0;
@@ -35,27 +33,10 @@ struct AirmassCorrCli {
     /// to airmass correct and convert to column averages. In most
     /// cases, this will be a `.vsw` or `.vav` file.
     upstream_file: PathBuf,
-
-    /// If time-varying O2 mean mole fractions are not available in the
-    /// .vmr files or as a list file in --o2-dmf-file, provide a fixed
-    /// mole fraction to use for all spectra here. Before GGG2020.1, this
-    /// was 0.2095.
-    #[clap(long, conflicts_with = "o2_dmf_file")]
-    fixed_o2_dmf: Option<f64>,
-
-    /// If time-varying O2 mean mole fractions are not present in the
-    /// .vmr files, you can instead provide them as a list file generated
-    /// by ginput. This must be a space-separated file that has two columns: the UTC
-    /// datetime on the time resolution of the priors (e.g. 3 hours) and
-    /// the O2 mean dry mole fraction.
-    #[clap(long)]
-    o2_dmf_file: Option<PathBuf>,
 }
 
 #[derive(Debug, thiserror::Error)]
 enum CliError {
-    #[error("Error getting the mean O2 dry mole fractions")]
-    O2Dmf,
     #[error("Error reading {}", .0.display())]
     ReadError(PathBuf),
     #[error("Error reading line {line} of {}", .file.display())]
@@ -104,10 +85,6 @@ fn driver(clargs: AirmassCorrCli) -> error_stack::Result<(), CliError> {
     // Read in the appropriate airmass correction file
     let adcfs = input_config::read_adcf_file(&clargs.correction_file)
         .change_context_lazy(|| CliError::ReadError(clargs.correction_file.clone()))?;
-
-    // Read in the O2 DMF information
-    let o2_provider = make_boxed_o2_dmf_provider(&clargs)
-        .change_context_lazy(|| CliError::O2Dmf)?;
 
     // Read in the header of the previous postproc file, add the airmass correction factors
     // to it. Write out to a temporary file to avoid confusion with a completed *.ada file.
@@ -172,10 +149,7 @@ fn driver(clargs: AirmassCorrCli) -> error_stack::Result<(), CliError> {
     // commenting-out character that we don't have a field for.
     let format_str = format_spec.fmt_string(1).replacen("1x", "a1", 1);
 
-    // Add the airmass corrections and the O2 mole fraction source to the file header
-    header.extra_lines.push(format!(
-        " Mean O2 DMF source: {}", o2_provider.header_line()
-    ));
+    // Add the airmass corrections to the file header
     add_adcf_header_lines(&mut header.extra_lines, &adcfs)
         .change_context_lazy(|| CliError::WriteError {
             path: out_file.clone(),
@@ -213,9 +187,7 @@ fn driver(clargs: AirmassCorrCli) -> error_stack::Result<(), CliError> {
             line: header.nhead + irow + 1,
         })?;
 
-        let this_o2_dmf = o2_provider.o2_dmf(&row.auxiliary.spectrum)
-            .change_context_lazy(|| CliError::O2Dmf)?;
-        row.auxiliary.o2dmf = Some(this_o2_dmf);
+        let this_o2_dmf = row.auxiliary.o2dmf;
         row.retrieved = apply_correction(&row.retrieved, &adcfs, &o2_window, this_o2_dmf, row.auxiliary.solzen, missing_value, input_is_averaged)?;
 
         fortformat::ser::to_writer_custom(row, &format_spec, Some(&col_names), &settings, &mut fw)
@@ -226,23 +198,6 @@ fn driver(clargs: AirmassCorrCli) -> error_stack::Result<(), CliError> {
     }
 
     Ok(())
-}
-
-fn make_boxed_o2_dmf_provider(clargs: &AirmassCorrCli) -> error_stack::Result<Box<dyn O2DmfProvider>, O2DmfError> {
-    if let Some(dmf) = clargs.fixed_o2_dmf {
-        let provider = o2_dmf::FixedO2Dmf::new(dmf);
-        return Ok(Box::new(provider));
-    }
-
-    if let Some(o2_file) = &clargs.o2_dmf_file {
-        let run_dir = clargs.upstream_file.parent().ok_or_else(|| O2DmfError::custom(format!(
-            "could not get parent of upstream file, {}", clargs.upstream_file.display()
-        )))?;
-        let provider = o2_dmf::O2DmfTimeseries::new(o2_file.to_path_buf(), run_dir)?;
-        return Ok(Box::new(provider));
-    }
-    
-    todo!()
 }
 
 fn add_adcf_header_lines(lines_out: &mut Vec<String>, adcfs: &IndexMap<String, AdcfRow>) -> Result<(), fortformat::SError> {

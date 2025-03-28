@@ -36,11 +36,13 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use error_stack::ResultExt;
+use itertools::Itertools;
 use log::{info, warn};
 
 use crate::error::FileLocation;
+use crate::o2_dmf::O2DmfProvider;
 use crate::readers::col_files::{get_col_files, get_file_from_col_header, open_and_iter_col_file, read_col_file_header, ColFileHeader, ColRetQuantity};
-use crate::readers::postproc_files::{iter_tabular_file, AuxData, PostprocRow};
+use crate::readers::postproc_files::{iter_tabular_file, AuxData, AuxDataBuilder, PostprocRow};
 use crate::readers::{ProgramVersion, POSTPROC_FILL_VALUE};
 use crate::readers::runlogs::RunlogDataRec;
 use crate::utils::{self, FileBuf};
@@ -312,6 +314,7 @@ pub fn collate_results<I: CollationIndexer, P: CollationPrefixer>(
     multiggg_file: &Path,
     mut indexer: I,
     mut prefixer: Option<P>,
+    o2_dmf_provider: Box<dyn O2DmfProvider>,
     mode: CollationMode,
     collate_version: ProgramVersion,
     write_neg_timesteps: bool
@@ -351,18 +354,30 @@ pub fn collate_results<I: CollationIndexer, P: CollationPrefixer>(
     // Gather the auxiliary data we can from the runlog
     indexer.parse_runlog(&runlog)?;
     let mut columns = AuxData::postproc_fields_vec();
-    let mut rows: Vec<PostprocRow> = indexer.get_runlog_data()?
+    let mut aux_data_builders = indexer.get_runlog_data()?
         .iter()
-        .map(|rld| {
-            let aux = AuxData::from(rld);
-            PostprocRow::new(aux)
-        }).collect();
+        .map(|rld| AuxData::build_from_runlog_rec(rld))
+        .collect_vec();
 
     let naux = columns.len();
 
     // Get zmin from the .ray file and add "run" as the 1-based row index
-    add_zmin(&mut rows, &mut indexer, &ray_file)?;
-    add_run(&mut rows);
+    // Also add the mean O2 DMF - it's easier to add it here and carry it
+    // through the post processing than to add an aux column partway through
+    // the processing.
+    add_zmin(&mut aux_data_builders, &mut indexer, &ray_file)?;
+    add_run(&mut aux_data_builders);
+    add_o2dmf(&mut aux_data_builders, o2_dmf_provider.as_ref(), &indexer)?;
+
+    // Now we can make our proper postprocessing rows, because we have successfully
+    // filled in all the values that the auxiliary data needs.
+    let mut rows: Vec<PostprocRow> = aux_data_builders
+        .into_iter()
+        .map(|aux| {
+            aux.finish()
+            .map(|aux| PostprocRow::new(aux))
+        }).try_collect()
+        .expect("Failed to get all of the auxiliary data for at least one of the .xsw file. This is a bug and should be reported.");
 
     // Get values from the .col files
     let ncol = col_files.len();
@@ -385,9 +400,12 @@ pub fn collate_results<I: CollationIndexer, P: CollationPrefixer>(
 
     // Write the output file
     let extra_lines = if let Some(sfs) = window_sfs {
-        vec![format!("sf=   {}", sfs.join("   "))]
+        vec![
+            o2_dmf_provider.header_line(),
+            format!("sf=   {}", sfs.join("   "))
+        ]
     } else {
-        vec![]
+        vec![o2_dmf_provider.header_line()]
     };
     let xsw_file = run_dir.join(format!("{runlog_name}.{}sw", mode.ext_char()));
     let f = std::fs::File::create(&xsw_file).change_context_lazy(|| CollationError::could_not_write(&xsw_file))?;
@@ -498,18 +516,10 @@ fn get_window_sf(header: &ColFileHeader) -> Option<String> {
     sf_match
 }
 
-fn do_replace_value<I: CollationIndexer>(value: f64, new_spectrum: &str, column: &str, indexer: &I) -> CollationResult<bool> {
-    if value > POSTPROC_FILL_VALUE * 0.99 {
-        Ok(true)
-    } else {
-        indexer.do_replace_value(new_spectrum, column)
-    }
-}
-
 /// Add the zmin values from the `.ray` file to the `.Xsw` file rows.
 /// [`PostprocRow`] instances created from runlog data records have
 /// a fill value for `zmin`, so this overwrites that.
-fn add_zmin<I: CollationIndexer>(rows: &mut Vec<PostprocRow>, indexer: &mut I, ray_file: &Path) -> error_stack::Result<(), CollationError> {
+fn add_zmin<I: CollationIndexer>(rows: &mut Vec<AuxDataBuilder>, indexer: &mut I, ray_file: &Path) -> error_stack::Result<(), CollationError> {
     let it = iter_tabular_file(ray_file)
         .change_context_lazy(|| CollationError::could_not_read_file("iteration of .ray file failed", ray_file))?;
     for (irow, row) in it.enumerate() {
@@ -518,24 +528,47 @@ fn add_zmin<I: CollationIndexer>(rows: &mut Vec<PostprocRow>, indexer: &mut I, r
                 format!("error readling data line {} of .ray file", irow+1), ray_file 
             )})?;
 
-        let sw_idx = indexer.get_row_index(&ray_row.spectrum())?;
-        let sw_row = rows.get_mut(sw_idx)
+        let builder_idx = indexer.get_row_index(&ray_row.spectrum())?;
+        let builder = rows.get_mut(builder_idx)
             .expect("Index returned by the collation indexer should be a valid index for the rows created from the runlog");
 
-        if do_replace_value(sw_row.auxiliary.zmin, &ray_row.spectrum(), "zmin", indexer)? {
-            sw_row.auxiliary.zmin = ray_row.get("Zmin").ok_or_else(|| 
+        if builder.needs_zmin() && indexer.do_replace_value(&ray_row.spectrum(), "zmin")? {
+            let ray_zmin = ray_row.get("Zmin").ok_or_else(|| 
                 CollationError::missing_column(ray_file, "Zmin")
             )?;
+            builder.set_zmin(ray_zmin);
         }
     }
     Ok(())
 }
 
 /// Add the "run" number to the output
-fn add_run(rows: &mut Vec<PostprocRow>) {
-    for (irun, row) in rows.iter_mut().enumerate() {
-        row.auxiliary.run = (irun + 1) as f64;
+fn add_run(builders: &mut Vec<AuxDataBuilder>) {
+    for (irun, builder) in builders.iter_mut().enumerate() {
+        builder.set_run((irun + 1) as f64);
     }
+}
+
+/// Add the mean O2 atmospheric mole fraction to the aux data.
+/// Note: currently this only does the GGG2020-style 0.2095.
+fn add_o2dmf<I: CollationIndexer>(builders: &mut Vec<AuxDataBuilder>, o2_dmf_provider: &dyn O2DmfProvider, indexer: &I) -> error_stack::Result<(), CollationError> {
+    // TODO: move the logic from apply_tccon_airmass_correction here.
+    for builder in builders.iter_mut() {
+        if !builder.needs_o2dmf() {
+            continue;
+        }
+
+        if !indexer.do_replace_value(builder.spectrum(), "o2dmf")? {
+            continue;
+        }
+
+        let dmf = o2_dmf_provider.o2_dmf(builder.spectrum())
+            .change_context_lazy(|| CollationError::Custom(format!(
+                "Error getting the mean O2 DMF for the spectrum {}", builder.spectrum()
+            )))?;
+        builder.set_o2dmf(dmf);
+    }
+    Ok(())
 }
 
 /// Add the value and its error from the `.col` file to the `.Xsw` file.

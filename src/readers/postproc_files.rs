@@ -42,7 +42,7 @@ pub struct AuxData {
     pub fvsi: f64,
     pub wspd: f64,
     pub wdir: f64,
-    pub o2dmf: Option<f64>,
+    pub o2dmf: f64,
 }
 
 impl AuxData {
@@ -87,49 +87,137 @@ impl AuxData {
             "fvsi" => Some(self.fvsi),
             "wspd" => Some(self.wspd),
             "wdir" => Some(self.wdir),
-            "o2dmf" => self.o2dmf,
+            "o2dmf" => Some(self.o2dmf),
             _ => None
+        }
+    }
+
+    pub fn build_from_runlog_rec(rec: &RunlogDataRec) -> AuxDataBuilder {
+        let (dec_year, dec_doy, dec_hour) = utils::to_decimal_year_day_hour(rec.year, rec.day, rec.hour);
+        AuxDataBuilder {
+            spectrum: rec.spectrum_name.to_string(),
+            year: dec_year,
+            day: dec_doy,
+            hour: dec_hour,
+            run: None,
+            lat: rec.obs_lat,
+            long: rec.obs_lon,
+            zobs: rec.obs_alt,
+            zmin: None,
+            solzen: rec.asza,
+            azim: rec.azim,
+            osds: rec.osds,
+            opd: rec.opd,
+            fovi: rec.fovi,
+            amal: rec.amal,
+            graw: rec.delta_nu,
+            tins: rec.tins,
+            pins: rec.pins,
+            tout: rec.tout,
+            pout: rec.pout,
+            hout: rec.hout,
+            sia: rec.sia,
+            fvsi: rec.fvsi,
+            wspd: rec.wspd,
+            wdir: rec.wdir,
+            o2dmf: None
         }
     }
 }
 
-impl From<&RunlogDataRec> for AuxData {
-    /// Create an `AuxData` instance from a reference to a [`RunlogDataRec`].
-    /// Most values in `AuxData` come from a runlogs; the exceptions are the `run`
-    /// value and the `zmin` value. `run` is usually just the 1-based row index in
-    /// the output file, and `zmin` is the "Zpres" field of the `.ray` file. These
-    /// will be initialized as the postprocessing fill value and should be replaced
-    /// before serializing the returned instance.
-    fn from(value: &RunlogDataRec) -> Self {
-        let (dec_year, dec_doy, dec_hour) = utils::to_decimal_year_day_hour(value.year, value.day, value.hour);
-        Self {
-            spectrum: value.spectrum_name.to_string(),
-            year: dec_year,
-            day: dec_doy,
-            hour: dec_hour,
-            run: POSTPROC_FILL_VALUE,
-            lat: value.obs_lat,
-            long: value.obs_lon,
-            zobs: value.obs_alt,
-            zmin: POSTPROC_FILL_VALUE,
-            solzen: value.asza,
-            azim: value.azim,
-            osds: value.osds,
-            opd: value.opd,
-            fovi: value.fovi,
-            amal: value.amal,
-            graw: value.delta_nu,
-            tins: value.tins,
-            pins: value.pins,
-            tout: value.tout,
-            pout: value.pout,
-            hout: value.hout,
-            sia: value.sia,
-            fvsi: value.fvsi,
-            wspd: value.wspd,
-            wdir: value.wdir,
-            o2dmf: None
-        }
+pub struct AuxDataBuilder {
+    spectrum: String,
+    year: f64,
+    day: f64,
+    hour: f64,
+    run: Option<f64>,
+    lat: f64,
+    long: f64,
+    zobs: f64,
+    zmin: Option<f64>,
+    solzen: f64,
+    azim: f64,
+    osds: f64,
+    opd: f64,
+    fovi: f64,
+    amal: f64,
+    graw: f64,
+    tins: f64,
+    pins: f64,
+    tout: f64,
+    pout: f64,
+    hout: f64,
+    sia: f64,
+    fvsi: f64,
+    wspd: f64,
+    wdir: f64,
+    o2dmf: Option<f64>,
+}
+
+impl AuxDataBuilder {
+    pub fn spectrum(&self) -> &str {
+        &self.spectrum
+    }
+
+    pub fn set_run(&mut self, run: f64) -> &mut Self {
+        self.run = Some(run);
+        self
+    }
+
+    pub fn needs_run(&self) -> bool {
+        self.run.is_none()
+    }
+
+    pub fn set_zmin(&mut self, zmin: f64) -> &mut Self {
+        self.zmin = Some(zmin);
+        self
+    }
+
+    pub fn needs_zmin(&self) -> bool {
+        self.zmin.is_none()
+    }
+
+    pub fn set_o2dmf(&mut self, o2dmf: f64) -> &mut Self {
+        self.o2dmf = Some(o2dmf);
+        self
+    }
+
+    pub fn needs_o2dmf(&self) -> bool {
+        self.o2dmf.is_none()
+    }
+
+    pub fn finish(self) -> Result<AuxData, GggError> {
+        let run = self.run.ok_or_else(|| GggError::custom("The 'run' field on the AuxData builder was not set"))?;
+        let zmin = self.zmin.ok_or_else(|| GggError::custom("The 'run' field on the AuxData builder was not set"))?;
+        let o2dmf = self.o2dmf.ok_or_else(|| GggError::custom("The 'run' field on the AuxData builder was not set"))?;
+        Ok(AuxData {
+            spectrum: self.spectrum,
+            year: self.year,
+            day: self.day,
+            hour: self.hour,
+            run,
+            lat: self.lat,
+            long: self.long,
+            zobs: self.zobs,
+            zmin,
+            solzen: self.solzen,
+            azim: self.azim,
+            osds: self.osds,
+            opd: self.opd,
+            fovi: self.fovi,
+            amal: self.amal,
+            graw: self.graw,
+            tins: self.tins,
+            pins: self.pins,
+            tout: self.tout,
+            pout: self.pout,
+            hout: self.hout,
+            sia: self.sia,
+            fvsi: self.fvsi,
+            wspd: self.wspd,
+            wdir: self.wdir,
+            o2dmf,
+        })
     }
 }
 

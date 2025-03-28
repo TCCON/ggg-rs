@@ -1,18 +1,21 @@
 use std::{collections::HashMap, fmt::Debug, io::BufRead, path::{Path, PathBuf}};
 
 use chrono::Datelike;
+use clap::Args;
 use error_stack::ResultExt;
-use ggg_rs::readers::col_files::get_runlog_from_col_files;
-use ggg_rs::readers::runlogs::FallibleRunlog;
+use crate::readers::col_files::get_runlog_from_col_files;
+use crate::readers::runlogs::FallibleRunlog;
 use itertools::Itertools;
 use nalgebra::{self, OMatrix, OVector};
+
+pub const DEFAULT_O2_DMF: f64 = 0.2095;
 
 // ----------------- //
 // Generic interface //
 // ----------------- //
 
 #[derive(Debug, Clone, thiserror::Error)]
-pub(crate) enum O2DmfError {
+pub enum O2DmfError {
     #[error("Could not find O2 DMF for spectrum {specname}: {reason}")]
     SpectrumNotFound{specname: String, reason: String},
     #[error("Could not find required input file {}", .0.display())]
@@ -35,7 +38,7 @@ impl O2DmfError {
     }
 }
 
-pub(crate) trait O2DmfProvider: Debug {
+pub trait O2DmfProvider: Debug {
     fn header_line(&self) -> String;
     fn o2_dmf(&self, spectrum_name: &str) -> error_stack::Result<f64, O2DmfError>;
 }
@@ -57,7 +60,7 @@ impl FixedO2Dmf {
 
 impl O2DmfProvider for FixedO2Dmf {
     fn header_line(&self) -> String {
-        format!("fixed {:.6}", self.o2_dmf)
+        format!("O2 DMF source: fixed {:.6}", self.o2_dmf)
     }
 
     fn o2_dmf(&self, _spectrum_name: &str) -> error_stack::Result<f64, O2DmfError> {
@@ -97,7 +100,7 @@ impl O2DmfTimeseries {
         let mut years = vec![];
         let mut o2_dmfs = vec![];
 
-        // This file won't be that long, just read the non-comment lines into memory.
+        // This file won't be that lon#g, just read the non-comment lines into memory.
         // It'll make the rest of the logic easier.
         let o2_lines: Vec<String> = f.lines().filter_map(|line| {
             if line.as_ref().is_ok_and(|l| l.trim().starts_with("#")) {
@@ -241,7 +244,7 @@ impl O2DmfTimeseries {
 
 impl O2DmfProvider for O2DmfTimeseries {
     fn header_line(&self) -> String {
-        format!("interpolated from file {}", self.o2_file.display())    
+        format!("O2 DMF source: interpolated from file {}", self.o2_file.display())    
     }
 
     fn o2_dmf(&self, spectrum_name: &str) -> error_stack::Result<f64, O2DmfError> {
@@ -250,4 +253,36 @@ impl O2DmfProvider for O2DmfTimeseries {
 
         self.interpolate_o2(dt)
     }
+}
+
+#[derive(Debug, Args)]
+pub struct O2DmfCli {
+    /// If time-varying O2 mean mole fractions are not available in the
+    /// .vmr files or as a list file in --o2-dmf-file, provide a fixed
+    /// mole fraction to use for all spectra here. The default, if none
+    /// of the option to specify O2 DMFs are given, is 0.2095.
+    #[clap(long, conflicts_with = "o2_dmf_file")]
+    fixed_o2_dmf: Option<f64>,
+
+    /// If time-varying O2 mean mole fractions are not present in the
+    /// .vmr files, you can instead provide them as a list file generated
+    /// by ginput. This must be a space-separated file that has two columns: the UTC
+    /// datetime on the time resolution of the priors (e.g. 3 hours) and
+    /// the O2 mean dry mole fraction.
+    #[clap(long)]
+    o2_dmf_file: Option<PathBuf>,
+}
+
+pub fn make_boxed_o2_dmf_provider(clargs: &O2DmfCli, run_dir: &Path) -> error_stack::Result<Box<dyn O2DmfProvider>, O2DmfError> {
+    if let Some(o2_file) = &clargs.o2_dmf_file {
+        let provider = O2DmfTimeseries::new(o2_file.to_path_buf(), &run_dir)?;
+        return Ok(Box::new(provider));
+    }
+
+    // If no time varying information is provided, fall back to a static
+    // DMF, and if the user didn't give that, use the old GGG2020 and earlier
+    // default.
+    let dmf = clargs.fixed_o2_dmf.unwrap_or(DEFAULT_O2_DMF);
+    let provider = FixedO2Dmf::new(dmf);
+    Ok(Box::new(provider))    
 }
