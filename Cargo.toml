@@ -16,7 +16,7 @@ itertools = "0.11.0"
 log = "0.4.20"
 log4rs = "1.2.0"
 error-stack = "0.4.1"
-fortformat = {git = "https://github.com/joshua-laughner/fortformat", features = ["serde"]}
+fortformat = {version = "0.1.1", features = ["serde"]}
 indexmap = "2.5"
 ndarray = {version = "0.15", features = ["approx"]}
 netcdf = {version = "0.9.3", optional=true}
