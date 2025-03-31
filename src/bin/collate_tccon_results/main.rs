@@ -9,7 +9,11 @@ use ggg_rs::{
 use log4rs::{encode::pattern::PatternEncoder, append::console::{ConsoleAppender, Target}, Config, config::{Appender, Root}};
 
 fn main() -> ExitCode {
-    if let Err(e) = main_inner() {
+    let clargs = CollateCli::parse();
+    // This moved outside main_inner() for now to avoid panics during tests
+    // calling main_inner and trying to initialize logging more than once.
+    init_logging(clargs.verbosity.log_level_filter());
+    if let Err(e) = main_inner(clargs) {
         eprintln!("ERROR: {e:?}");
         ExitCode::FAILURE
     } else {
@@ -18,14 +22,9 @@ fn main() -> ExitCode {
 }
 
 // TODO:
-// - Verbosity CL flag
-// - After fortformat alignment issue fixed, use that SerSettings::left_align_str instead of padding
-//   the string ourselves.
 // - Test the mid-IR windows (visible seems ok)
 
-fn main_inner() -> error_stack::Result<(), CollationError> {
-    let clargs = CollateCli::parse();
-    init_logging(clargs.verbosity.log_level_filter());
+fn main_inner(clargs: CollateCli) -> error_stack::Result<(), CollationError> {
     let multiggg_file = PathBuf::from(&clargs.multiggg_file);
     let collate_version = ProgramVersion { 
         program: "collate_tccon_results".to_string(),
@@ -54,7 +53,16 @@ fn main_inner() -> error_stack::Result<(), CollationError> {
         run_dir
     ).change_context_lazy(|| CollationError::custom("An error occurred while setting up the O2 mean mole fraction provider"))?;
 
-    collate_results(&multiggg_file, indexer, prefixer, o2_provider, clargs.mode, collate_version, clargs.write_nts)
+    collate_results(
+        &multiggg_file,
+        indexer,
+        prefixer,
+        o2_provider,
+        clargs.mode,
+        collate_version,
+        clargs.output_dir.as_deref(),
+        clargs.write_nts
+    )
 }
 
 #[derive(Debug, clap::Parser)]
@@ -98,6 +106,11 @@ struct CollateCli {
 
     #[command(flatten)]
     o2_dmf_args: O2DmfCli,
+
+    /// What directory to write the output into. If not given, then output will be written
+    /// in the same directory as the multiggg.sh file.
+    #[clap(short = 'o', long)]
+    output_dir: Option<PathBuf>,
 
     #[command(flatten)]
     verbosity: Verbosity<InfoLevel>,
@@ -227,5 +240,56 @@ impl CollationIndexer for TcconColIndexer {
         } else {
             Err(CollationError::duplicate_value(new_spectrum, column_name))
         }
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use std::process::{Command, Stdio};
+
+    use ggg_rs::o2_dmf::DEFAULT_O2_DMF;
+
+    use super::*;
+
+    #[test]
+    fn test_collate_pa_benchmark_vsw() {
+        test_inner(CollationMode::VerticalColumns, "pa_ggg_benchmark.vsw");
+    }
+
+    #[test]
+    fn test_collate_pa_benchmark_tsw() {
+        test_inner(CollationMode::VmrScaleFactors, "pa_ggg_benchmark.tsw");
+    }
+
+    fn test_inner(mode: CollationMode, out_file_name: &str) {
+        let crate_root = env!("CARGO_MANIFEST_DIR");
+        let input_dir = PathBuf::from(crate_root).join("test-data").join("inputs").join("collate-tccon-results");
+        let expected_dir = PathBuf::from(crate_root).join("test-data").join("expected").join("collate-tccon-results");
+        let output_dir = PathBuf::from(crate_root).join("test-data").join("outputs").join("collate-tccon-results");
+        let clargs = CollateCli {
+            mode,
+            multiggg_file: input_dir.join("multiggg.sh"),
+            primary_detector: CitDetector::InGaAs,
+            write_nts: false,
+            prefix_file: Some(input_dir.join("secondary_prefixes.dat")),
+            o2_dmf_args: O2DmfCli { fixed_o2_dmf: Some(DEFAULT_O2_DMF), o2_dmf_file: None },
+            output_dir: Some(output_dir.clone()),
+            verbosity: Verbosity::new(0, 0), 
+        };
+        main_inner(clargs).expect("running collation should succeed");
+
+        let mut child= Command::new("diff")
+            .arg("-q")
+            .arg(expected_dir.join(out_file_name))
+            .arg(output_dir.join(out_file_name))
+            .stdout(Stdio::null())
+            .spawn()
+            .expect("Spawning diff process should not fail");
+
+        let is_same = child.wait()
+            .expect("Waiting for diff process should not fail")
+            .success();
+        assert!(is_same, "{out_file_name} did not match expected.");
     }
 }

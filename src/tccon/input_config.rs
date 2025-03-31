@@ -8,6 +8,7 @@ use itertools::Itertools;
 use crate::{collation::{CollationError, CollationPrefixer}, error::BodyError, utils::{self, get_ggg_path, parse_window_name, FileBuf, GggError}};
 
 
+#[derive(Debug)]
 pub struct PrefixEntry {
     pub start_wn: f32,
     pub end_wn: f32,
@@ -106,7 +107,7 @@ impl CollationPrefixer for TcconWindowPrefixes {
         let entry = self.get_entry(window)
         .map_err(|e| CollationError::custom(format!("Could not get entry for window '{window}': {e}")))?;
 
-        if !entry.prefix.as_ref().is_some_and(|p| window.starts_with(p)) {
+        if entry.prefix.as_ref().is_some_and(|p| window.starts_with(p)) {
             log::warn!("Window {window} already begins with {}. Please update your post processing to avoid adding this prefix yourself.", entry.prefix.as_ref().unwrap());
             Ok("")
         } else if self.all_prefixes.iter().any(|p| window.starts_with(p)) {

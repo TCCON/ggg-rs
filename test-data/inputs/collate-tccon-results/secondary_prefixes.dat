@@ -1,0 +1,15 @@
+: This file defines prefixes to prepend to windows in the .Xsw files
+: for different detectors. Each line gives a starting wavenumber,
+: ending wavenumber, and an optional prefix. ALL windows must fall
+: into one of the wavelength ranges defined in the rows below, if
+: a range should not include a prefix, leave the third, fourth, and fifth
+: columns empty. If a range should include a prefix, you must also provide
+: a suffix and group to use in the netCDF file. By convention, netCDF group
+: names should be in all caps. Also note that if you want the suffix
+: separated from the variable name by a character (such as an underscore),
+: said character must be included at the beginning of the suffix.
+:
+: Start_WN   End_WN   Prefix  NetCDF_Suffix  NetCDF_Group
+  1800.0     4000.0   m       _insb          INSB_EXPERIMENTAL
+  4000.0     11000.0  
+  11000.0    15000.0  v       _si            SI_EXPERIMENTAL

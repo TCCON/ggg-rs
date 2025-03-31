@@ -317,6 +317,7 @@ pub fn collate_results<I: CollationIndexer, P: CollationPrefixer>(
     o2_dmf_provider: Box<dyn O2DmfProvider>,
     mode: CollationMode,
     collate_version: ProgramVersion,
+    output_dir: Option<&Path>,
     write_neg_timesteps: bool
 ) -> error_stack::Result<(), CollationError> {
     let run_dir = multiggg_file.parent().ok_or_else(
@@ -407,7 +408,8 @@ pub fn collate_results<I: CollationIndexer, P: CollationPrefixer>(
     } else {
         vec![o2_dmf_provider.header_line()]
     };
-    let xsw_file = run_dir.join(format!("{runlog_name}.{}sw", mode.ext_char()));
+    let output_dir = output_dir.unwrap_or(run_dir);
+    let xsw_file = output_dir.join(format!("{runlog_name}.{}sw", mode.ext_char()));
     let f = std::fs::File::create(&xsw_file).change_context_lazy(|| CollationError::could_not_write(&xsw_file))?;
     let mut writer = std::io::BufWriter::new(f);
     let format_str = format!("(a57,a1,f13.8,{}f13.5,{}(1pe13.5))", naux - 2, columns.len() - naux);
@@ -428,13 +430,13 @@ pub fn collate_results<I: CollationIndexer, P: CollationPrefixer>(
         .change_context_lazy(|| CollationError::could_not_write(&xsw_file))?;
     info!("Results written to {}.", xsw_file.display());
 
-    missing.write_missing_report(&run_dir.join("collate_results.missing"))
+    missing.write_missing_report(&output_dir.join("collate_results.missing"))
         .unwrap_or_else(|e| log::error!("collate_results.missing may be incomplete due to an error: {e}"));
     missing.write_missing_summary(std::io::stdout())
         .unwrap_or_else(|e| log::error!("Writing the percentage of found/missing values to stdout failed: {e}"));
 
     if write_neg_timesteps {
-        report_negative_time_steps(&run_dir.join("collate_results.nts"), indexer)
+        report_negative_time_steps(&output_dir.join("collate_results.nts"), indexer)
             .unwrap_or_else(|e| log::error!("Writing the negative time steps report failed: {e}"));
     }
     Ok(())

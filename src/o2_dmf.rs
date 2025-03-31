@@ -262,7 +262,7 @@ pub struct O2DmfCli {
     /// mole fraction to use for all spectra here. The default, if none
     /// of the option to specify O2 DMFs are given, is 0.2095.
     #[clap(long, conflicts_with = "o2_dmf_file")]
-    fixed_o2_dmf: Option<f64>,
+    pub fixed_o2_dmf: Option<f64>,
 
     /// If time-varying O2 mean mole fractions are not present in the
     /// .vmr files, you can instead provide them as a list file generated
@@ -270,7 +270,7 @@ pub struct O2DmfCli {
     /// datetime on the time resolution of the priors (e.g. 3 hours) and
     /// the O2 mean dry mole fraction.
     #[clap(long)]
-    o2_dmf_file: Option<PathBuf>,
+    pub o2_dmf_file: Option<PathBuf>,
 }
 
 pub fn make_boxed_o2_dmf_provider(clargs: &O2DmfCli, run_dir: &Path) -> error_stack::Result<Box<dyn O2DmfProvider>, O2DmfError> {
