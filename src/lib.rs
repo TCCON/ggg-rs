@@ -20,6 +20,5 @@ pub mod o2_dmf;
 pub mod collation;
 /// Code supporting TCCON-focused programs
 pub mod tccon;
-
-#[cfg(test)]
-mod test_utils;
+/// Code used in multiple tests
+pub mod test_utils;

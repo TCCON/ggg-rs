@@ -4,6 +4,7 @@ use error_stack::ResultExt;
 use fortformat::{FortField, FortFormat};
 use indexmap::IndexMap;
 use itertools::Itertools;
+use log::debug;
 use serde::Deserialize;
 
 use crate::{error::{BodyError, FileLocation, HeaderError}, readers::runlogs::RunlogDataRec, utils::{self, FileBuf, GggError}};
@@ -662,20 +663,41 @@ impl<'f> approx::AbsDiffEq for PostprocData<'f> {
     }
 
     fn abs_diff_eq(&self, other: &Self, epsilon: Self::Epsilon) -> bool {
-        if self.spectrum != other.spectrum { return false; }
-        if self.aux_data.keys().any(|&k| !other.aux_data.contains_key(k)) { return false; }
-        if other.aux_data.keys().any(|&k| !self.aux_data.contains_key(k)) { return false; }
-        if self.gas_data.keys().any(|&k| !other.gas_data.contains_key(k)) { return false; }
-        if other.gas_data.keys().any(|&k| !self.gas_data.contains_key(k)) { return false; }
+        if self.spectrum != other.spectrum { 
+            debug!("spectra are not equal");
+            return false;
+        }
+        if self.aux_data.keys().any(|&k| !other.aux_data.contains_key(k)) {
+            debug!("RHS is missing at least one aux data key");
+            return false;
+        }
+        if other.aux_data.keys().any(|&k| !self.aux_data.contains_key(k)) { 
+            debug!("LHS is missing at least one aux data key");
+            return false;
+        }
+        if self.gas_data.keys().any(|&k| !other.gas_data.contains_key(k)) {
+            debug!("RHS is missing at least one gas data key");
+            return false;
+        }
+        if other.gas_data.keys().any(|&k| !self.gas_data.contains_key(k)) { 
+            debug!("LHS is missing at least one aux data key");
+            return false;
+        }
 
         for (&k, v) in self.aux_data.iter() {
             let v2 = other.aux_data.get(k).unwrap();
-            if f64::abs_diff_ne(v, v2, epsilon) { return false; }
+            if f64::abs_diff_ne(v, v2, epsilon) {
+                debug!("{k} differs between LHS and RHS");
+                return false;
+            }
         }
 
         for (&k, v) in self.gas_data.iter() {
             let v2 = other.gas_data.get(k).unwrap();
-            if f64::abs_diff_ne(v, v2, epsilon) { return false; }
+            if f64::abs_diff_ne(v, v2, epsilon) { 
+                debug!("{k} differs between LHS and RHS");
+                return false;
+            }
         }
 
         true
@@ -692,11 +714,9 @@ mod tests {
 
     #[fixture]
     fn benchmark_ray_path() -> PathBuf {
-        let test_data_dir = PathBuf::from(file!())
-            .parent().unwrap()
-            .parent().unwrap()
-            .join("test-data");
-        test_data_dir.join("pa_ggg_benchmark.ray")
+        let crate_root = env!("CARGO_MANIFEST_DIR");
+        let input_dir = PathBuf::from(crate_root).join("test-data").join("inputs").join("collate-tccon-results");
+        input_dir.join("pa_ggg_benchmark.ray")
     }
 
     #[rstest]
@@ -720,7 +740,10 @@ mod tests {
 
     #[fixture]
     fn benchmark_aia_file() -> PathBuf {
-        test_data_dir().join("pa_ggg_benchmark.vav.ada.aia")
+        test_data_dir()
+            .join("expected")
+            .join("apply-tccon-insitu-correction")
+            .join("pa_ggg_benchmark.vav.ada.aia")
     }
 
     #[rstest]
@@ -736,35 +759,35 @@ mod tests {
         let f = PostprocFile::open(&benchmark_aia_file).unwrap();
         // Only need to test the shape, program versions, corrections, and missing value. The column names
         // and fortran format will be implicitly tested by the data read test.
-        assert_eq!(f.header.nhead, 32);
-        assert_eq!(f.header.ncol, 55);
+        assert_eq!(f.header.nhead, 35);
+        assert_eq!(f.header.ncol, 56);
         assert_eq!(f.header.nrec, 4);
-        assert_eq!(f.header.naux, 25);
+        assert_eq!(f.header.naux, 26);
 
         let ex_pgrm_vers = IndexMap::from([
-            ("apply_insitu_correction".to_string(), ProgramVersion{
-                program: "apply_insitu_correction".to_string(),
-                version: "Version 1.38".to_string(),
-                date: "2020-03-20".to_string(),
-                authors: "GCT,JLL".to_string()
+            ("apply_tccon_insitu_correction".to_string(), ProgramVersion{
+                program: "apply_tccon_insitu_correction".to_string(),
+                version: "Version 1.0".to_string(),
+                date: "2025-03-31".to_string(),
+                authors: "JLL".to_string()
             }),
             ("average_results".to_string(), ProgramVersion{
                 program: "average_results".to_string(),
-                version: "Version 1.36".to_string(),
-                date: "2020-06-04".to_string(),
+                version: "Version 1.37".to_string(),
+                date: "2020-07-31".to_string(),
                 authors: "GCT,JLL".to_string()
             }),
-            ("apply_airmass_correction".to_string(), ProgramVersion{
-                program: "apply_airmass_correction".to_string(),
-                version: "Version 1.36".to_string(),
-                date: "2020-06-08".to_string(),
-                authors: "GCT,JLL".to_string()
+            ("apply_tccon_airmass_correction".to_string(), ProgramVersion{
+                program: "apply_tccon_airmass_correction".to_string(),
+                version: "Version 1.0".to_string(),
+                date: "2024-09-30".to_string(),
+                authors: "JLL".to_string()
             }),
-            ("collate_results".to_string(), ProgramVersion{
-                program: "collate_results".to_string(),
-                version: "Version 2.07".to_string(),
-                date: "2020-04-09".to_string(),
-                authors: "GCT,JLL".to_string()
+            ("collate_tccon_results".to_string(), ProgramVersion{
+                program: "collate_tccon_results".to_string(),
+                version: "Version 1.0".to_string(),
+                date: "2024-04-28".to_string(),
+                authors: "JLL".to_string()
             }),
             ("GFIT".to_string(), ProgramVersion{
                 program: "GFIT".to_string(),
@@ -774,8 +797,8 @@ mod tests {
             }),
             ("GSETUP".to_string(), ProgramVersion{
                 program: "GSETUP".to_string(),
-                version: "Version 4.60".to_string(),
-                date: "2020-04-03".to_string(),
+                version: "Version 4.70".to_string(),
+                date: "2020-06-29".to_string(),
                 authors: "GCT".to_string()
             }),
         ]);
@@ -804,7 +827,7 @@ mod tests {
         // test_correction(&f.header.correction_factors["Airmass-Dependent"], "xco_4290", -0.0483, 0.1000);
         // test_correction(&f.header.correction_factors["Airmass-Dependent"], "xluft_6146", -0.0000, 0.0000);
 
-        approx::assert_abs_diff_eq!(f.header.missing_value, 9.8755E+35);
+        approx::assert_abs_diff_eq!(f.header.missing_value, 9.8765E+35);
 
     }
 
@@ -813,14 +836,14 @@ mod tests {
         let ex_rec_1 = PostprocData {
             spectrum: "pa20040721saaaaa.043".to_string(),
             aux_data: HashMap::from([("year", 2004.55698948), ("day", 203.85815), ("hour", 20.59560), ("run", 1.0), ("lat", 45.945), ("long", -90.27300), ("zobs", 0.44200),
-                                     ("zmin", 0.46100), ("asza", 39.68400), ("azim", 242.28101), ("osds", 0.13800), ("opd", 45.02000), ("fovi", 0.00240), ("amal", 0.0),
+                                     ("zmin", 0.46083), ("solzen", 39.68400), ("azim", 242.28101), ("osds", 0.13800), ("opd", 45.02000), ("fovi", 0.00240), ("amal", 0.0),
                                      ("graw", 0.00753), ("tins", 30.3), ("pins", 0.9), ("tout", 29.1), ("pout", 950.70001), ("hout", 62.8), ("sia", 207.5), ("fvsi", 0.00720),
-                                     ("wspd", 1.7), ("wdir", 125.0)]),
-            gas_data: HashMap::from([("xluft", 9.9472E-01), ("xluft_error", 7.9155E-03), ("xhf", 6.5608E-11), ("xhf_error", 9.0112E-12), ("xh2o", 6.2161E-03), ("xh2o_error", 5.1153E-05),
-                                     ("xth2o", 6.2822E-03), ("xth2o_error", 5.6500E-05), ("xhdo", 5.3816E-03), ("xhdo_error", 5.1541E-05), ("xco", 8.4321E-08), ("xco_error", 1.5600E-09),
-                                     ("xn2o", 3.0876E-07), ("xn2o_error", 3.0009E-09), ("xch4", 1.7782E-06), ("xch4_error", 1.6033E-08), ("xlco2", 3.7259E-04), ("xlco2_error", 4.4156E-06),
-                                     ("xzco2", 3.7233E-04), ("xzco2_error", 3.7511E-06), ("xfco2", 3.7546E-04), ("xfco2_error", 4.6550E-06), ("xwco2", 3.7637E-04), ("xwco2_error", 3.8073E-06),
-                                     ("xco2", 3.8072E-04), ("xco2_error", 3.4998E-06), ("xo2", 2.0950E-01), ("xo2_error", 1.6671E-03), ("xhcl", 1.6840E-10), ("xhcl_error", 1.4365E-12)])
+                                     ("wspd", 1.7), ("wdir", 125.0), ("o2dmf", 0.2095)]),
+            gas_data: HashMap::from([("xluft", 9.94768E-01), ("xluft_error", 7.91588E-03), ("xhf", 6.56772E-11), ("xhf_error", 9.02236E-12), ("xh2o", 6.40163E-03), ("xh2o_error", 5.16205E-05),
+                                     ("xth2o", 6.29349E-03), ("xth2o_error", 5.24376E-05), ("xhdo", 5.38748E-03), ("xhdo_error", 4.83123E-05), ("xco", 8.95828E-08), ("xco_error", 1.89057E-09),
+                                     ("xn2o", 3.04336E-07), ("xn2o_error", 2.88919E-09), ("xch4", 1.73056E-06), ("xch4_error", 1.56031E-08), ("xlco2", 3.72190E-04), ("xlco2_error", 4.35539E-06),
+                                     ("xzco2", 3.72460E-04), ("xzco2_error", 3.72793E-06), ("xfco2", 3.73488E-04), ("xfco2_error", 4.61644E-06), ("xwco2", 3.72863E-04), ("xwco2_error", 4.30563E-06),
+                                     ("xco2", 3.73038E-04), ("xco2_error", 3.42234E-06), ("xo2", 2.09500E-01), ("xo2_error", 1.66710E-03), ("xhcl", 1.64385E-10), ("xhcl_error", 1.51612E-12)])
         };
         let mut f = PostprocFile::open(&benchmark_aia_file).unwrap();
         let rec = f.next_data_record().unwrap();

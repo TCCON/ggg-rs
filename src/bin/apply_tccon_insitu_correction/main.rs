@@ -190,7 +190,7 @@ fn program_version() -> ProgramVersion {
 mod tests {
     use std::path::PathBuf;
 
-    use ggg_rs::utils::test_utils::compare_output_text_files;
+    use ggg_rs::test_utils::compare_output_text_files;
     use crate::{driver, InsituCorrCli};
 
     #[test]

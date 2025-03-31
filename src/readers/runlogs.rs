@@ -217,7 +217,7 @@ where S: Serializer
 /// 
 /// ```no_run
 /// use std::path::PathBuf;
-/// use ggg_rs::runlogs::Runlog;
+/// use ggg_rs::readers::runlogs::Runlog;
 /// let runlog_path = PathBuf::from("~/ggg/runlogs/gnd/pa_ggg_benchmark.grl");
 /// let runlog = Runlog::open(&runlog_path).unwrap();
 /// for data_rec in runlog.into_iter() {
@@ -231,7 +231,7 @@ where S: Serializer
 /// 
 /// ```no_run
 /// use std::path::PathBuf;
-/// use ggg_rs::runlogs::Runlog;
+/// use ggg_rs::readers::runlogs::Runlog;
 /// let runlog_path = PathBuf::from("~/ggg/runlogs/gnd/pa_ggg_benchmark.grl");
 /// let mut runlog = Runlog::open(&runlog_path).unwrap();
 /// loop {
@@ -372,7 +372,7 @@ impl Iterator for Runlog {
 /// 
 /// ```no_run
 /// use std::path::PathBuf;
-/// use ggg_rs::runlogs::FallibleRunlog;
+/// use ggg_rs::readers::runlogs::FallibleRunlog;
 /// let runlog_path = PathBuf::from("~/ggg/runlogs/gnd/pa_ggg_benchmark.grl");
 /// let runlog = FallibleRunlog::open(&runlog_path).unwrap();
 /// for (irec, res_data_rec) in runlog.into_iter().enumerate() {
@@ -448,7 +448,10 @@ mod tests {
 
     #[fixture]
     fn benchmark_rl_path() -> PathBuf {
-        test_data_dir().join("pa_ggg_benchmark.grl")
+        test_data_dir()
+            .join("inputs")
+            .join("collate-tccon-results")
+            .join("pa_ggg_benchmark.grl")
     }
 
     #[rstest]

@@ -13,9 +13,13 @@ def main():
 
     for colname, colvals in df_expected.items():
         for row, rowval in colvals.items():
-            newval = df_new.loc[row, colname]
-            if newval != rowval:
-                print(f'Column {colname}, row {row+1} values differ: {rowval} expected, got {newval}')
+            try:
+                newval = df_new.loc[row, colname]
+            except KeyError as e:
+                print(f'{e} not in new file')
+            else:
+                if newval != rowval:
+                    print(f'Column {colname}, row {row+1} values differ: {rowval} expected, got {newval}')
 
 
 def read_file(path):

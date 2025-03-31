@@ -247,7 +247,7 @@ impl CollationIndexer for TcconColIndexer {
 #[cfg(test)]
 mod tests {
     use ggg_rs::o2_dmf::DEFAULT_O2_DMF;
-    use ggg_rs::utils::test_utils::compare_output_text_files;
+    use ggg_rs::test_utils::compare_output_text_files;
 
     use super::*;
 
