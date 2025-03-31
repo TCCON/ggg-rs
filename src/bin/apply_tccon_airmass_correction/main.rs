@@ -7,8 +7,6 @@ use fortformat::FortFormat;
 use ggg_rs::{readers::{postproc_files::open_and_iter_postproc_file, ProgramVersion}, tccon::input_config::{self, AdcfRow}, writers::postproc_files::write_postproc_header};
 use indexmap::IndexMap;
 
-mod adcf;
-
 const DEFAULT_G: f64 = 0.0;
 const DEFAULT_P: f64 = 0.0;
 
@@ -91,17 +89,13 @@ fn driver(clargs: AirmassCorrCli) -> error_stack::Result<(), CliError> {
     let (mut header, rows) = open_and_iter_postproc_file(&clargs.upstream_file)
         .change_context_lazy(|| CliError::ReadError(clargs.upstream_file.to_path_buf()))?;
 
-    // Make sure we found a number of auxiliary column, if so, add 1 to account for the new
-    // O2 DMF column.
-    let naux = 1 + header.naux;
+    // Make sure we found a number of auxiliary columns.
+    let naux = header.naux;
     let nrow = header.nrec;
 
 
     let missing_value = header.missing_value;
-    
-    // We aneed to insert an extra auxiliary column for the O2 DMF - both in the column names
-    // and the format spec
-    let mut format_spec = header.fformat;
+    let format_spec = header.fformat;
     let mut col_names = header.column_names;
 
     // Before we edit the column names, find the O2 window. This looks complicated, but all it's doing
@@ -122,24 +116,7 @@ fn driver(clargs: AirmassCorrCli) -> error_stack::Result<(), CliError> {
             }
         }).ok_or_else(|| CliError::custom("could not find O2 window"))??;
 
-    // Because we added 1 to the naux value and because the index here is 0-based,
-    // we need to subtract 1 to get back to the right index. If there were 25 aux columns
-    // before, we'd want the O2 column to be inserted at index 25 (to be the 26th) column,
-    // but we already added that 1 to naux, so naux would = 26 and naux - 1 = 25.
-    col_names.insert(naux-1, "o2dmf".to_string());
-
-    let o2_dmf_spec = fortformat::FortField::Real { 
-        width: 10,
-        precision: Some(7),
-        fmt: fortformat::format_specs::RealFmt::F,
-        scale: 0
-    };
-    // This inserts at naux because of the extra 1x spacer
-    format_spec.insert_field(naux, o2_dmf_spec).map_err(|e| CliError::custom(
-        format!("could not add the 'o2dmf' format specifier: {e}")
-    ))?;
-
-    // Also change the column names to prepend an "x" to all of the retrieved columns.
+    // Change the column names to prepend an "x" to all of the retrieved columns.
     for name in col_names[naux..].iter_mut() {
         name.insert(0, 'x');
     }
@@ -176,8 +153,7 @@ fn driver(clargs: AirmassCorrCli) -> error_stack::Result<(), CliError> {
         CliError::WriteError { path: out_file.clone(), cause: "error occurred while writing the file header".to_string() }
     )?;
 
-    // Read each row, apply airmass corrections, and write out the Xgas values. Include the
-    // O2 DMF as a new auxiliary column.
+    // Read each row, apply airmass corrections, and write out the Xgas values.
     let settings = fortformat::ser::SerSettings::default().align_left_str(true);
     let missing_value = header.missing_value;
 

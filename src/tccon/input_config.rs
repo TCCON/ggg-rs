@@ -144,7 +144,29 @@ impl RowWithKey for AdcfRow {
     }
 }
 
+#[derive(Debug, serde::Deserialize)]
+pub struct AicfRow {
+    #[serde(rename = "Gas")]
+    pub gas: String,
+    #[serde(rename = "AICF")]
+    pub aicf: f64,
+    #[serde(rename = "AICF_Err")]
+    pub aicf_error: f64,
+    #[serde(rename = "WMO_Scale")]
+    pub wmo_scale: String,
+}
+
+impl RowWithKey for AicfRow {
+    fn key(&self) -> String {
+        self.gas.clone()
+    }
+}
+
 pub fn read_adcf_file(corr_file: &Path) -> Result<IndexMap<String, AdcfRow>, GggError> {
+    read_correction_file(corr_file)
+}
+
+pub fn read_aicf_file(corr_file: &Path) -> Result<IndexMap<String, AicfRow>, GggError> {
     read_correction_file(corr_file)
 }
 

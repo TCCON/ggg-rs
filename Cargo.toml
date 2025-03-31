@@ -62,6 +62,9 @@ name = "collate_tccon_results"
 name = "apply_tccon_airmass_correction"
 
 [[bin]]
+name = "apply_tccon_insitu_correction"
+
+[[bin]]
 name = "list_spectra"
 
 [[bin]]
