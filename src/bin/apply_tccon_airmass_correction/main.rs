@@ -31,6 +31,11 @@ struct AirmassCorrCli {
     /// to airmass correct and convert to column averages. In most
     /// cases, this will be a `.vsw` or `.vav` file.
     upstream_file: PathBuf,
+
+    /// Directory in which to save the output file. If omitted, the output
+    /// file will be saved to the same directory as the upstream file.
+    #[clap(short='o', long)]
+    output_dir: Option<PathBuf>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -65,9 +70,13 @@ fn driver(clargs: AirmassCorrCli) -> error_stack::Result<(), CliError> {
         .to_os_string();
     new_name.push(".ada");
 
-    let out_file = clargs.upstream_file.parent()
-        .expect("upstream file should have a parent directory")
-        .join(new_name);
+    let out_dir = clargs.output_dir
+        .as_deref()
+        .unwrap_or_else(|| {
+            clargs.upstream_file.parent()
+            .expect("upstream file should have a parent directory")
+        });
+    let out_file = out_dir.join(new_name);
 
     let extension = clargs.upstream_file.extension().unwrap_or_default().to_str().unwrap_or_default();
     let input_is_averaged = if extension.ends_with("sw") {
@@ -95,14 +104,13 @@ fn driver(clargs: AirmassCorrCli) -> error_stack::Result<(), CliError> {
 
 
     let missing_value = header.missing_value;
-    let format_spec = header.fformat;
-    let mut col_names = header.column_names;
+    let mut col_names = header.column_names.clone();
 
     // Before we edit the column names, find the O2 window. This looks complicated, but all it's doing
-    // is finding the first window name that starts with "O2" and is not a column error amount.
+    // is finding the first window name that starts with "o2_" and is not a column error amount.
     let o2_window = col_names[naux-1..].iter()
         .fold(None, |acc, name| {
-            if !name.starts_with("o2") | name.ends_with("_error") {
+            if !name.starts_with("o2_") | name.ends_with("_error") {
                 acc
             } else if name.starts_with("o2") && acc.is_none() {
                 Some(Ok(name.to_string()))
@@ -124,7 +132,9 @@ fn driver(clargs: AirmassCorrCli) -> error_stack::Result<(), CliError> {
     // Handle replacing the "a1" column that we retain for backwards compatibility with
     // older runlog formats - this can't go in the format string because it represents a
     // commenting-out character that we don't have a field for.
-    let format_str = format_spec.fmt_string(1).replacen("1x", "a1", 1);
+    // let format_str = format_spec.fmt_string(1).replacen("1x", "a1", 1);
+    let writer_format_spec = header.fformat_without_comment();
+    let format_str = header.fformat.fmt_string(1);
 
     // Add the airmass corrections to the file header
     add_adcf_header_lines(&mut header.extra_lines, &adcfs)
@@ -139,12 +149,14 @@ fn driver(clargs: AirmassCorrCli) -> error_stack::Result<(), CliError> {
         .change_context_lazy(|| CliError::WriteError { path: out_file.to_path_buf(), cause: "creating file failed".to_string() })?;
     let mut fw = std::io::BufWriter::new(fw);
 
+    let mut program_versions = Vec::from_iter(header.program_versions.values().cloned());
+    program_versions.insert(0, program_version());
     write_postproc_header(
         &mut fw,
         col_names.len(),
         nrow,
         naux,
-        &[program_version()],
+        &program_versions,
         &header.extra_lines,
         missing_value,
         &format_str,
@@ -166,7 +178,7 @@ fn driver(clargs: AirmassCorrCli) -> error_stack::Result<(), CliError> {
         let this_o2_dmf = row.auxiliary.o2dmf;
         row.retrieved = apply_correction(&row.retrieved, &adcfs, &o2_window, this_o2_dmf, row.auxiliary.solzen, missing_value, input_is_averaged)?;
 
-        fortformat::ser::to_writer_custom(row, &format_spec, Some(&col_names), &settings, &mut fw)
+        fortformat::ser::to_writer_custom(row, &writer_format_spec, Some(&col_names), &settings, &mut fw)
             .change_context_lazy(|| CliError::WriteError { 
                 path: out_file.clone(),
                 cause: format!("error serializing data line {}", irow+1)
@@ -268,5 +280,32 @@ fn program_version() -> ProgramVersion {
         version: "Version 1.0".to_string(),
         date: "2024-09-30".to_string(),
         authors: "JLL".to_string(),
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use ggg_rs::utils::test_utils::compare_output_text_files;
+    use crate::{driver, AirmassCorrCli};
+
+    #[test]
+    fn test_airmass_correct_pa_benchmark() {
+        let crate_root = env!("CARGO_MANIFEST_DIR");
+        let input_dir = PathBuf::from(crate_root).join("test-data").join("inputs").join("apply-tccon-airmass-correction");
+        let expected_dir = PathBuf::from(crate_root).join("test-data").join("expected").join("apply-tccon-airmass-correction");
+        let output_dir = PathBuf::from(crate_root).join("test-data").join("outputs").join("apply-tccon-airmass-correction");
+
+        let clargs = AirmassCorrCli {
+            correction_file: input_dir.join("corrections_airmass_preavg.dat"),
+            upstream_file: input_dir.join("pa_ggg_benchmark.vsw"),
+            output_dir: Some(output_dir.clone())
+        };
+
+        driver(clargs).expect("Running the airmass correction should not fail.");
+
+        compare_output_text_files(&expected_dir, &output_dir, "pa_ggg_benchmark.vsw.ada");
     }
 }

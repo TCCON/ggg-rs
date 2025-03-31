@@ -1,7 +1,8 @@
 use std::{collections::HashMap, fmt::Display, io::{BufRead, BufReader}, path::{Path, PathBuf}, str::FromStr};
 
 use error_stack::ResultExt;
-use fortformat::FortFormat;
+use fortformat::{FortField, FortFormat};
+use indexmap::IndexMap;
 use itertools::Itertools;
 use serde::Deserialize;
 
@@ -488,7 +489,7 @@ pub struct PostprocFileHeader {
     pub ncol: usize,
     pub nrec: usize,
     pub naux: usize,
-    pub program_versions: HashMap<String, ProgramVersion>,
+    pub program_versions: IndexMap<String, ProgramVersion>,
     pub extra_lines: Vec<String>,
     pub missing_value: f64,
     pub fformat: FortFormat,
@@ -504,7 +505,7 @@ impl PostprocFileHeader {
         let nrec = sizes[2];
         let naux = sizes[3];
 
-        let mut program_versions = HashMap::new();
+        let mut program_versions = IndexMap::new();
         let mut extra_lines = vec![];
         let mut missing_value = None;
         let mut fformat = None;
@@ -557,6 +558,26 @@ impl PostprocFileHeader {
         })?;
 
         Ok(Self { nhead, ncol, nrec, naux, program_versions, missing_value, extra_lines, fformat, column_names })
+    }
+
+    /// Return a copy of the data fixed format where, if the second field is an "a1" format,
+    /// it is replaced with an "x".
+    /// 
+    /// GGG post processing has a bit of a quirk where the files have this "a1" field that does
+    /// not correspond to a field name. For non-TCCON uses, that column can have a colon to indicate
+    /// that a row is commented out. For TCCON, because we want the spectrum name first, that comment
+    /// column gets sandwiched between the spectrum name and first numeric auxiliary column. Because
+    /// it doesn't have an associated column name, it is tricky to serialize/deserialize, as including
+    /// it as a field on the [`AuxData`] structure would cause all the field names to be off by one,
+    /// but having it in the format string without a corresponding field causes the same issue. To
+    /// maintain compatibility with non-TCCON GGG uses, we have this option to get the format with
+    /// that value replaced by a skip, which avoids the serialization/deserialization issue.
+    pub fn fformat_without_comment(&self) -> FortFormat {
+        let mut fields = self.fformat.iter_fields().cloned().collect_vec();
+        if fields.get(1).is_some_and(|field| field == &FortField::Char { width: Some(1) }) {
+            fields[1] = FortField::Skip;
+        }
+        FortFormat::Fixed(fields)
     }
 
     fn aux_varnames(&self) -> &[String] {
@@ -720,7 +741,7 @@ mod tests {
         assert_eq!(f.header.nrec, 4);
         assert_eq!(f.header.naux, 25);
 
-        let ex_pgrm_vers = HashMap::from([
+        let ex_pgrm_vers = IndexMap::from([
             ("apply_insitu_correction".to_string(), ProgramVersion{
                 program: "apply_insitu_correction".to_string(),
                 version: "Version 1.38".to_string(),
