@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 mod template_strings;
 mod config;
+mod copying;
 
 fn main() {
 
