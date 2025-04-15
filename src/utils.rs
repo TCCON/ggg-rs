@@ -276,7 +276,8 @@ pub fn effective_vertical_path(zmin: f64, z: &[f64], d: &[f64]) -> Result<Array1
         .unwrap_or_else(|| z.len() - 1);
 
     if ifirst == 0 {
-        return Err(GggError::not_implemented("zmin is less that the first element of z"));
+        let z0 = z.get(0).unwrap_or(&-999.0);
+        return Err(GggError::not_implemented(format!("zmin ({zmin:.3}) is less that the first element of z ({z0:.3})")));
     }
 
     let dz = z[ifirst] - z[ifirst - 1];
