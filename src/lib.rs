@@ -4,6 +4,8 @@ pub mod error;
 pub mod logging;
 /// General common utilities
 pub mod utils;
+/// Helper functions for unit conversions
+pub mod units;
 /// Utilities related to interpolation
 pub mod interpolation;
 /// Reading OPUS interferograms or spectra

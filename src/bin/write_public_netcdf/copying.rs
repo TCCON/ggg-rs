@@ -1,11 +1,13 @@
-use std::marker::PhantomData;
+use std::{marker::PhantomData, ops::{Mul, MulAssign}, sync::LazyLock};
 
 use error_stack::ResultExt;
+use ggg_rs::units::dmf_conv_factor;
 use indexmap::IndexMap;
 use itertools::Itertools;
 use ndarray::{ArrayD, ArrayView1, ArrayViewD, Axis};
-use netcdf::{Extents, NcPutGet};
+use netcdf::{AttributeValue, Extents, NcPutGet};
 use num_traits::Zero;
+use regex::Regex;
 
 use crate::constants::TIME_DIM_NAME;
 
@@ -17,8 +19,12 @@ pub(crate) enum CopyError {
     ZeroDArray,
     #[error("Private file is missing the required variable '{0}'")]
     MissingReqVar(String),
+    #[error("Private file is missing the required attribute '{attr}' under '{parent}'")]
+    MissingReqAttr{parent: String, attr: String},
     #[error("Dimension '{dimname}' has length {dim_len_in_file} in the public file, but the variable '{varname}' expects it to have length {dim_len_in_var}")]
     DimLenMismatch{dimname: String, varname: String, dim_len_in_file: usize, dim_len_in_var: usize},
+    #[error("There is a problem with the configuration of variables to copy: {0}")]
+    BadConfig(String),
     #[error("Not implemented: {0}")]
     NotImplemented(String),
     #[error("An error occurred while {0}")]
@@ -26,6 +32,10 @@ pub(crate) enum CopyError {
 }
 
 impl CopyError {
+    fn missing_req_attr<P: ToString, A: ToString>(parent: P, attr: A) -> Self {
+        Self::MissingReqAttr { parent: parent.to_string(), attr: attr.to_string() }
+    }
+
     fn dim_len_mismatch<D: ToString, V: ToString>(dimname: D, varname: V, len_in_file: usize, len_in_var: usize) -> Self {
         Self::DimLenMismatch {
             dimname: dimname.to_string(),
@@ -33,6 +43,10 @@ impl CopyError {
             dim_len_in_file: len_in_file,
             dim_len_in_var: len_in_var
         }
+    }
+
+    fn bad_config<S: ToString>(problem: S) -> Self {
+        Self::BadConfig(problem.to_string())
     }
 
     pub(crate) fn not_implemented<S: ToString>(case: S) -> Self {
@@ -144,7 +158,7 @@ impl<T: Copy + Zero + NcPutGet> AuxVarCopy<T> {
     }
 }
 
-impl<T: Copy + Zero + NcPutGet> CopySet for AuxVarCopy<T> {
+impl<T: Copy + Zero + NcPutGet + MulAssign + ndarray::ScalarOperand> CopySet for AuxVarCopy<T> {
     fn copy(&self, private_file: &netcdf::File, public_file: &mut netcdf::FileMut, time_subsetter: &Subsetter) -> error_stack::Result<(), CopyError> {
         // Will need to create a variable with the same dimensions, then copy the good subset of values
         // and the attributes.
@@ -161,59 +175,22 @@ impl<T: Copy + Zero + NcPutGet> CopySet for AuxVarCopy<T> {
             .as_deref()
             .unwrap_or(&self.private_varname);
 
-        let dims = private_var.dimensions()
-            .iter()
-            .map(|dim| dim.name())
-            .collect_vec();
-        let dims_str = dims.iter()
-            .map(|dim| dim.as_str())
-            .collect_vec();
-
-        // Create the variable, which needs its dimensions created first.
-        // Handling missing dimensions here is easier than trying to collect a list of
-        // all dimensions that we need.
-        add_needed_dims(public_file, &private_var)
-            .change_context_lazy(|| CopyError::context(format!("creating public variable '{public_varname}'")))?;
-        let mut public_var = public_file.add_variable::<T>(public_varname, &dims_str)
-            .change_context_lazy(|| CopyError::context(format!("creating public variable '{public_varname}'")))?;
-
-        // Check that the first dimension is time - if so, we need to subset before we write the data.
-        // Eventually, we could allow time to be in a different position, but
-        // this is good enough for now.
-        let priv_data = private_var.get::<T, _>(Extents::All)
-            .change_context_lazy(|| CopyError::context(format!("copying aux var '{}'", self.private_varname)))?;
-        let do_subset = private_var.dimensions().get(0).is_some_and(|dim| dim.name() == TIME_DIM_NAME);
-        let data = if do_subset {
-            time_subsetter.subset_nd_var(priv_data.view(), 0)?
-        } else {
-            priv_data
-        };
-        public_var.put(Extents::All, data.view())
-            .change_context_lazy(|| CopyError::context(format!("writing data to public variable '{public_varname}'")))?;
-
-        // Finally handle the attributes. Start by inserting the attributes we have specified, then copy any attributes not excluded
-        // or overridden
-        public_var.put_attribute("long_name", self.long_name.as_str())
-            .change_context_lazy(|| CopyError::context(format!("adding 'long_name' attribute to public variable '{public_varname}'")))?;
-        for (att_name, att_value) in self.attr_overrides.iter() {
-            public_var.put_attribute(&att_name, att_value.to_owned())
-                .change_context_lazy(|| CopyError::context(format!("adding '{att_name}' attribute to public variable '{public_varname}'")))?;
-        }
-        for att in private_var.attributes() {
-            let att_name = att.name();
-            if att_name != "long_name" && !self.attr_overrides.contains_key(att_name) && !self.attr_to_remove.iter().any(|a| a == att_name) {
-                let att_value = att.value()
-                    .change_context_lazy(|| CopyError::context(format!("getting original value of attribute '{att_name}' from private variable '{}'", self.private_varname)))?;
-                public_var.put_attribute(att_name, att_value)
-                    .change_context_lazy(|| CopyError::context(format!("adding '{att_name}' to public variable '{public_varname}'")))?;
-            }
-        }
-        Ok(())
+        copy_variable::<T, _, _>(
+            public_file,
+            &private_var,
+            public_varname,
+            time_subsetter,
+            &self.long_name,
+            &self.attr_overrides,
+            &self.attr_to_remove,
+            |a| a
+        )
     }
 }
 
-pub(crate) struct XgasCopy<T: Copy> {
+pub(crate) struct XgasCopy<T: Copy + Zero + NcPutGet> {
     xgas: String,
+    gas: String,
     prior_profile: XgasAncillary,
     prior_xgas: XgasAncillary,
     ak: XgasAncillary,
@@ -221,25 +198,142 @@ pub(crate) struct XgasCopy<T: Copy> {
     data_type: PhantomData<T>,
 }
 
-impl<T: Copy> CopySet for XgasCopy<T> {
+impl<T: Copy + Zero + NcPutGet> XgasCopy<T> {
+    pub(crate) fn new<X: ToString, G: ToString>(xgas: X, gas: G) -> Self {
+        Self {
+            xgas: xgas.to_string(),
+            gas: gas.to_string(),
+            prior_profile: XgasAncillary::Inferred,
+            prior_xgas: XgasAncillary::Inferred,
+            ak: XgasAncillary::Inferred,
+            traceability_scale: XgasAncillary::Inferred,
+            data_type: PhantomData
+        }
+    }
+
+    fn xgas_error_name(&self) -> String {
+        let mut parts = self.xgas.split('_').collect_vec();
+        parts.insert(1, "error");
+        parts.join("_")
+    }
+
+    fn infer_prior_xgas_names(&self) -> (String, String) {
+        // these should be the same in the standard case
+        let private_name = format!("prior_{}", self.xgas);
+        let public_name = private_name.clone();
+        (private_name, public_name)
+    }
+
+    fn infer_prior_prof_names(&self) -> (String, String) {
+        let gas = &self.gas;
+        let private_name = format!("prior_1{gas}");
+        let public_name = format!("prior_{gas}");
+        (private_name, public_name)
+    }
+
+    fn infer_ak_names(&self) -> (String, String) {
+        // these should be the same in the standard case
+        let private_name = format!("ak_{}", self.xgas);
+        let public_name = private_name.clone();
+        (private_name, public_name)
+    }
+}
+
+impl<T: Copy + Zero + NcPutGet + MulAssign + ndarray::ScalarOperand + From<f32>> CopySet for XgasCopy<T> {
     fn copy(&self, private_file: &netcdf::File, public_file: &mut netcdf::FileMut, time_subsetter: &Subsetter) -> error_stack::Result<(), CopyError> {
         // Copy the xgas and its error, get the WMO scale and make it an attribute, copy the prior profile,
         // prior Xgas, and averaging kernels.
-        todo!()
-    }
+        let gas = &self.gas;
 
-    fn other_vars_req(&self) -> Vec<&str> {
-        let mut vars = vec![];
-        if let XgasAncillary::Shared(v) = &self.prior_profile {
-            vars.push(v.as_str());
+        // TODO: find the AICF variable and extract the WMO scale if present.
+
+        // Grab the units from the Xgas variable - we will need them to ensure that the
+        // prior profile and prior Xgas are in the same units
+
+        let xgas_var = private_file.variable(&self.xgas)
+            .ok_or_else(|| CopyError::MissingReqVar(self.xgas.clone()))?;
+        let gas_units = get_string_attr(&xgas_var, "units")
+            .change_context_lazy(|| CopyError::context(format!("getting the {} units", self.xgas)))?;
+
+        // Now copy the Xgas itself
+        copy_variable::<T, &str, _>(
+            public_file,
+            &xgas_var,
+            &self.xgas,
+            time_subsetter,
+            &format!("column average {gas} mole fraction"),
+            &IndexMap::new(),
+            &[],
+            |a| a
+        )?;
+
+        // And its error value
+        let error_name = self.xgas_error_name();
+        copy_vmr_variable_from_dset::<T, &str>(
+            private_file,
+            public_file,
+            &error_name,
+            &error_name,
+            time_subsetter,
+            &format!("column average {gas} mole fraction error"),
+            IndexMap::new(),
+            &[],
+            &gas_units
+        )?;
+
+        // And the prior Xgas value
+        if self.prior_xgas.do_copy(public_file) {
+            let (private_prxgas_name, public_prxgas_name) = self.prior_xgas.get_var_names(|| self.infer_prior_xgas_names());
+            copy_vmr_variable_from_dset::<T, &str>(
+                private_file,
+                public_file,
+                &private_prxgas_name,
+                &public_prxgas_name,
+                time_subsetter,
+                &format!("a priori {gas} column average"),
+                IndexMap::new(),
+                &[],
+                &gas_units
+            )?;
         }
-        if let XgasAncillary::Shared(v) = &self.prior_xgas {
-            vars.push(v.as_str());
+
+
+        // Now the a priori profiles. Really these should be expanded
+        // in the public files eventually, but TODO I think we'll have to
+        // do that here.
+        if self.prior_profile.do_copy(public_file) {
+            let (private_prior_name, public_prior_name) = self.prior_profile.get_var_names(|| self.infer_prior_prof_names());
+            copy_vmr_variable_from_dset::<T, &str>(
+                private_file,
+                public_file,
+                &private_prior_name,
+                &public_prior_name,
+                time_subsetter,
+                &format!("a priori {gas} profile"),
+                IndexMap::new(),
+                &[],
+                &gas_units
+            )?;
         }
-        if let XgasAncillary::Shared(v) = &self.ak {
-            vars.push(v.as_str());
+
+        // Likewise we'll copy and expand the AKs here for now
+        if self.ak.do_copy(public_file) {
+            let (private_ak_name, public_ak_name) = self.prior_profile.get_var_names(|| self.infer_ak_names());
+            let ak_var = private_file.variable(&private_ak_name)
+                .ok_or_else(|| CopyError::MissingReqVar(private_ak_name))?;
+            copy_variable::<T, &str, _>(
+                public_file,
+                &ak_var,
+                &public_ak_name,
+                time_subsetter,
+                &format!("{gas} averaging kernel"),
+                &IndexMap::new(),
+                &[],
+                |a| a
+            )?;
         }
-        vars
+
+        Ok(())
     }
 }
 
@@ -247,11 +341,50 @@ pub(crate) enum XgasAncillary {
     /// Infer which private variable to copy from the Xgas variable name
     Inferred,
     /// Copy the specified private variable (the `XgasCopy` instance will assign the correct public name)
-    Specified(String),
+    Specified{private_name: String, public_name: Option<String>},
     /// Assume that another Xgas will provide the necessary variable
-    Shared(String),
+    CopyIfFirst{private_name: String, public_name: Option<String>},
     /// Do not create this ancillary variable
     Omit,
+}
+
+impl XgasAncillary {
+    fn do_copy(&self, public_file: &netcdf::File) -> bool
+    {
+        match self {
+            XgasAncillary::Inferred => true,
+            XgasAncillary::Specified { private_name: _, public_name: _ } => true,
+            XgasAncillary::CopyIfFirst { private_name, public_name } => {
+                let public_name = public_name
+                    .as_deref()
+                    .unwrap_or(&private_name);
+                public_file.variable(public_name).is_none()
+            },
+            XgasAncillary::Omit => false,
+        }
+    }
+
+    fn get_var_names<F>(&self, infer_names_fxn: F) -> (String, String)
+    where F: FnOnce() -> (String, String) {
+        match self {
+            XgasAncillary::Inferred => infer_names_fxn(),
+            XgasAncillary::Specified { private_name, public_name } => {
+                let public_name = public_name
+                    .as_deref()
+                    .unwrap_or(&private_name)
+                    .to_owned();
+                (private_name.to_owned(), public_name)
+            },
+            XgasAncillary::CopyIfFirst { private_name, public_name } => {
+                let public_name = public_name
+                    .as_deref()
+                    .unwrap_or(&private_name)
+                    .to_owned();
+                (private_name.to_owned(), public_name)
+            },
+            XgasAncillary::Omit => infer_names_fxn(),
+        }
+    }
 }
 
 fn add_needed_dims(public_file: &mut netcdf::FileMut, private_var: &netcdf::Variable) -> error_stack::Result<(), CopyError> {
@@ -281,4 +414,151 @@ fn check_dim_exists(var_dim: &netcdf::Dimension, public_file: &netcdf::File, var
         }
     }
     Ok(false)
+}
+
+fn copy_vmr_variable_from_dset<T: Copy + Zero + NcPutGet + MulAssign + ndarray::ScalarOperand + From<f32>, S: AsRef<str>>(
+    private_file: &netcdf::File,
+    public_file: &mut netcdf::FileMut,
+    private_varname: &str,
+    public_varname: &str,
+    time_subsetter: &Subsetter,
+    long_name: &str,
+    mut attr_overrides: IndexMap<String, AttributeValue>,
+    attr_to_remove: &[S],
+    target_unit: &str,
+) -> error_stack::Result<(), CopyError> {
+    let private_var = private_file.variable(private_varname)
+        .ok_or_else(|| CopyError::MissingReqVar(private_varname.to_string()))?;
+    let var_unit = get_string_attr(&private_var, "units")
+        .change_context_lazy(|| CopyError::context(format!("getting units for {private_varname} to scale to the primary Xgas variable unit")))?;
+
+    // Only do a conversion if the units are different. This saves some
+    // multiplying and avoids any weird floating point error
+    let conv_factor = if var_unit != target_unit {
+        attr_overrides.insert("units".to_string(), target_unit.into());
+        let fac = dmf_conv_factor(&var_unit, target_unit)
+            .change_context_lazy(|| CopyError::context(format!("getting conversion factor for {private_varname} to scale to the primary Xgas variable unit")))?;
+        Some(T::from(fac))
+    } else {
+        None
+    };
+
+    copy_variable(
+        public_file,
+        &private_var,
+        public_varname,
+        time_subsetter,
+        long_name,
+        &attr_overrides,
+        attr_to_remove,
+        |mut a: ArrayD<T>| {
+            if let Some(f) = conv_factor {
+                a *= f
+            }
+            a
+        }
+    )
+}
+
+fn copy_variable<T, S, F>(
+    public_file: &mut netcdf::FileMut,
+    private_var: &netcdf::Variable,
+    public_varname: &str,
+    time_subsetter: &Subsetter,
+    long_name: &str,
+    attr_overrides: &IndexMap<String, AttributeValue>,
+    attr_to_remove: &[S],
+    transformation: F,
+) -> error_stack::Result<(), CopyError> 
+where
+    T: Copy + Zero + NcPutGet + MulAssign + ndarray::ScalarOperand,
+    S: AsRef<str>,
+    F: FnOnce(ArrayD<T>) -> ArrayD<T>,
+{
+    let private_varname = private_var.name();
+
+    let dims = private_var.dimensions()
+        .iter()
+        .map(|dim| dim.name())
+        .collect_vec();
+    let dims_str = dims.iter()
+        .map(|dim| dim.as_str())
+        .collect_vec();
+
+    // Create the variable, which needs its dimensions created first.
+    // Handling missing dimensions here is easier than trying to collect a list of
+    // all dimensions that we need.
+    add_needed_dims(public_file, &private_var)
+        .change_context_lazy(|| CopyError::context(format!("creating public variable '{public_varname}'")))?;
+    let mut public_var = public_file.add_variable::<T>(public_varname, &dims_str)
+        .change_context_lazy(|| CopyError::context(format!("creating public variable '{public_varname}'")))?;
+
+    // Check that the first dimension is time - if so, we need to subset before we write the data.
+    // Eventually, we could allow time to be in a different position, but
+    // this is good enough for now.
+    let priv_data = private_var.get::<T, _>(Extents::All)
+        .change_context_lazy(|| CopyError::context(format!("copying aux var '{private_varname}'")))?;
+    let do_subset = private_var.dimensions().get(0).is_some_and(|dim| dim.name() == TIME_DIM_NAME);
+    let data = if do_subset {
+        time_subsetter.subset_nd_var(priv_data.view(), 0)?
+    } else {
+        priv_data
+    };
+
+    let data = transformation(data);
+
+    public_var.put(Extents::All, data.view())
+        .change_context_lazy(|| CopyError::context(format!("writing data to public variable '{public_varname}'")))?;
+
+    // Finally handle the attributes. Start by inserting the attributes we have specified, then copy any attributes not excluded
+    // or overridden
+    public_var.put_attribute("long_name", long_name)
+        .change_context_lazy(|| CopyError::context(format!("adding 'long_name' attribute to public variable '{public_varname}'")))?;
+    for (att_name, att_value) in attr_overrides.iter() {
+        public_var.put_attribute(&att_name, att_value.to_owned())
+            .change_context_lazy(|| CopyError::context(format!("adding '{att_name}' attribute to public variable '{public_varname}'")))?;
+    }
+    for att in private_var.attributes() {
+        let att_name = att.name();
+        if att_name != "long_name" && !attr_overrides.contains_key(att_name) && !attr_to_remove.iter().any(|a| a.as_ref() == att_name) {
+            let att_value = att.value()
+                .change_context_lazy(|| CopyError::context(format!("getting original value of attribute '{att_name}' from private variable '{private_varname}'")))?;
+            public_var.put_attribute(att_name, att_value)
+                .change_context_lazy(|| CopyError::context(format!("adding '{att_name}' to public variable '{public_varname}'")))?;
+        }
+    }
+    Ok(())
+}
+
+fn copy_var_pre_write_helper<'v, T: Copy + Zero + NcPutGet>(
+    public_file: &'v mut netcdf::FileMut,
+    private_var: &netcdf::Variable,
+    public_varname: &str,
+) -> error_stack::Result<netcdf::VariableMut<'v>, CopyError> {
+    let dims = private_var.dimensions()
+        .iter()
+        .map(|dim| dim.name())
+        .collect_vec();
+    let dims_str = dims.iter()
+        .map(|dim| dim.as_str())
+        .collect_vec();
+
+    // Create the variable, which needs its dimensions created first.
+    // Handling missing dimensions here is easier than trying to collect a list of
+    // all dimensions that we need.
+    add_needed_dims(public_file, &private_var)
+        .change_context_lazy(|| CopyError::context(format!("creating public variable '{public_varname}'")))?;
+    let public_var = public_file.add_variable::<T>(public_varname, &dims_str)
+        .change_context_lazy(|| CopyError::context(format!("creating public variable '{public_varname}'")))?;
+
+    Ok(public_var)
+}
+
+fn get_string_attr(var: &netcdf::Variable, attr: &str) -> error_stack::Result<String, CopyError> {
+    let res: Result<String, _> = var
+        .attribute_value(attr)
+        .ok_or_else(|| CopyError::missing_req_attr(var.name(), attr))?
+        .change_context_lazy(|| CopyError::context(format!("could not read '{attr}' attribute on {}", var.name())))?
+        .try_into();
+    res.change_context_lazy(|| CopyError::context(format!("could not convert '{attr}' attribute on {} into a string", var.name())))
 }

@@ -3,7 +3,7 @@ use std::{path::{Path, PathBuf}, process::ExitCode};
 use clap::Parser;
 use clap_verbosity_flag::{InfoLevel, Verbosity};
 use constants::TIME_DIM_NAME;
-use copying::{AuxVarCopy, CopySet, Subsetter};
+use copying::{AuxVarCopy, CopySet, Subsetter, XgasCopy};
 use error_stack::ResultExt;
 use ggg_rs::{logging::init_logging, utils::nctime_to_datetime};
 use itertools::Itertools;
@@ -41,6 +41,7 @@ fn driver(clargs: Cli) -> error_stack::Result<(), CliError> {
 
     add_time_dim(&mut public_ds, &time_subsetter)?;
     add_aux_vars(&private_ds, &mut public_ds, &time_subsetter)?;
+    add_xgas_vars(&private_ds, &mut public_ds, &time_subsetter)?;
     Ok(())
 }
 
@@ -66,6 +67,8 @@ enum CliError {
     WritingDim,
     #[error("An error occurred while writing the auxiliary variables to the public file")]
     WritingAux,
+    #[error("An error occurred while writing the Xgas and related variables to the public file")]
+    WritingXgas,
     #[error("{0}")]
     Custom(&'static str),
 }
@@ -189,6 +192,22 @@ fn add_aux_vars(private_ds: &netcdf::File, public_ds: &mut netcdf::FileMut, time
     for var in aux_vars_f32 {
         var.copy(private_ds, public_ds, time_subsetter)
             .change_context(CliError::WritingAux)?;
+    }
+
+    Ok(())
+}
+
+fn add_xgas_vars(private_ds: &netcdf::File, public_ds: &mut netcdf::FileMut, time_subsetter: &Subsetter) -> error_stack::Result<(), CliError> {
+    // TODO: discover the Xgas variables. This is just a quick verification
+    let xgas_vars: Vec<XgasCopy<f32>> = vec![
+        XgasCopy::new("xch4", "ch4"),
+        XgasCopy::new("xco", "co"),
+        XgasCopy::new("xn2o", "n2o"),
+    ];
+
+    for var in xgas_vars {
+        var.copy(private_ds, public_ds, time_subsetter)
+            .change_context(CliError::WritingXgas)?;
     }
 
     Ok(())

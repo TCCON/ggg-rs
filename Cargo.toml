@@ -90,7 +90,7 @@ required-features = ["netcdf", "inprogress"]
 
 [[bin]]
 name = "write_public_netcdf"
-required-features = ["netcdf"]
+required-features = ["netcdf", "inprogress"]
 
 #[[bin]]
 #name = "plot_opus_spectra"
