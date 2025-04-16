@@ -51,14 +51,16 @@ For now, because this is a private repo, you must have an SSH key pair to authen
 configured to work for the github.com domain. 
 
 Once the repo is cloned, you can install the programs from it under your GGGPATH alongside the 
-standard Fortran programs, by running:
+standard Fortran programs, by running `make` from the directory containing this README.
+This will install the programs in `$GGGPATH/bin`.
 
-
+Note that you will see warning similar to the following at the end of the compilation:
 ```
-make
+warning: be sure to add `$GGGPATH/bin` to your PATH to be able to run the installed binaries
 ```
-
-from the directory containing this README. This will install the programs in `$GGGPATH/bin`.
+You can ignore this warning; it is issued because the Rust compiled assumes that you want to be
+able to run the programs it installed without giving the full path to them.
+Since we call GGG programs with the full path, e.g. `$GGGPATH/bin/gsetup`, this is not an issue.
 
 ### Install options
 
@@ -115,7 +117,7 @@ If you need more control over how the installation is done, you can call `cargo`
 The following command is a starting point:
 
 ```
-cargo install --features static,netcdf --path . --root $GGGPATH
+cargo install --features netcdf --path . --root $GGGPATH
 ```
 
 If you do not wish to install these programs alongside your standard GGG programs, you may pass a different
@@ -138,14 +140,17 @@ If you choose to use this route, please be aware that our ability to support cus
 There are some optional features of this crate that can be enabled using `cargo`'s `--features` flag,
 e.g. `cargo build --features static`
 
-* `static` - the netCDF library used by this crate can either link to an already built netCDF shared object
+* `static`: the netCDF library used by this crate can either link to an already built netCDF shared object
   library on your system *or* build its own netCDF and HDF5 libraries from source. The latter takes longer
   and requires `cmake` be installed on your system, but can get around some incompatible netCDF issues.
   We recommend using this feature in the `cargo install` command above because generally building the netCDF
   library this way gives fewer issues than trying to link to a system netCDF library. However, if you have
   a well-behaved system installation of netCDF, you can try installing without this feature.
-* `plotting` - this requires some additional dependencies, but will also compile programs that allow you to
+* `plotting`: this requires some additional dependencies, but will also compile programs that allow you to
   plot some GGG output files. (Currently, the only plotting program is `plot-spt` for spectral fit files.)
+* `inprogress`: including this feature will compile programs that are not complete.
+  It is intended for developers who need to test these programs; normal users should not activate this feature
+  as the programs gated behind it will produce incomplete or unvalidated output.
 
 ## Compilation or runtime errors
 
