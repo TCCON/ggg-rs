@@ -10,13 +10,12 @@ use std::ops::{Deref, DerefMut};
 use std::path::{PathBuf, Path};
 use std::str::FromStr;
 
-use chrono::{Datelike, TimeZone};
+use chrono::{DateTime, Datelike, TimeZone, Utc};
 use error_stack::ResultExt;
 use fortformat::format_specs::FortFormat;
 use itertools::Itertools;
 use log::debug;
-use ndarray::Array1;
-use regex::Regex;
+use ndarray::{Array1, ArrayView1};
 use serde::Serialize;
 use serde::{Deserialize, Deserializer, de::Error as DeserError};
 
@@ -1212,6 +1211,28 @@ fn nth_day_of_week(year: i32, month: u32, weekday: chrono::Weekday, n: Nth) -> R
     }
 }
 
+
+pub fn nctimes_to_datetime(timestamps: ArrayView1<f64>, units: &str) -> Result<Array1<DateTime<Utc>>, GggError> {
+    if units != "seconds since 1970-01-01 00:00:00" {
+        return Err(GggError::Custom(format!("Wrong units for nctime: '{units}' (currently only 'seconds since 1970-01-01 00:00:00' supported)")));
+    }
+    let it = timestamps.iter()
+        .map(|&ts| {
+            let nanos = (ts * 1_000_000_000.0).trunc() as i64;
+            let dt = DateTime::from_timestamp_nanos(nanos);
+            dt
+        });
+    Ok(Array1::from_iter(it))
+}
+
+pub fn nctime_to_datetime(timestamp: f64, units: &str) -> Result<DateTime<Utc>, GggError> {
+    if units != "seconds since 1970-01-01 00:00:00" {
+        return Err(GggError::Custom(format!("Wrong units for nctime: '{units}' (currently only 'seconds since 1970-01-01 00:00:00' supported)")));
+    }
+    let nanos = (timestamp * 1_000_000_000.0).trunc() as i64;
+    let dt = DateTime::from_timestamp_nanos(nanos);
+    Ok(dt)
+}
 
 pub fn file_sha256_hexdigest(path: &Path) -> std::io::Result<String> {
     let f = std::fs::File::open(path)?;

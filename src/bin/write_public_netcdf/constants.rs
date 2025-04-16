@@ -1,0 +1,1 @@
+pub(crate) static TIME_DIM_NAME: &'static str = "time";

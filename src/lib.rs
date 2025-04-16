@@ -1,5 +1,7 @@
 /// Common error types
 pub mod error;
+/// Helper functions for consistent logging
+pub mod logging;
 /// General common utilities
 pub mod utils;
 /// Utilities related to interpolation
