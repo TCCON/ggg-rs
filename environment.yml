@@ -1,0 +1,6 @@
+name: netcdf-for-gggrs
+channels:
+  - conda-forge
+dependencies:
+  - hdf5=1.12.2
+  - libnetcdf=4.9.1
