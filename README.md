@@ -156,11 +156,15 @@ e.g. `cargo build --features static`
 
 ### Any OS
 
-**Failed custom build command for hdf5-sys or netcdf-sys**: this usually means that the compiler could not find the netCDF and/or HDF5 libraries on your computer.
+#### Failed custom build command for hdf5-sys or netcdf-sys
+
+This usually means that the compiler could not find the netCDF and/or HDF5 libraries on your computer.
 See the [Install options](#install-options) section for ways to specify the location of the libraries or install them.
 
 
-**No libhdf5.so file**: if you get a message like:
+#### No libhdf5.so file
+
+If you get a message like:
 ```
 error while loading shared libraries: libhdf5.so.101: cannot open shared object file: No such file or directory
 ```
@@ -176,7 +180,8 @@ If you did compile with `make`, please [open an issue](https://github.com/TCCON/
 
 ### Mac
 
-**Missing xcrun**: if you get a failure to compile on Mac, check the earlier output for a line like:
+#### Missing xcrun
+If you get a failure to compile on Mac, check the earlier output for a line like:
 
 ```
 note: xcrun: error: invalid active developer path (/Library/Developer/CommandLineTools), missing xcrun at: /Library/Developer/CommandLineTools/usr/bin/xcrun
@@ -185,7 +190,8 @@ note: xcrun: error: invalid active developer path (/Library/Developer/CommandLin
 If you see this, try reinstalling the developer tools using `xcode-select --install`. This can happen even if you had previously installed the developer tools, but then upgraded MacOS since then.
 
 
-**ld linker error for netcdf**: if you get something like the following lines at the end of your compilation:
+#### ld linker error for netcdf
+If you get something like the following lines at the end of your compilation:
 
 ```
 ld: warning: directory not found for option '-L$HOME/opt/homebrew/Cellar/netcdf/4.8.1/lib/lib'
