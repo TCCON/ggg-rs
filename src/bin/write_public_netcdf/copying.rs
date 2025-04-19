@@ -11,22 +11,32 @@ use regex::Regex;
 
 use crate::constants::TIME_DIM_NAME;
 
+
+/// Represents an error that occurred while copying a variable
+/// to the public file.
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum CopyError {
+    /// Indicates that the program tried to access an out-of-bounds element on an
+    /// existing array.
     #[error("Tried access index {index} on an array dimension with length {array_len}")]
     BadIndex{index: usize, array_len: usize},
-    #[error("Tried to subset a zero-dimensional array")]
-    ZeroDArray,
+
+    /// Indicates that the input private file is missing a variable that was
+    /// expected to be present.
     #[error("Private file is missing the required variable '{0}'")]
     MissingReqVar(String),
+
+    /// Indicates that the input private file is missing an attribute (either
+    /// on a group or variable) that was expected to be present.
     #[error("Private file is missing the required attribute '{attr}' under '{parent}'")]
     MissingReqAttr{parent: String, attr: String},
+
+    /// Indicates that a dimension shared among multiple variables has a different
+    /// expected length for one variable than it was defined with.
     #[error("Dimension '{dimname}' has length {dim_len_in_file} in the public file, but the variable '{varname}' expects it to have length {dim_len_in_var}")]
     DimLenMismatch{dimname: String, varname: String, dim_len_in_file: usize, dim_len_in_var: usize},
-    #[error("There is a problem with the configuration of variables to copy: {0}")]
-    BadConfig(String),
-    #[error("Not implemented: {0}")]
-    NotImplemented(String),
+
+    /// This is a wrapper error used to provide more context to an underlying error.    
     #[error("An error occurred while {0}")]
     Context(String),
 }
@@ -45,14 +55,6 @@ impl CopyError {
         }
     }
 
-    fn bad_config<S: ToString>(problem: S) -> Self {
-        Self::BadConfig(problem.to_string())
-    }
-
-    pub(crate) fn not_implemented<S: ToString>(case: S) -> Self {
-        Self::NotImplemented(case.to_string())
-    }
-
     pub(crate) fn context<S: ToString>(ctx: S) -> Self {
         Self::Context(ctx.to_string())
     }
@@ -60,7 +62,6 @@ impl CopyError {
 
 pub(crate) trait CopySet {
     fn copy(&self, private_file: &netcdf::File, public_file: &mut netcdf::FileMut, time_subsetter: &Subsetter) -> error_stack::Result<(), CopyError>;
-    fn other_vars_req(&self) -> Vec<&str> { vec![] }
 }
 
 pub(crate) struct Subsetter {
@@ -89,7 +90,9 @@ impl Subsetter {
     pub(crate) fn subset_nd_var<T: Copy + Zero>(&self, var: ArrayViewD<T>, along_axis: usize) -> Result<ArrayD<T>, CopyError> {
         let mut shape = Vec::from_iter(var.shape().iter().map(|x| *x));
         if shape.len() == 0 {
-            return Err(CopyError::ZeroDArray)
+            // If we somehow got a 0-D array, then there is nothing to subset - 
+            // return it as-is
+            return Ok(var.to_owned())
         } else {
             shape[0] = self.len();
         }
