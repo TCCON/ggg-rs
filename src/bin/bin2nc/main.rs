@@ -106,7 +106,7 @@ fn writer_loop<W: NcWriter>(mut writer: W, runlog: Runlog, data_part: &utils::Da
 
 trait NcWriter {
     fn add_spectrum(&mut self, data_rec: &RunlogDataRec, spectrum: &Spectrum, full_spec_paths: bool) -> error_stack::Result<(), CliError>;
-    fn write_0d_var<'f, T: netcdf::NcPutGet>(nc: &'f mut netcdf::GroupMut, varname: &str, spec_idx: usize, value: T, units: &str, description: &str) 
+    fn write_0d_var<'f, T: netcdf::NcTypeDescriptor>(nc: &'f mut netcdf::GroupMut, varname: &str, spec_idx: usize, value: T, units: &str, description: &str) 
     -> error_stack::Result<netcdf::VariableMut<'f>, CliError>;
     fn write_1d_var<'f>(nc: &'f mut netcdf::GroupMut, varname: &str, spec_idx: usize, data: &ndarray::Array1<f32>, units: &str, description: &str) 
     -> error_stack::Result<netcdf::VariableMut<'f>, CliError>;
@@ -274,7 +274,7 @@ impl NcWriter for IndividualNcWriter {
         Self::write_spectrum_values(&mut root, data_rec, spectrum, &out_file, 0, true)
     }
 
-    fn write_0d_var<'f, T: netcdf::NcPutGet>(nc: &'f mut netcdf::GroupMut, varname: &str, _spec_idx: usize, value: T, units: &str, description: &str) 
+    fn write_0d_var<'f, T: netcdf::NcTypeDescriptor>(nc: &'f mut netcdf::GroupMut, varname: &str, _spec_idx: usize, value: T, units: &str, description: &str) 
     -> error_stack::Result<netcdf::VariableMut<'f>, CliError> {
         
         let mut var = nc.add_variable::<T>(varname, &[])
@@ -564,7 +564,7 @@ impl NcWriter for MultipleNcWriter {
         Self::write_spectrum_values(&mut grp, data_rec, spectrum, &self.save_file, next_idx, true)
     }
 
-    fn write_0d_var<'f, T: netcdf::NcPutGet>(nc: &'f mut netcdf::GroupMut, varname: &str, spec_idx: usize, value: T, units: &str, description: &str) 
+    fn write_0d_var<'f, T: netcdf::NcTypeDescriptor>(nc: &'f mut netcdf::GroupMut, varname: &str, spec_idx: usize, value: T, units: &str, description: &str) 
     -> error_stack::Result<netcdf::VariableMut<'f>, CliError> {
         let group_name = nc.name();
 

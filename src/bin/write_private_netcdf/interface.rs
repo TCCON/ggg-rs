@@ -4,7 +4,7 @@ use error_stack::ResultExt;
 use ggg_rs::{collation::get_window_from_col_file, tccon::input_config::TcconWindowPrefixes, utils::parse_window_name};
 use indicatif::ProgressBar;
 use ndarray::{Array, Array1, ArrayD};
-use netcdf::{AttributeValue, GroupMut, NcPutGet};
+use netcdf::{AttributeValue, GroupMut, NcTypeDescriptor};
 use crate::errors::{CliError, ReadError, VarError, WriteError};
 
 /// The general trait representing a source of data (usually a GGG output file)
@@ -171,7 +171,7 @@ pub(crate) trait VarToBe {
 /// from a group if they have to get the group out of the file within their functions.
 /// To get around this, [`GroupWriter`] methods taken instances of this struct and 
 /// write to the variable directly in their functions.
-pub(crate) struct ConcreteVarToBe<T: NcPutGet> {
+pub(crate) struct ConcreteVarToBe<T: NcTypeDescriptor> {
     name: String,
     group: Box<dyn VarGroup>,
     dimensions: Vec<&'static str>,
@@ -183,7 +183,7 @@ pub(crate) struct ConcreteVarToBe<T: NcPutGet> {
     extra_attrs: Vec<(String, AttributeValue)>
 }
 
-impl<T: NcPutGet> ConcreteVarToBe<T> {
+impl<T: NcTypeDescriptor> ConcreteVarToBe<T> {
     /// Create a new `ConcreteVarToBe`, computing the source file checksum automatically.
     /// 
     /// If you are creating multiple variables from the same source file, it will be
@@ -323,7 +323,7 @@ impl<T: NcPutGet> ConcreteVarToBe<T> {
     }
 }
 
-impl<T: NcPutGet> VarToBe for ConcreteVarToBe<T> {
+impl<T: NcTypeDescriptor> VarToBe for ConcreteVarToBe<T> {
     fn name(&self) -> &str {
         &self.name
     }
@@ -336,7 +336,7 @@ impl<T: NcPutGet> VarToBe for ConcreteVarToBe<T> {
         let full_name = format!("{}{var_suffix}", self.name);
         let mut ncvar = ncgrp.add_variable::<T>(&full_name, &self.dimensions)?;
         ncvar.set_compression(9, true)?;
-        ncvar.put(netcdf::Extents::All, self.data.view())?;
+        ncvar.put(self.data.view(), netcdf::Extents::All)?;
         ncvar.put_attribute("long_name", self.long_name.as_str())?;
         ncvar.put_attribute("units", self.units.as_str())?;
         ncvar.put_attribute("source_file_name", self.source_file_name.as_str())?;
@@ -555,7 +555,7 @@ impl StdGroupWriter {
 /// A struct representing data returned from the netCDF file.
 /// 
 /// If a `units` attribute was not found, then the `units` field will be `None`.
-pub(crate) struct VarData<T: NcPutGet> {
+pub(crate) struct VarData<T: NcTypeDescriptor> {
     pub(crate) data: ArrayD<T>,
     pub(crate) units: Option<String>,
 }
@@ -578,7 +578,7 @@ impl GroupAccessor for StdGroupWriter {
 }
 
 impl StdGroupWriter {
-    fn read_variable<T: NcPutGet>(&self, varname: &str, group: &dyn VarGroup) -> Result<VarData<T>, ReadError> {
+    fn read_variable<T: NcTypeDescriptor + Copy>(&self, varname: &str, group: &dyn VarGroup) -> Result<VarData<T>, ReadError> {
         let nc_lock = self.nc_dset.lock()
             .expect("NetCDF mutex was poisoned");
         let nc_dset = nc_lock.borrow();

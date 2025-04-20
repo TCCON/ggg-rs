@@ -1,11 +1,11 @@
-use std::{marker::PhantomData, ops::{Mul, MulAssign}, sync::LazyLock};
+use std::{marker::PhantomData, ops::MulAssign};
 
 use error_stack::ResultExt;
 use ggg_rs::units::dmf_conv_factor;
 use indexmap::IndexMap;
 use itertools::Itertools;
 use ndarray::{ArrayD, ArrayView1, ArrayViewD, Axis};
-use netcdf::{AttributeValue, Extents, NcPutGet};
+use netcdf::{AttributeValue, Extents, NcTypeDescriptor};
 use num_traits::Zero;
 use regex::Regex;
 
@@ -109,7 +109,7 @@ impl Subsetter {
 }
 
 #[derive(Debug)]
-pub(crate) struct AuxVarCopy<T: Copy + Zero + NcPutGet> {
+pub(crate) struct AuxVarCopy<T: Copy + Zero + NcTypeDescriptor> {
     /// The variable from the private file to copy.
     pub(crate) private_varname: String,
 
@@ -135,7 +135,7 @@ pub(crate) struct AuxVarCopy<T: Copy + Zero + NcPutGet> {
     data_type: PhantomData<T>
 }
 
-impl<T: Copy + Zero + NcPutGet> AuxVarCopy<T> {
+impl<T: Copy + Zero + NcTypeDescriptor> AuxVarCopy<T> {
     pub(crate) fn new<P: ToString, L: ToString>(private_varname: P, long_name: L, required: bool) -> Self {
         Self {
             private_varname: private_varname.to_string(),
@@ -161,7 +161,7 @@ impl<T: Copy + Zero + NcPutGet> AuxVarCopy<T> {
     }
 }
 
-impl<T: Copy + Zero + NcPutGet + MulAssign + ndarray::ScalarOperand> CopySet for AuxVarCopy<T> {
+impl<T: Copy + Zero + NcTypeDescriptor + MulAssign + ndarray::ScalarOperand> CopySet for AuxVarCopy<T> {
     fn copy(&self, private_file: &netcdf::File, public_file: &mut netcdf::FileMut, time_subsetter: &Subsetter) -> error_stack::Result<(), CopyError> {
         // Will need to create a variable with the same dimensions, then copy the good subset of values
         // and the attributes.
@@ -191,7 +191,7 @@ impl<T: Copy + Zero + NcPutGet + MulAssign + ndarray::ScalarOperand> CopySet for
     }
 }
 
-pub(crate) struct XgasCopy<T: Copy + Zero + NcPutGet> {
+pub(crate) struct XgasCopy<T: Copy + Zero + NcTypeDescriptor> {
     xgas: String,
     gas: String,
     prior_profile: XgasAncillary,
@@ -201,7 +201,7 @@ pub(crate) struct XgasCopy<T: Copy + Zero + NcPutGet> {
     data_type: PhantomData<T>,
 }
 
-impl<T: Copy + Zero + NcPutGet> XgasCopy<T> {
+impl<T: Copy + Zero + NcTypeDescriptor> XgasCopy<T> {
     pub(crate) fn new<X: ToString, G: ToString>(xgas: X, gas: G) -> Self {
         Self {
             xgas: xgas.to_string(),
@@ -242,7 +242,7 @@ impl<T: Copy + Zero + NcPutGet> XgasCopy<T> {
     }
 }
 
-impl<T: Copy + Zero + NcPutGet + MulAssign + ndarray::ScalarOperand + From<f32>> CopySet for XgasCopy<T> {
+impl<T: Copy + Zero + NcTypeDescriptor + MulAssign + ndarray::ScalarOperand + From<f32>> CopySet for XgasCopy<T> {
     fn copy(&self, private_file: &netcdf::File, public_file: &mut netcdf::FileMut, time_subsetter: &Subsetter) -> error_stack::Result<(), CopyError> {
         // Copy the xgas and its error, get the WMO scale and make it an attribute, copy the prior profile,
         // prior Xgas, and averaging kernels.
@@ -419,7 +419,7 @@ fn check_dim_exists(var_dim: &netcdf::Dimension, public_file: &netcdf::File, var
     Ok(false)
 }
 
-fn copy_vmr_variable_from_dset<T: Copy + Zero + NcPutGet + MulAssign + ndarray::ScalarOperand + From<f32>, S: AsRef<str>>(
+fn copy_vmr_variable_from_dset<T: Copy + Zero + NcTypeDescriptor + MulAssign + ndarray::ScalarOperand + From<f32>, S: AsRef<str>>(
     private_file: &netcdf::File,
     public_file: &mut netcdf::FileMut,
     private_varname: &str,
@@ -474,7 +474,7 @@ fn copy_variable<T, S, F>(
     transformation: F,
 ) -> error_stack::Result<(), CopyError> 
 where
-    T: Copy + Zero + NcPutGet + MulAssign + ndarray::ScalarOperand,
+    T: Copy + Zero + NcTypeDescriptor + MulAssign + ndarray::ScalarOperand,
     S: AsRef<str>,
     F: FnOnce(ArrayD<T>) -> ArrayD<T>,
 {
@@ -510,7 +510,7 @@ where
 
     let data = transformation(data);
 
-    public_var.put(Extents::All, data.view())
+    public_var.put(data.view(), Extents::All)
         .change_context_lazy(|| CopyError::context(format!("writing data to public variable '{public_varname}'")))?;
 
     // Finally handle the attributes. Start by inserting the attributes we have specified, then copy any attributes not excluded
@@ -533,7 +533,7 @@ where
     Ok(())
 }
 
-fn copy_var_pre_write_helper<'v, T: Copy + Zero + NcPutGet>(
+fn copy_var_pre_write_helper<'v, T: Copy + Zero + NcTypeDescriptor>(
     public_file: &'v mut netcdf::FileMut,
     private_var: &netcdf::Variable,
     public_varname: &str,
