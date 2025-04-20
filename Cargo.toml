@@ -8,37 +8,37 @@ resolver = "2"
 
 [dependencies]
 approx = "0.5.1"
-chrono = {version = "0.4.23", features=["serde"]}
+chrono = {version = "0.4.40", features=["serde"]}
 clap = {version = "4", features = ["derive"]}
 clap-verbosity-flag = "2.2.0"
 encoding = "0.2.33"
-itertools = "0.11.0"
-log = "0.4.20"
+itertools = "0.14.0"
+log = "0.4.27"
 log4rs = "1.2.0"
-error-stack = "0.4.1"
+error-stack = "0.5.0"
 fortformat = {version = "0.1.1", features = ["serde"]}
-indexmap = "2.5"
+indexmap = "2.9"
 ndarray = {version = "0.15", features = ["approx"]}
 netcdf = {version = "0.9.3", optional=true}
 num-traits = "0.2.16"
-pest = "2.7.5"
-pest_derive = "2.7.5"
+pest = "2.8.0"
+pest_derive = "2.8.0"
 plotly = { version = "0.8.3", features = ["kaleido"], optional=true }
 regex = "1.9.3"
-serde = { version = "1.0.193", features = ["derive"] }
-serde_json = "1.0.108"
-strum = { version = "0.25.0", features = ["derive"] }
-tabled = "0.15.0"
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1.0.140"
+strum = { version = "0.27.1", features = ["derive"] }
+tabled = "0.18.0"
 thiserror = "1.0.50"
-toml = "0.8.8"
+toml = "0.8.20"
 nalgebra = "0.33.0"
 lstsq = "0.6.0"
-ring = "0.17.8"
+ring = "0.17.14"
 hex = "0.4.3"
 rayon = "1.10.0"
-tracing = "0.1.40"
-tracing-subscriber = {version = "0.3.18", features = ["json"]}
-indicatif = "0.17.9"
+tracing = "0.1.41"
+tracing-subscriber = {version = "0.3.19", features = ["json"]}
+indicatif = "0.17.11"
 
 [dev-dependencies]
 rstest = "0.18.2"
