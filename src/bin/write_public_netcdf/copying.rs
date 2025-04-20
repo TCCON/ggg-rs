@@ -7,6 +7,7 @@ use itertools::Itertools;
 use ndarray::{ArrayD, ArrayView1, ArrayViewD, Axis};
 use netcdf::{AttributeValue, Extents, NcTypeDescriptor};
 use num_traits::Zero;
+use serde::{Deserializer, Deserialize};
 
 use crate::constants::TIME_DIM_NAME;
 
@@ -38,6 +39,10 @@ pub(crate) enum CopyError {
     /// This is a wrapper error used to provide more context to an underlying error.    
     #[error("An error occurred while {0}")]
     Context(String),
+
+    /// A type representing a general error that does not need a specific variant.
+    #[error("{0}")]
+    Custom(String),
 }
 
 impl CopyError {
@@ -56,6 +61,10 @@ impl CopyError {
 
     pub(crate) fn context<S: ToString>(ctx: S) -> Self {
         Self::Context(ctx.to_string())
+    }
+
+    pub(crate) fn custom<S: ToString>(msg: S) -> Self {
+        Self::Custom(msg.to_string())
     }
 }
 
@@ -156,13 +165,14 @@ impl Subsetter {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Deserialize, PartialEq)]
 pub(crate) struct AuxVarCopy {
     /// The variable from the private file to copy.
     pub(crate) private_varname: String,
 
     /// The name to give the variable in the output file. If `None`, the
     /// variable will have the same name as in the private file.
+    #[serde(default)]
     pub(crate) public_varname: Option<String>,
 
     /// Value to use for the long name attribute.
@@ -170,13 +180,16 @@ pub(crate) struct AuxVarCopy {
 
     /// Additional attributes to add, or values to replace private file
     /// attributes.
+    #[serde(default, deserialize_with = "de_attribute_overrides")]
     pub(crate) attr_overrides: IndexMap<String, netcdf::AttributeValue>,
 
     /// A list of private attributes to remove.
+    #[serde(default = "crate::config::default_attr_remove")]
     pub(crate) attr_to_remove: Vec<String>,
 
     /// Whether this variable is required or can be skipped if
     /// not present in the source file
+    #[serde(default = "crate::config::default_true")]
     pub(crate) required: bool,
 
 }
@@ -188,7 +201,19 @@ impl AuxVarCopy {
             public_varname: None,
             long_name: long_name.to_string(),
             attr_overrides: IndexMap::new(),
-            attr_to_remove: vec!["precision".to_string(), "standard_name".to_string()],
+            attr_to_remove: crate::config::default_attr_remove(),
+            required,
+        }
+    }
+
+    #[allow(dead_code)] // needed at least for testing
+    pub(crate) fn new_keep_attrs<P: ToString, L: ToString>(private_varname: P, long_name: L, required: bool) -> Self {
+        Self {
+            private_varname: private_varname.to_string(),
+            public_varname: None,
+            long_name: long_name.to_string(),
+            attr_overrides: IndexMap::new(),
+            attr_to_remove: vec![],
             required,
         }
     }
@@ -202,6 +227,13 @@ impl AuxVarCopy {
         let attr_name = attr_name.to_string();
         let attr_value = attr_value.into();
         self.attr_overrides.insert(attr_name, attr_value);
+        self
+    }
+
+    #[allow(dead_code)] // needed at least for testing
+    pub(crate) fn with_attr_remove<S: ToString>(mut self, attr_name: S) -> Self {
+        let attr_name = attr_name.to_string();
+        self.attr_to_remove.push(attr_name);
         self
     }
 }
@@ -235,6 +267,7 @@ impl CopySet for AuxVarCopy {
     }
 }
 
+#[derive(Debug, Deserialize)]
 pub(crate) struct XgasCopy<T: Copy + Zero + NcTypeDescriptor> {
     xgas: String,
     gas: String,
@@ -280,6 +313,24 @@ impl<T: Copy + Zero + NcTypeDescriptor> XgasCopy<T> {
             traceability_scale: XgasAncillary::Inferred,
             data_type: PhantomData
         }
+    }
+
+    pub(crate) fn new_from_varname(varname: &str, gas_long_names: IndexMap<String, String>) -> Result<Self, CopyError> {
+        if !varname.starts_with('x') {
+            return Err(CopyError::custom(format!("Expected Xgas variable name ('{varname}') to start with 'x'")));
+        }
+
+        let xgas = varname.split('_')
+            .next()
+            .ok_or_else(|| CopyError::custom(format!("Expected Xgas variable name ('{varname}') to have at least one part when split on '_'")))?
+            .to_string();
+
+        // Already checked that it starts with "x", so just take everything after the first character.
+        let gas: String = xgas.chars().get(1..).collect();
+        let gas_long = gas_long_names.get(&gas)
+            .map(|name| name.to_string())
+            .unwrap_or_else(|| gas.clone());
+        Ok(Self::new(xgas, gas, gas_long))
     }
 
     fn xgas_error_name(&self) -> String {
@@ -406,6 +457,8 @@ impl<T: Copy + Zero + NcTypeDescriptor + Mul<Output = T> + From<f32>> CopySet fo
     }
 }
 
+#[derive(Debug, Deserialize, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum XgasAncillary {
     /// Infer which private variable to copy from the Xgas variable name
     Inferred,
@@ -752,4 +805,155 @@ fn find_subset_dim(var: &netcdf::Variable, dimname: &str) -> Option<usize> {
                 acc
             }
         })
+}
+
+fn de_attribute_overrides<'de, D>(deserializer: D) -> Result<IndexMap<String,AttributeValue>, D::Error>
+where D: Deserializer<'de>
+{
+    let map = toml::Table::deserialize(deserializer)?;
+    let mut attr_overrides = IndexMap::new();
+    for (attr, val) in map.into_iter() {
+        let attr_val = match val {
+            toml::Value::String(s) => AttributeValue::Str(s),
+            toml::Value::Integer(i) => AttributeValue::Longlong(i),
+            toml::Value::Float(f) => AttributeValue::Double(f),
+            toml::Value::Boolean(b) => AttributeValue::Ushort(b as u16),
+            toml::Value::Datetime(datetime) => {
+                let dstr = datetime.to_string();
+                AttributeValue::Str(dstr)
+            },
+            toml::Value::Array(values) => {
+                let vstr = values.into_iter()
+                    .map(|v| v.to_string())
+                    .collect_vec();
+                AttributeValue::Strs(vstr)
+            },
+            toml::Value::Table(_) => {
+                return Err(serde::de::Error::custom(format!(
+                    "While reading attribute overrides, got a table for the value of attribute '{attr}'. Tables cannot be converted to netCDF attribute values."
+                )))
+            },
+        };
+        attr_overrides.insert(attr, attr_val);
+    }
+    Ok(attr_overrides)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_de_aux_var() {
+        let toml_str = r#"private_varname = "time"
+        long_name = "zero path difference time"
+        "#;
+        let aux_de: AuxVarCopy = toml::from_str(toml_str)
+            .expect("deserialization should work");
+        let aux_val = AuxVarCopy::new("time", "zero path difference time", true);
+        assert_eq!(aux_de, aux_val);
+    }
+
+    #[test]
+    fn test_de_aux_var_pub_name() {
+        let toml_str = r#"private_varname = "year"
+        long_name = "year"
+        public_varname = "decimal_year"
+        "#;
+        let aux_de: AuxVarCopy = toml::from_str(toml_str)
+            .expect("deserialization should work");
+        let aux_val = AuxVarCopy::new("year", "year", true)
+            .with_public_varname("decimal_year");
+        assert_eq!(aux_de, aux_val);
+    }
+
+    #[test]
+    fn test_de_aux_var_attrs() {
+        let toml_str = r#"private_varname = "day"
+        long_name = "day of year"
+        attr_overrides = {units = "Julian day", description = "1-based day of year"}
+        attr_to_remove = ["vmin", "vmax"]
+        "#;
+        let aux_de: AuxVarCopy = toml::from_str(toml_str)
+            .expect("deserialization should work");
+
+        let aux_val = AuxVarCopy::new_keep_attrs("day", "day of year", true)
+            .with_attr_override("units", "Julian day")
+            .with_attr_override("description", "1-based day of year")
+            .with_attr_remove("vmin")
+            .with_attr_remove("vmax");
+
+        assert_eq!(aux_de, aux_val);
+    }
+
+    #[test]
+    fn test_de_aux_var_not_req() {
+        let toml_str = r#"private_varname = "hour"
+        long_name = "UTC hour"
+        required = false
+        "#;
+        let aux_de: AuxVarCopy = toml::from_str(toml_str)
+            .expect("deserialization should work");
+
+        let aux_val = AuxVarCopy::new("hour", "UTC hour", false);
+        assert_eq!(aux_de, aux_val);
+    }
+
+    #[test]
+    fn test_de_xgas_anc_inferred() {
+        let toml_str = r#"type = "inferred""#;
+        let anc_de: XgasAncillary = toml::from_str(toml_str)
+           .expect("deserialization should work");
+        assert_eq!(anc_de, XgasAncillary::Inferred);
+    }
+
+    #[test]
+    fn test_de_xgas_anc_inferred_if_first() {
+        let toml_str = r#"type = "inferred_if_first""#;
+        let anc_de: XgasAncillary = toml::from_str(toml_str)
+           .expect("deserialization should work");
+        assert_eq!(anc_de, XgasAncillary::InferredIfFirst);
+    }
+
+    #[test]
+    fn test_de_xgas_anc_specified() {
+        let toml_str = r#"type = "specified"
+        private_name = "prior_xco2""#;
+        let anc_de: XgasAncillary = toml::from_str(toml_str)
+           .expect("deserialization should work");
+        assert_eq!(anc_de, XgasAncillary::Specified { private_name: "prior_xco2".to_string(), public_name: None });
+
+        let toml_str = r#"type = "specified"
+        private_name = "prior_1co2"
+        public_name = "prior_co2"
+        "#;
+        let anc_de: XgasAncillary = toml::from_str(toml_str)
+           .expect("deserialization should work");
+        assert_eq!(anc_de, XgasAncillary::Specified { private_name: "prior_1co2".to_string(), public_name: Some("prior_co2".to_string()) });
+    }
+
+    #[test]
+    fn test_de_xgas_anc_copy_if_first() {
+        let toml_str = r#"type = "copy_if_first"
+        private_name = "prior_xco2""#;
+        let anc_de: XgasAncillary = toml::from_str(toml_str)
+           .expect("deserialization should work");
+        assert_eq!(anc_de, XgasAncillary::CopyIfFirst { private_name: "prior_xco2".to_string(), public_name: None });
+
+        let toml_str = r#"type = "copy_if_first"
+        private_name = "prior_1co2"
+        public_name = "prior_co2"
+        "#;
+        let anc_de: XgasAncillary = toml::from_str(toml_str)
+           .expect("deserialization should work");
+        assert_eq!(anc_de, XgasAncillary::CopyIfFirst { private_name: "prior_1co2".to_string(), public_name: Some("prior_co2".to_string()) });
+    }
+
+    #[test]
+    fn test_de_xgas_anc_omit() {
+        let toml_str = r#"type = "omit""#;
+        let anc_de: XgasAncillary = toml::from_str(toml_str)
+           .expect("deserialization should work");
+        assert_eq!(anc_de, XgasAncillary::Omit);
+    }
 }

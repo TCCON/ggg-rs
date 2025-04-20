@@ -148,34 +148,7 @@ fn add_time_dim(public_ds: &mut netcdf::FileMut, time_subsetter: &Subsetter) -> 
 }
 
 fn add_aux_vars(private_ds: &netcdf::File, public_ds: &mut netcdf::FileMut, time_subsetter: &Subsetter) -> error_stack::Result<(), CliError> {
-    let aux_vars: Vec<AuxVarCopy> = vec![
-        AuxVarCopy::new("time", "time", true),
-        AuxVarCopy::new("year", "year", true),
-        AuxVarCopy::new("day", "day of year", true),
-        AuxVarCopy::new("prior_altitude", "altitude a.s.l.", true),
-        AuxVarCopy::new("ak_altitude", "altitude a.s.l.", true),
-        AuxVarCopy::new("ak_pressure", "pressure", true),
-        AuxVarCopy::new("hour", "UTC hour", true),
-        AuxVarCopy::new("lat", "latitude", true),
-        AuxVarCopy::new("long", "longitude", true),
-        AuxVarCopy::new("zobs", "observation altitude", true),
-        AuxVarCopy::new("zmin", "pressure altitude", true),
-        AuxVarCopy::new("solzen", "solar zenith angle", true),
-        AuxVarCopy::new("azim", "solar azimuth angle", true),
-        AuxVarCopy::new("tout", "atmospheric temperature", true),
-        AuxVarCopy::new("pout", "surface pressure", true),
-        AuxVarCopy::new("hout", "atmospheric humidity", true),
-        AuxVarCopy::new("sia", "average solar intensity", true),
-        AuxVarCopy::new("fvsi", "fractional variation in solar intensity", true),
-        AuxVarCopy::new("wspd", "wind speed", true),
-        AuxVarCopy::new("wdir", "wind direction", true),
-        AuxVarCopy::new("o2_mean_mole_fraction", "dry atmospheric mole fraction of oxygen", true),
-        AuxVarCopy::new("integration_operator", "integration operator", true),
-        AuxVarCopy::new("o2_7885_am_o2", "airmass", true)
-            .with_public_varname("airmass")
-            .with_attr_override("units", "1")
-            .with_attr_override("description", "airmass computed as the total vertical column of O2 divided by the total slant column of O2 retrieved from the window centered at 7885 cm-1."),
-    ];
+    let aux_vars= config::default_aux_vars();
 
     for var in aux_vars {
         var.copy(private_ds, public_ds, time_subsetter)

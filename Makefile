@@ -73,6 +73,9 @@ endif
 install: $(NC_LIB)
 	$(CARGOCMD) install $(CARGOARGS) --path . --root $(GGGPATH)
 
+test: $(NC_LIB)
+	$(CARGOCMD) test $(CARGOARGS) $(TEST_PATTERN)
+
 ifeq ("$(BUILD_ENV)", "1")
 $(NC_LIB):
 	rm -rf $(CURDIR)/.condaenv
