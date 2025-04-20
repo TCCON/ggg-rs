@@ -108,7 +108,7 @@ fn make_public_name_from_dates(private_filename: &Path, time_subsetter: &Subsett
         return Err(CliError::Custom("'units' attribute on 'time' variable is not a string").into())
     };
 
-    let times = time_subsetter.subset_nd_var(times.view(), 0)
+    let times = time_subsetter.subset_nd_array(times.view(), 0)
         .change_context(CliError::MakePubName)?;
     let (first_time, last_time) = match times.iter().minmax() {
         itertools::MinMaxResult::NoElements => {
@@ -148,14 +148,10 @@ fn add_time_dim(public_ds: &mut netcdf::FileMut, time_subsetter: &Subsetter) -> 
 }
 
 fn add_aux_vars(private_ds: &netcdf::File, public_ds: &mut netcdf::FileMut, time_subsetter: &Subsetter) -> error_stack::Result<(), CliError> {
-    let aux_vars_f64: Vec<AuxVarCopy<f64>> = vec![
+    let aux_vars: Vec<AuxVarCopy> = vec![
         AuxVarCopy::new("time", "time", true),
-    ];
-    let aux_vars_i16: Vec<AuxVarCopy<i16>> = vec![
         AuxVarCopy::new("year", "year", true),
         AuxVarCopy::new("day", "day of year", true),
-    ];
-    let aux_vars_f32: Vec<AuxVarCopy<f32>> = vec![
         AuxVarCopy::new("prior_altitude", "altitude a.s.l.", true),
         AuxVarCopy::new("ak_altitude", "altitude a.s.l.", true),
         AuxVarCopy::new("ak_pressure", "pressure", true),
@@ -181,15 +177,7 @@ fn add_aux_vars(private_ds: &netcdf::File, public_ds: &mut netcdf::FileMut, time
             .with_attr_override("description", "airmass computed as the total vertical column of O2 divided by the total slant column of O2 retrieved from the window centered at 7885 cm-1."),
     ];
 
-    for var in aux_vars_f64 {
-        var.copy(private_ds, public_ds, time_subsetter)
-            .change_context(CliError::WritingAux)?;
-    }
-    for var in aux_vars_i16 {
-        var.copy(private_ds, public_ds, time_subsetter)
-            .change_context(CliError::WritingAux)?;
-    }
-    for var in aux_vars_f32 {
+    for var in aux_vars {
         var.copy(private_ds, public_ds, time_subsetter)
             .change_context(CliError::WritingAux)?;
     }
@@ -200,9 +188,9 @@ fn add_aux_vars(private_ds: &netcdf::File, public_ds: &mut netcdf::FileMut, time
 fn add_xgas_vars(private_ds: &netcdf::File, public_ds: &mut netcdf::FileMut, time_subsetter: &Subsetter) -> error_stack::Result<(), CliError> {
     // TODO: discover the Xgas variables. This is just a quick verification
     let xgas_vars: Vec<XgasCopy<f32>> = vec![
-        XgasCopy::new("xch4", "ch4"),
-        XgasCopy::new("xco", "co"),
-        XgasCopy::new("xn2o", "n2o"),
+        XgasCopy::new("xch4", "ch4", "methane"),
+        XgasCopy::new("xco", "co", "carbon monoxide"),
+        XgasCopy::new("xn2o", "n2o", "nitrous oxide"),
     ];
 
     for var in xgas_vars {

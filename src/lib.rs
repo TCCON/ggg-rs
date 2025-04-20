@@ -4,6 +4,9 @@ pub mod error;
 pub mod logging;
 /// General common utilities
 pub mod utils;
+/// Utilities for netCDF files
+#[cfg(feature = "netcdf")]
+pub mod nc_utils;
 /// Helper functions for unit conversions
 pub mod units;
 /// Utilities related to interpolation
