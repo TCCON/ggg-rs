@@ -71,13 +71,22 @@ else
 endif
 
 install: $(NC_LIB)
-	$(CARGOCMD) install $(CARGOARGS) --path . --root $(GGGPATH)
+	$(CARGOCMD) install $(CARGOARGS) --locked --path . --root $(GGGPATH)
+
+debug: $(NC_LIB)
+	$(CARGOCMD) build $(CARGOARGS)
+
+release: $(NC_LIB)
+	$(CARGOCMD) build $(CARGOARGS) --release
 
 test: $(NC_LIB)
 	$(CARGOCMD) test $(CARGOARGS) $(TEST_PATTERN)
 
+check: $(NC_LIB)
+	$(CARGOCMD) check $(CARGOARGS)
+
 docs: $(NC_LIB)
-	$(CARGOCMD) doc $(CARGOARGS) $(TEST_PATTERN)
+	$(CARGOCMD) doc $(CARGOARGS)
 
 ifeq ("$(BUILD_ENV)", "1")
 $(NC_LIB):
