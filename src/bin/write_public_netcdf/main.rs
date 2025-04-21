@@ -160,6 +160,9 @@ fn add_aux_vars(private_ds: &netcdf::File, public_ds: &mut netcdf::FileMut, time
 
 fn add_xgas_vars(private_ds: &netcdf::File, public_ds: &mut netcdf::FileMut, time_subsetter: &Subsetter) -> error_stack::Result<(), CliError> {
     // TODO: discover the Xgas variables. This is just a quick verification
+    // My plan is that the default discovery is to find all variables matching "x[a-z0-9]+", optionally with suffixes.
+    // The suffixes should handle the experimental gases. The discovered gases are added to those manually defined.
+    // We can also exclude certain gases (e.g., "th2o", "fco2", "zco2") that are more diagnostic than the end user needs.
     let xgas_vars: Vec<XgasCopy<f32>> = vec![
         XgasCopy::new("xch4", "ch4", "methane"),
         XgasCopy::new("xco", "co", "carbon monoxide"),

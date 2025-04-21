@@ -76,6 +76,9 @@ install: $(NC_LIB)
 test: $(NC_LIB)
 	$(CARGOCMD) test $(CARGOARGS) $(TEST_PATTERN)
 
+docs: $(NC_LIB)
+	$(CARGOCMD) doc $(CARGOARGS) $(TEST_PATTERN)
+
 ifeq ("$(BUILD_ENV)", "1")
 $(NC_LIB):
 	rm -rf $(CURDIR)/.condaenv

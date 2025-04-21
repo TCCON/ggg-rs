@@ -1,5 +1,156 @@
+//! The public netCDF writer must strike a balance between being strict enough
+//! to ensure that the required variable for standard TCCON usage are included
+//! in normal operation, but also be flexible enough to allow non-standard usage.
+//! To enable more flexible use, the writer by default requires the standard TCCON
+//! variables be present, but can be configured to change the required variables.
+//! 
+//! The configuration file uses [TOML format](https://toml.io/en/). The configuration
+//! file can be broadly broken down into five sections:
+//! 
+//! - auxiliary variables,
+//! - derived variables,
+//! - Xgas variable sets,
+//! - Xgas discovery, and
+//! - default settings.
+//! 
+//! # Auxiliary variables
+//! 
+//! Auxiliary variables are those which are not directly related to one of the target 
+//! Xgases but which provide useful information about the observations. Common examples
+//! are time, latitude, longitude, solar zenith angle, etc. These are defined in the
+//! `aux` section of the TOML file as an [array of tables](https://toml.io/en/v1.0.0#array-of-tables).
+//! 
+//! The simplest way to define an auxiliary variable to copy is to give the name of the
+//! private variable in the netCDF file and what value to use as the long name:
+//! 
+//! ```toml
+//! [[aux]]
+//! private_varname = "solzen"
+//! long_name = "solar zenith angle"
+//! ```
+//! 
+//! This will copy the variable `solzen` from the private netCDF file along with all its
+//! attributes _except_ `standard_name` and `precision`, add the `long_name` attribute,
+//! and put the variable's data (subsetting to `flag == 0` data) into the public file as
+//! `solzen`. Note that the `long_name` value should follow the
+//! [CF conventions meaning](https://cfconventions.org/cf-conventions/cf-conventions.html#long-name).
+//! We prefer `long_name` over `standard_name` because the 
+//! [available standard names](https://cfconventions.org/Data/cf-standard-names/current/build/cf-standard-name-table.html)
+//! do not adequately describe remotely sensed quantities.
+//! 
+//! If instead you wanted to rename the variable in the public file, you can add the
+//! `public_varname` field:
+//! 
+//! ```toml
+//! [[aux]]
+//! private_varname = "solzen"
+//! public_varname = "solar_zenith_angle"
+//! long_name = "solar zenith angle"
+//! ```
+//! 
+//! This would rename the variable to `solar_zenith_angle` in the public file, but otherwise
+//! behave identically to above.
+//! 
+//! You can also control the attributes copied through two more fields, `attr_overrides` and
+//! `attr_to_remove`. `attr_overrides` is a TOML table of attibute names and values that will be
+//! added to the public variable. If an attribute is listed in the private file with the
+//! same name as an override, the override value in the config takes precedence. The latter
+//! is an array of attribute names to skip copying if present. (If one of these attributes is
+//! not present in the private file, nothing happens.) An example:
+//! 
+//! ```toml
+//! [[aux]]
+//! private_varname = "day"
+//! long_name = "day of year"
+//! attr_overrides = {units = "Julian day", description = "1-based day of year"}
+//! attr_to_remove = ["vmin", "vmax"]
+//! ```
+//! 
+//! This will add or replace the attributes `units` and `description` in the public file with those
+//! given here, and ensure that the `vmin` and `vmax` attributes are not copied. Take note, specifying
+//! `attr_to_remove` overrides the default list of `standard_name` and `precision`; this can be useful
+//! if you want to retain those (you can do so by specifying `attr_to_remove = []`), but if you want to
+//! exclude them, you must add them to your list.
+//! 
+//! Finally, by default any auxiliary variable listed here must be found in the private netCDF file, or
+//! the public writer stops with an error. To change this behavior so that a variable is optional, add
+//! the `required = false` field to an aux variable:
+//! 
+//! ```toml
+//! [[aux]]
+//! private_varname = "day"
+//! long_name = "day of year"
+//! required = false
+//! ```
+//! 
+//! Each auxiliary variable to copy will have its own `[[aux]]` section, for example:
+//! 
+//! ```toml
+//! [[aux]]
+//! private_varname = "time"
+//! long_name = "zero path difference UTC time"
+//! 
+//! [[aux]]
+//! private_varname = "year"
+//! long_name = "year"
+//! 
+//! [[aux]]
+//! private_varname = "day"
+//! long_name = "day of year"
+//! attr_overrides = {units = "Julian day", description = "1-based day of year"}
+//! 
+//! [[aux]]
+//! private_varname = "solzen"
+//! long_name = "solar zenith angle"
+//! ```
+//! 
+//! By default, any of the standard TCCON auxiliary variables not listed will be added. See the [Defaults](#defaults)
+//! section below for how to modify that behavior.
+//! 
+//! # Derived variables
+//! 
+//! Derived variables are similar to auxiliary variables in that they are not directly associated with a single Xgas.
+//! Unlike auxiliary variables, these cannot be simply copied from the private netCDF file. Instead, they must be
+//! computed from one or more private variables. Because of that, there are a specific set of these variables pre-defined
+//! by the public writer.
+//! 
+//! # Xgases
+//! 
+//! # Xgas discovery
+//! 
+//! # Other sections
+//! ## Gas long names
+//! For Xgases discovered automatically, rather than specified explicitly, we still want to be able to include the gas's
+//! proper name in the `long_name` attributes, rather than just its chemical formula. This section allows you to map
+//! the formula (e.g., "co2") to the proper name (e.g., "carbon dioxide"), e.g.:
+//! 
+//! ```toml
+//! [gas_long_names]
+//! co2 = "carbon dioxide"
+//! ch4 = "methane"
+//! co = "carbon monoxide"
+//! ```
+//! 
+//! Note that these are the gases, not Xgases. A default list is included if not turned off in the [Defaults](#defaults)
+//! section. See the source code for [`DEFAULT_GAS_LONG_NAMES`] for the current list. You can override any of those without
+//! turning off the defaults; e.g., setting `h2o = "dihydrogen monoxide"` in this section will replace the default of "water".
+//! 
+//! # Defaults
+//! 
+//! Unlike other sections, the `[defaults]` section does not define variables to copy; instead, it modifies how the
+//! other sections are filled in. If this section is omitted, then each of the other sections will add any missing TCCON
+//! standard variables to the actual configuration. The following options are available to change that behavior:
+//! 
+//! - `disable_all` (bool): setting this to `true` will ensure that no TCCON standard variables are added in any section.
+//!   Its default value is `false`.
+//! - `aux_vars` (bool): setting this to `false` will prevent TCCON standard auxiliary variables from being added in the
+//!   `aux` section. Its default value is `true`.
+//! - `gas_long_names` (bool): setting this to `false` will prevent the standard list of chemical formulae to proper gas
+//!   names being added to `[gas_long_names]`. Its default value is `true`.
+use std::{collections::HashSet, io::Read, path::Path};
+
 use indexmap::IndexMap;
-use serde::Deserialize;
+use serde::{de::Error, Deserialize};
 
 use crate::{copying::XgasAncillary, AuxVarCopy};
 
@@ -14,27 +165,104 @@ pub(crate) static DEFAULT_GAS_LONG_NAMES: &'static[(&'static str, &'static str)]
     ("o3", "ozone")
 ];
 
+/// Configuration for the public netCDF writer.
+/// 
+/// Users should see the [module level documentation](crate::config) for information
+/// on how to write or modify the configuration file. The structure level documentation
+/// here is for developers.
+/// 
+/// This will normally be read from a TOML file with the [`Config::from_toml_file`]
+/// function. This function will deserialize the structure from TOML as normal, but
+/// also potentially add missing default values to the various sections depending on the
+/// settings in the `defaults` field. If deserialized manually (e.g., because it needed
+/// to be deserialized from a different format than TOML), then one should call the
+/// [`Config::maybe_add_defaults`] method after deserialization, which provides this
+/// behavior.
 #[derive(Debug, Deserialize)]
 pub(crate) struct Config {
-    #[serde(default = "default_aux_vars")]
+    /// Configurations for which auxiliary variables to copy, along with attributes
+    /// to update or remove.
+    #[serde(default)]
     pub(crate) aux: Vec<AuxVarCopy>,
 
     /// A mapping of gas abbreviations (e.g., "co2") to their proper names
-    /// (e.g., "carbon dioxide"). When reading from a file, several gases
-    /// will have names set by default (those defined by [`DEFAULT_GAS_LONG_NAMES`]).
-    /// You can override the values (e.g., specify `h2o = "dihydrogen monoxide"` if
-    /// you want to use the chemical name instead of just "water"). Alternatively,
-    /// if you do not want the defaults at all, include `no_defaults = ""`. The value
-    /// does not matter, the prescence of the `no_defaults` key is all that is needed
-    /// to disable the default long names.
-    #[serde(deserialize_with = "de_gas_long_names")]
-    pub(crate) gas_long_names: IndexMap<String, String>
+    /// (e.g., "carbon dioxide").
+    #[serde(default)]
+    pub(crate) gas_long_names: IndexMap<String, String>,
+
+    /// Toggles for whether to add default values to each section.
+    /// 
+    /// # Developer note
+    /// This is included as a private field because the intended behavior is that
+    /// this is only references when first loading the configuration to determine
+    /// whether to add default values to each section, and after that, the writer
+    /// simply looks at the other fields. Originally, I considered having a `MetaConfig`
+    /// structure that held defaults and a flattened `Config`, and then deserializing
+    /// `Config` through `MetaConfig` (so the defaults could be dropped entirely),
+    /// but ran afoul of [bugs around serde flattening](https://github.com/toml-rs/toml/issues/589).
+    /// Not only was it giving the wrong location for the missing field, but seemed to
+    /// be incorrectly ignoring defaults on the inner config.
+    #[serde(default)]
+    defaults: DefaultsConfig,
 }
 
+impl Config {
+    pub(crate) fn from_toml_str(s: &str) -> Result<Self, toml::de::Error> {
+        let mut config: Config = toml::from_str(s)?;
+        config.maybe_add_defaults();
+        Ok(config)
+    }
+
+    pub(crate) fn from_toml_file(p: &Path) -> Result<Self, toml::de::Error> {
+        let mut f = std::fs::File::open(p)
+            .map_err(|e| toml::de::Error::custom(format!("error opening TOML file {}: {e}", p.display())))?;
+        let mut buf = String::new();
+        f.read_to_string(&mut buf)
+           .map_err(|e| toml::de::Error::custom(format!("error reading TOML file {}: {e}", p.display())))?;
+        Self::from_toml_str(&buf)
+    }
+
+    pub(crate) fn maybe_add_defaults(&mut self) {
+        if self.defaults.aux_vars && !self.defaults.disable_all {
+            add_default_aux_vars(self);
+        }
+
+        if self.defaults.gas_long_names && !self.defaults.disable_all {
+            add_default_gas_long_names(self);
+        }
+    }
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        let mut me = Self { aux: Default::default(), gas_long_names: Default::default(), defaults: Default::default() };
+        me.maybe_add_defaults();
+        me
+    }
+}
+
+#[derive(Debug, Deserialize, serde::Serialize)]
+struct DefaultsConfig {
+    #[serde(default)]
+    disable_all: bool,
+    #[serde(default = "default_true")]
+    aux_vars: bool,
+    #[serde(default = "default_true")]
+    gas_long_names: bool,
+}
+
+impl Default for DefaultsConfig {
+    fn default() -> Self {
+        Self { aux_vars: true, gas_long_names: true, disable_all: false }
+    }
+}
+
+/// Helper function for serde default attributes
 pub(crate) fn default_true() -> bool {
     true
 }
 
+/// Helper function for default attributes
 pub(crate) fn default_attr_remove() -> Vec<String> {
     vec![
         "precision".to_string(),
@@ -42,6 +270,7 @@ pub(crate) fn default_attr_remove() -> Vec<String> {
     ]
 }
 
+/// Helper function for the default list of auxiliary variables.
 pub(crate) fn default_aux_vars() -> Vec<AuxVarCopy> {
     vec![
         AuxVarCopy::new("time", "time", true),
@@ -77,23 +306,64 @@ pub(crate) fn default_ancillary_infer_first() -> XgasAncillary {
     XgasAncillary::InferredIfFirst
 }
 
-fn de_gas_long_names<'de, D>(deserializer: D) -> Result<IndexMap<String, String>, D::Error>
-where D: serde::Deserializer<'de>
-{
-    let mut cfg_names = IndexMap::<String, String>::deserialize(deserializer)?;
+fn add_default_aux_vars(config: &mut Config) {
+    let aux_var_names: HashSet<String> = config.aux.iter()
+        .map(|aux| aux.private_varname.clone())
+        .collect();
 
-    // Should we include the defaults?
-    let no_defaults = cfg_names.get("no_defaults").is_some();
-    if no_defaults {
-        return Ok(cfg_names);
-    }
-
-    
-    for (gas, name) in DEFAULT_GAS_LONG_NAMES {
-        let gas = gas.to_string();
-        if !cfg_names.contains_key(&gas) {
-            cfg_names.insert(gas, name.to_string());
+    for default_aux in default_aux_vars() {
+        if !aux_var_names.contains(&default_aux.private_varname) {
+            config.aux.push(default_aux);
         }
     }
-    Ok(cfg_names)
+}
+
+fn add_default_gas_long_names(config: &mut Config) {
+    for (gas, name) in DEFAULT_GAS_LONG_NAMES {
+        let gas = gas.to_string();
+        if !config.gas_long_names.contains_key(&gas) {
+            config.gas_long_names.insert(gas, name.to_string());
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_default_config() {
+        // Test that an empty config correctly defaults to including the default
+        // values.
+        let cfg = Config::from_toml_str("")
+            .expect("deserialization should not fail");
+        assert_eq!(cfg.aux.len(), default_aux_vars().len());
+        assert_eq!(cfg.gas_long_names.len(), DEFAULT_GAS_LONG_NAMES.len());
+
+        // Test that if the [defaults] section is given and empty, the individual
+        // default option fields still say to include the default values.
+        let toml_str = "[defaults]";
+        let cfg = Config::from_toml_str(toml_str)
+            .expect("deserialization should not fail");
+        assert_eq!(cfg.aux.len(), default_aux_vars().len());
+        assert_eq!(cfg.gas_long_names.len(), DEFAULT_GAS_LONG_NAMES.len());
+
+        // Test that explicitly requesting defaults works.
+        let toml_str = r#"[defaults]
+        aux_vars = true
+        gas_long_names = true
+        "#;
+        let cfg = Config::from_toml_str(toml_str)
+            .expect("deserialization should not fail");
+        assert_eq!(cfg.aux.len(), default_aux_vars().len());
+        assert_eq!(cfg.gas_long_names.len(), DEFAULT_GAS_LONG_NAMES.len());
+
+        // Test that the disable_all option for [defaults] works.
+        let toml_str = r#"[defaults]
+        disable_all = true"#;
+        let cfg = Config::from_toml_str(toml_str)
+            .expect("deserialization should not fail");
+        assert_eq!(cfg.aux.len(), 0);
+        assert_eq!(cfg.gas_long_names.len(), 0);
+    }
 }
