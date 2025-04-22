@@ -38,3 +38,13 @@ fn parts_to(dmf_unit: &str) -> Result<f32, UnknownUnitError> {
         _ => Err(UnknownUnitError::new("mole fraction", dmf_unit)),
     }
 }
+
+pub fn dmf_long_name(dmf_unit: &str) -> Result<&'static str, UnknownUnitError> {
+    match dmf_unit {
+        "parts" | "1" => Ok("parts"),
+        "ppm" => Ok("parts per million"),
+        "ppb" => Ok("parts per billion"),
+        "ppt" => Ok("parts per trillion"),
+        _ => Err(UnknownUnitError::new("mole fraction", dmf_unit))
+    }
+}

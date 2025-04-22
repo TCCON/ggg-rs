@@ -1,7 +1,7 @@
 use std::{marker::PhantomData, ops::Mul};
 
 use error_stack::ResultExt;
-use ggg_rs::{nc_utils::{self, NcArray}, units::{dmf_conv_factor, UnknownUnitError}};
+use ggg_rs::{nc_utils::{self, NcArray}, units::{dmf_conv_factor, dmf_long_name, UnknownUnitError}};
 use indexmap::IndexMap;
 use itertools::Itertools;
 use ndarray::{Array, Array1, Array2, ArrayD, ArrayView1, ArrayViewD, Axis, Dimension, Ix1, Ix2};
@@ -9,7 +9,7 @@ use netcdf::{AttributeValue, Extents, NcTypeDescriptor};
 use num_traits::Zero;
 use serde::{Deserializer, Deserialize};
 
-use crate::constants::{PRIOR_INDEX_VARNAME, TIME_DIM_NAME};
+use crate::{config::default_attr_remove, constants::{PRIOR_INDEX_VARNAME, TIME_DIM_NAME}};
 
 
 /// Represents an error that occurred while copying a variable
@@ -396,6 +396,9 @@ impl<T: Copy + Zero + NcTypeDescriptor + Mul<Output = T> + From<f32>> CopySet fo
             .ok_or_else(|| CopyError::MissingReqVar(self.xgas.clone()))?;
         let gas_units = get_string_attr(&xgas_var, "units")
             .change_context_lazy(|| CopyError::context(format!("getting the {} units", self.xgas)))?;
+        let long_units = dmf_long_name(&gas_units)
+            .unwrap_or(&gas_units);
+        let attr_to_remove = default_attr_remove();
         // let xgas_values = xgas_var.get::<f32, _>(Extents::All)
         //     .change_context_lazy(|| CopyError::context(format!("getting {} values", self.xgas)))?;
         // let xgas_values = if let Some(idim) = find_subset_dim(&xgas_var, TIME_DIM_NAME) {
@@ -406,7 +409,7 @@ impl<T: Copy + Zero + NcTypeDescriptor + Mul<Output = T> + From<f32>> CopySet fo
         // };
 
         // Now copy the Xgas itself
-        copy_vmr_variable_from_dset::<f32, &str>(
+        copy_vmr_variable_from_dset::<f32, _>(
             private_file,
             public_file,
             &self.xgas,
@@ -414,13 +417,13 @@ impl<T: Copy + Zero + NcTypeDescriptor + Mul<Output = T> + From<f32>> CopySet fo
             time_subsetter,
             &format!("column average {} mole fraction", self.gas_long),
             IndexMap::new(),
-            &[],
+            &attr_to_remove,
         &gas_units,
         )?;
 
         // And its error value
         let error_name = self.xgas_error_name();
-        copy_vmr_variable_from_dset::<f32, &str>(
+        copy_vmr_variable_from_dset::<f32, _>(
             private_file,
             public_file,
             &error_name,
@@ -428,14 +431,14 @@ impl<T: Copy + Zero + NcTypeDescriptor + Mul<Output = T> + From<f32>> CopySet fo
             time_subsetter,
             &format!("column average {} mole fraction error", self.gas_long),
             IndexMap::new(),
-            &[],
+            &attr_to_remove,
             &gas_units
         )?;
 
         // And the prior Xgas value
         let opt = self.prior_xgas.get_var_names_opt(public_file, || self.infer_prior_xgas_names());
         if let Some((private_prxgas_name, public_prxgas_name)) = opt {
-            copy_vmr_variable_from_dset::<f32, &str>(
+            copy_vmr_variable_from_dset::<f32, _>(
                 private_file,
                 public_file,
                 &private_prxgas_name,
@@ -443,7 +446,7 @@ impl<T: Copy + Zero + NcTypeDescriptor + Mul<Output = T> + From<f32>> CopySet fo
                 time_subsetter,
                 &format!("a priori {} column average", self.gas_long),
                 IndexMap::new(),
-                &[],
+                &attr_to_remove,
                 &gas_units
             )?;
         }
@@ -466,16 +469,21 @@ impl<T: Copy + Zero + NcTypeDescriptor + Mul<Output = T> + From<f32>> CopySet fo
                 .get(1)
                 .ok_or_else(|| CopyError::custom(format!("Expected '{private_prior_name}' to have altitude as the second dimension, but it has fewer than 2 dimensions")))?
                 .name();
+            let attr_overrides = IndexMap::from_iter([
+                ("units".to_string(), gas_units.as_str().into()),
+                ("long_units".to_string(), format!("{long_units} (wet mole fraction)").into()),
+                ("description".to_string(), format!("a priori profile of {}", self.gas_long).into())
+            ]);
 
-            copy_variable_new_data::<&str>(
+            copy_variable_new_data(
                 public_file,
                 &prior_var,
                 &public_prior_name,
                 prior_data.into_dyn().view(),
                 vec![TIME_DIM_NAME.to_string(), level_dim_name],
                 &format!("a priori {} profile", self.gas_long),
-                &IndexMap::from_iter([("units".to_string(), gas_units.into())]),
-                &[]
+                &attr_overrides,
+                &attr_to_remove
             )?;
         }
 
@@ -495,23 +503,24 @@ impl<T: Copy + Zero + NcTypeDescriptor + Mul<Output = T> + From<f32>> CopySet fo
                 Some(500)
             )?;
 
+            let extrap_flag_varname = format!("extrapolation_flags_{public_ak_name}");
             let level_dim_name = ak_var.dimensions()
                 .get(0)
                 .ok_or_else(|| CopyError::custom(format!("Expected AK variable '{private_ak_name}' to have altitude as the first dimension, but had no dimensions")))?
                 .name();
 
-            copy_variable_new_data::<&str>(
+            copy_variable_new_data(
                 public_file,
                 &ak_var,
                 &public_ak_name,
                 expanded_aks.into_dyn().view(),
                 vec![TIME_DIM_NAME.to_string(), level_dim_name],
                 &format!("{} averaging kernel", self.gas_long),
-                &IndexMap::new(),
-                &[]
+                &IndexMap::from_iter([("ancillary_variables".to_string(), extrap_flag_varname.as_str().into())]),
+                &attr_to_remove
             )?;
 
-            write_extrapolation_flags(public_file, &public_ak_name, ak_extrap_flags.view())?;
+            write_extrapolation_flags(public_file, &public_ak_name, &extrap_flag_varname, ak_extrap_flags.view())?;
         }
 
         Ok(())
@@ -1048,10 +1057,10 @@ fn read_and_subset_req_var<T: NcTypeDescriptor + Copy + Zero, D: Dimension>(
 fn write_extrapolation_flags(
     public_file: &mut netcdf::FileMut,
     ak_varname: &str,
+    extrap_flag_varname: &str,
     extrap_flags: ArrayView1<i8>
 ) -> error_stack::Result<(), CopyError> {
 
-    let varname = format!("extrapolation_flags_{ak_varname}");
     let flag_values = vec![-2i8, -1i8, 0i8, 1i8, 2i8];
     let flag_meanings = r#"clamped_to_min_slant_xgas
 extrapolated_below_lowest_slant_xgas_bin
@@ -1060,20 +1069,20 @@ extrapolated_above_largest_slant_xgas_bin
 clamped_to_max_slant_xgas"#;
     let flag_usage = "Please see https://tccon-wiki.caltech.edu/Main/GGG2020DataChanges for more information";
 
-    let mut var = public_file.add_variable::<i8>(&varname, &[TIME_DIM_NAME])
-        .change_context_lazy(|| CopyError::context(format!("adding variable '{varname}'")))?;
+    let mut var = public_file.add_variable::<i8>(&extrap_flag_varname, &[TIME_DIM_NAME])
+        .change_context_lazy(|| CopyError::context(format!("adding variable '{extrap_flag_varname}'")))?;
 
     var.put_attribute("long_name", format!("{ak_varname} extrapolation flags"))
-        .change_context_lazy(|| CopyError::context(format!("adding 'long_name' attribute to variable '{varname}'")))?;
+        .change_context_lazy(|| CopyError::context(format!("adding 'long_name' attribute to variable '{extrap_flag_varname}'")))?;
     var.put_attribute("flag_values", flag_values)
-        .change_context_lazy(|| CopyError::context(format!("adding 'flag_values' attribute to variable '{varname}'")))?;
+        .change_context_lazy(|| CopyError::context(format!("adding 'flag_values' attribute to variable '{extrap_flag_varname}'")))?;
     var.put_attribute("flag_meanings", flag_meanings)
-        .change_context_lazy(|| CopyError::context(format!("adding 'flag_meanings' attribute to variable '{varname}'")))?;
+        .change_context_lazy(|| CopyError::context(format!("adding 'flag_meanings' attribute to variable '{extrap_flag_varname}'")))?;
     var.put_attribute("usage", flag_usage)
-        .change_context_lazy(|| CopyError::context(format!("adding 'meanings' attribute to variable '{varname}'")))?;
+        .change_context_lazy(|| CopyError::context(format!("adding 'meanings' attribute to variable '{extrap_flag_varname}'")))?;
 
     var.put(extrap_flags, Extents::All)
-        .change_context_lazy(|| CopyError::context(format!("writing data for variable '{varname}'")))?;
+        .change_context_lazy(|| CopyError::context(format!("writing data for variable '{extrap_flag_varname}'")))?;
     Ok(())
 }
 
