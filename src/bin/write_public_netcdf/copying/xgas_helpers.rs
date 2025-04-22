@@ -3,11 +3,12 @@ use std::ops::Mul;
 
 use error_stack::ResultExt;
 use ggg_rs::{nc_utils, units::{dmf_conv_factor, UnknownUnitError}};
+use itertools::Itertools;
 use ndarray::{Array1, Array2, ArrayD, ArrayView1, Ix1, Ix2};
 use netcdf::{Extents, NcTypeDescriptor};
 use num_traits::Zero;
 
-use crate::TIME_DIM_NAME;
+use crate::{copying::copy_utils::NcChar, TIME_DIM_NAME};
 
 use super::{copy_utils::read_and_subset_req_var, find_subset_dim, get_string_attr, CopyError, Subsetter};
 
@@ -134,4 +135,46 @@ clamped_to_max_slant_xgas"#;
     var.put(extrap_flags, Extents::All)
         .change_context_lazy(|| CopyError::context(format!("writing data for variable '{extrap_flag_varname}'")))?;
     Ok(())
+}
+
+pub(super) fn get_traceability_scale(private_file: &netcdf::File, scale_varname: &str) -> error_stack::Result<String, CopyError> {
+    let scale_var = private_file.variable(scale_varname)
+        .ok_or_else(|| CopyError::MissingReqVar(scale_varname.to_string()))?;
+    // In the GGG2020.1 private files, these variables should be characters (not strings),
+    // we also aren't subsetting by time because this *should* be the same for all spectra.
+    let scale_chars = scale_var.get::<NcChar, _>(Extents::All)
+        .change_context_lazy(|| CopyError::context(format!("getting traceability scale variable '{scale_varname}' data")))?
+        .into_dimensionality::<Ix2>()
+        .change_context_lazy(|| CopyError::context(format!("converting traceability scale variable '{scale_varname}' to 2D")))?;
+
+    // Check that all slices match the first one - we require that all of the spectra are on the same scale to collapse it into
+    // an attribute.
+    let (nspec, _) = scale_chars.dim();
+    if nspec < 1 {
+        return Err(CopyError::custom(format!(
+            "Traceability scale variable '{scale_varname}' is length 0 along the first dimension"
+        )).into())
+    }
+
+    let scale_bytes = scale_chars.row(0);
+    for (i, r) in scale_chars.rows().into_iter().enumerate() {
+        if scale_bytes != r {
+            return Err(CopyError::inconsistent_value(scale_varname, 0, i).into());
+        }
+    }
+
+    // All the values are consistent, convert the bytes to a string. Rust doesn't use
+    // null-terminated strings, so strip off any such null bytes. Really this should
+    // only take them off of the end, but this works okay for now.
+    let scale_bytes = scale_bytes.into_iter()
+        .filter_map(|b| {
+            let b = u8::from(b);
+            if b == 0 {
+                None
+            } else {
+                Some(b)
+            }
+        }).collect_vec();
+    let scale = String::from_utf8_lossy(&scale_bytes).to_string();
+    Ok(scale)
 }

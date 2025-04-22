@@ -1,7 +1,7 @@
 //! Intermediate level utility functions to support copying variables
 use error_stack::ResultExt;
 use ndarray::{Array, Dimension};
-use netcdf::{Extents, NcTypeDescriptor};
+use netcdf::{types::NcVariableType, Extents, NcTypeDescriptor};
 use num_traits::Zero;
 
 use crate::TIME_DIM_NAME;
@@ -102,4 +102,31 @@ pub(super) fn check_dim_exists(var_dim: &netcdf::Dimension, public_file: &netcdf
         }
     }
     Ok(false)
+}
+
+/// Wrapper around unsigned bytes to represent a netCDF character type
+/// 
+/// From https://docs.rs/netcdf/0.11.0/netcdf/trait.NcTypeDescriptor.html#char-type,
+/// in netCDF v0.11, i8 and u8 are not considered equivalent to an NC_CHAR type.
+/// Therefore, to read an NC_CHAR-type variable, we create this structure to
+/// hold a byte as a character.
+#[repr(transparent)]
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) struct NcChar(u8);
+unsafe impl NcTypeDescriptor for NcChar {
+    fn type_descriptor() -> NcVariableType {
+        NcVariableType::Char
+    }
+}
+
+impl From<NcChar> for u8 {
+    fn from(value: NcChar) -> Self {
+        value.0
+    }
+}
+
+impl From<&NcChar> for u8 {
+    fn from(value: &NcChar) -> Self {
+        value.0
+    }
 }

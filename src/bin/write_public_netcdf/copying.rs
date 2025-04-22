@@ -12,7 +12,7 @@ use serde::{Deserializer, Deserialize};
 
 use crate::{config::default_attr_remove, constants::{PRIOR_INDEX_VARNAME, TIME_DIM_NAME}};
 use copy_utils::{add_needed_dims, add_needed_new_dims, find_subset_dim, get_string_attr};
-use xgas_helpers::{convert_dmf_array, expand_prior_profiles_from_file, expand_slant_xgas_binned_aks_from_file, write_extrapolation_flags};
+use xgas_helpers::{convert_dmf_array, expand_prior_profiles_from_file, expand_slant_xgas_binned_aks_from_file, get_traceability_scale, write_extrapolation_flags};
 use copy_helpers::{copy_variable_general, copy_variable_new_data, copy_vmr_variable_from_dset};
 
 mod copy_utils;
@@ -43,6 +43,9 @@ pub(crate) enum CopyError {
     #[error("Dimension '{dimname}' has length {dim_len_in_file} in the public file, but the variable '{varname}' expects it to have length {dim_len_in_var}")]
     DimLenMismatch{dimname: String, varname: String, dim_len_in_file: usize, dim_len_in_var: usize},
 
+    #[error("Variable '{varname}' has an inconsistent value at index {index} along dimension {dimension} (both 0-based)")]
+    InconsistentValue{varname: String, dimension: usize, index: usize},
+
     /// This is a wrapper error used to provide more context to an underlying error.    
     #[error("An error occurred while {0}")]
     Context(String),
@@ -64,6 +67,10 @@ impl CopyError {
             dim_len_in_file: len_in_file,
             dim_len_in_var: len_in_var
         }
+    }
+
+    fn inconsistent_value<V: ToString>(varname: V, dimension: usize, index: usize) -> Self {
+        Self::InconsistentValue { varname: varname.to_string(), dimension, index }
     }
 
     pub(crate) fn context<S: ToString>(ctx: S) -> Self {
@@ -352,6 +359,11 @@ impl<T: Copy + Zero + NcTypeDescriptor> XgasCopy<T> {
         "o2_7885_am_o2"
     }
 
+    fn infer_traceability_names(&self) -> (String, String) {
+        let name = format!("aicf_{}_scale", self.xgas);
+        (name.clone(), name)
+    }
+
     fn infer_prior_xgas_names(&self) -> (String, String) {
         // these should be the same in the standard case
         let private_name = format!("prior_{}", self.xgas);
@@ -393,8 +405,6 @@ impl<T: Copy + Zero + NcTypeDescriptor + Mul<Output = T> + From<f32>> CopySet fo
         // Copy the xgas and its error, get the WMO scale and make it an attribute, copy the prior profile,
         // prior Xgas, and averaging kernels.
 
-        // TODO: find the AICF variable and extract the WMO scale if present.
-
         // Grab the units from the Xgas variable - we will need them to ensure that the
         // prior profile and prior Xgas are in the same units. Also go ahead and get+subset
         // the Xgas value, as we'll need that for the AKs.
@@ -406,6 +416,17 @@ impl<T: Copy + Zero + NcTypeDescriptor + Mul<Output = T> + From<f32>> CopySet fo
         let long_units = dmf_long_name(&gas_units)
             .unwrap_or(&gas_units);
         let attr_to_remove = default_attr_remove();
+        let traceability_scale = if let Some((private_scale_name, _)) = self.traceability_scale.get_var_names_opt(public_file, || self.infer_traceability_names()) {
+            let scale = get_traceability_scale(private_file, &private_scale_name)?;
+            dbg!(&scale);
+            if scale.is_empty() {
+                "N/A".to_string()
+            } else {
+                scale
+            }
+        } else {
+            "N/A".to_string()
+        };
 
         // Now copy the Xgas itself
         copy_vmr_variable_from_dset::<f32, _>(
@@ -415,7 +436,9 @@ impl<T: Copy + Zero + NcTypeDescriptor + Mul<Output = T> + From<f32>> CopySet fo
             &self.xgas,
             time_subsetter,
             &format!("column average {} mole fraction", self.gas_long),
-            IndexMap::new(),
+            IndexMap::from_iter([
+                ("wmo_or_analogous_scale".to_string(), traceability_scale.into())
+            ]),
             &attr_to_remove,
         &gas_units,
         )?;
