@@ -1,7 +1,7 @@
 use std::{marker::PhantomData, ops::Mul};
 
 use error_stack::ResultExt;
-use ggg_rs::{nc_utils::{self, NcArray}, units::dmf_conv_factor};
+use ggg_rs::{nc_utils::{self, NcArray}, units::{dmf_conv_factor, UnknownUnitError}};
 use indexmap::IndexMap;
 use itertools::Itertools;
 use ndarray::{Array, Array1, Array2, ArrayD, ArrayView1, ArrayViewD, Axis, Dimension, Ix1, Ix2};
@@ -9,7 +9,7 @@ use netcdf::{AttributeValue, Extents, NcTypeDescriptor};
 use num_traits::Zero;
 use serde::{Deserializer, Deserialize};
 
-use crate::constants::{AK_ALTITUDE_DIM_NAME, TIME_DIM_NAME};
+use crate::constants::{PRIOR_INDEX_VARNAME, TIME_DIM_NAME};
 
 
 /// Represents an error that occurred while copying a variable
@@ -449,20 +449,33 @@ impl<T: Copy + Zero + NcTypeDescriptor + Mul<Output = T> + From<f32>> CopySet fo
         }
 
 
-        // Now the a priori profiles. They will not be expanded,
-        // that must now be done in the private files.
+        // Now the a priori profiles. They will (for now) be expanded
+        // here.
         let opt = self.prior_profile.get_var_names_opt(&public_file, || self.infer_prior_prof_names());
         if let Some((private_prior_name, public_prior_name)) = opt {
-            copy_vmr_variable_from_dset::<T, &str>(
-                private_file,
-                public_file,
+            let prior_var = private_file.variable(&private_prior_name)
+                .ok_or_else(|| CopyError::MissingReqVar(private_prior_name.clone()))?;
+            let prior_data = expand_prior_profiles_from_file(
+                private_file, 
                 &private_prior_name,
+                PRIOR_INDEX_VARNAME,
+                &gas_units,
+                time_subsetter
+            )?;
+            let level_dim_name = prior_var.dimensions()
+                .get(1)
+                .ok_or_else(|| CopyError::custom(format!("Expected '{private_prior_name}' to have altitude as the second dimension, but it has fewer than 2 dimensions")))?
+                .name();
+
+            copy_variable_new_data::<&str>(
+                public_file,
+                &prior_var,
                 &public_prior_name,
-                time_subsetter,
+                prior_data.into_dyn().view(),
+                vec![TIME_DIM_NAME.to_string(), level_dim_name],
                 &format!("a priori {} profile", self.gas_long),
-                IndexMap::new(),
-                &[],
-                &gas_units
+                &IndexMap::from_iter([("units".to_string(), gas_units.into())]),
+                &[]
             )?;
         }
 
@@ -482,12 +495,17 @@ impl<T: Copy + Zero + NcTypeDescriptor + Mul<Output = T> + From<f32>> CopySet fo
                 Some(500)
             )?;
 
+            let level_dim_name = ak_var.dimensions()
+                .get(0)
+                .ok_or_else(|| CopyError::custom(format!("Expected AK variable '{private_ak_name}' to have altitude as the first dimension, but had no dimensions")))?
+                .name();
+
             copy_variable_new_data::<&str>(
                 public_file,
                 &ak_var,
                 &public_ak_name,
                 expanded_aks.into_dyn().view(),
-                vec![TIME_DIM_NAME.to_string(), AK_ALTITUDE_DIM_NAME.to_string()],
+                vec![TIME_DIM_NAME.to_string(), level_dim_name],
                 &format!("{} averaging kernel", self.gas_long),
                 &IndexMap::new(),
                 &[]
@@ -635,6 +653,18 @@ fn check_dim_exists(var_dim: &netcdf::Dimension, public_file: &netcdf::File, var
     Ok(false)
 }
 
+fn convert_dmf_array<T>(mut data: ArrayD<T>, orig_unit: &str, target_unit: &str) -> Result<ArrayD<T>, UnknownUnitError> 
+where T: Copy + Zero + NcTypeDescriptor + Mul<Output = T> + From<f32>
+{
+    // Only do a conversion if the units are different. This saves some
+    // multiplying and avoids any weird floating point error
+    if orig_unit != target_unit {
+        let conv_factor = dmf_conv_factor(&orig_unit, target_unit)?;
+        data.mapv_inplace(|el| el * T::from(conv_factor));
+    }
+    Ok(data)
+}
+
 /// Helper function that copies a variable with mole fraction data.
 /// This ensures that the units match `target_unit`, which should
 /// normally be the unit that the Xgas values are in.
@@ -657,22 +687,15 @@ fn copy_vmr_variable_from_dset<T: Copy + Zero + NcTypeDescriptor + Mul<Output = 
 
     let data = private_var.get::<T, _>(Extents::All)
         .change_context_lazy(|| CopyError::context(format!("reading variable '{private_varname}'")))?;
-    let do_subset_along = find_subset_dim(&private_var, TIME_DIM_NAME);
-    let mut data = if let Some(idim) = do_subset_along {
+    let do_subset_along = find_subset_dim(&private_var, TIME_DIM_NAME);    let data = if let Some(idim) = do_subset_along {
         time_subsetter.subset_nd_array(data.view(), idim)?
     } else {
         data
     };
 
-    // Only do a conversion if the units are different. This saves some
-    // multiplying and avoids any weird floating point error
-    if var_unit != target_unit {
-        let conv_factor = dmf_conv_factor(&var_unit, target_unit)
-            .map(|fac| T::from(fac))
+    let data = convert_dmf_array(data, &var_unit, target_unit)
            .change_context_lazy(|| CopyError::context(format!("getting conversion factor for {private_varname} to scale to the primary Xgas variable unit")))?;
-        data.mapv_inplace(|el| el * conv_factor);
-        attr_overrides.insert("units".to_string(), target_unit.into());
-    }
+    attr_overrides.insert("units".to_string(), target_unit.into());
     
     let mut public_var = copy_var_pre_write_helper::<T>(public_file, &private_var, public_varname, None)?;
     public_var.put(data.view(), Extents::All)
@@ -957,6 +980,46 @@ fn expand_slant_xgas_binned_aks_from_file(
     ).change_context_lazy(|| CopyError::custom(format!("expanding '{ak_varname}'")))?;
 
     Ok((expanded_aks, extrap_flags))
+}
+
+fn expand_prior_profiles_from_file(
+    private_file: &netcdf::File,
+    prior_varname: &str,
+    prior_index_varname: &str,
+    target_unit: &str,
+    time_subsetter: &Subsetter
+) -> error_stack::Result<Array2<f32>, CopyError> {
+    // Get the compact prior profiles and convert them to the target units
+    let prior_var = private_file.variable(prior_varname)
+        .ok_or_else(|| CopyError::MissingReqVar(prior_varname.to_string()))?;
+    let prior_data = prior_var.get(Extents::All)
+        .change_context_lazy(|| CopyError::context(format!("getting data for prior profile variable '{prior_varname}'")))?;
+    let prior_unit = get_string_attr(&prior_var, "units")?;
+    let prior_data = convert_dmf_array(prior_data, &prior_unit, target_unit)
+        .change_context_lazy(|| CopyError::context(format!("converting prior profile variable '{prior_varname}' units")))?;
+
+    // Get the prior index
+    let prior_index_var = private_file.variable(prior_index_varname)
+        .ok_or_else(|| CopyError::MissingReqVar(prior_index_varname.to_string()))?;
+    let prior_index = prior_index_var.get::<u64, _>(Extents::All)
+        .change_context_lazy(|| CopyError::context(format!("getting data for prior index variable '{prior_index_varname}'")))?
+        .mapv(|v| v as usize);
+
+    let prior_index = if let Some(idim) = find_subset_dim(&prior_index_var, TIME_DIM_NAME) {
+        time_subsetter.subset_nd_array(prior_index.view(), idim)?
+    } else {
+        prior_index
+    };
+
+    // Convert the arrays to the correct dimensionality and expand
+    let prior_data = prior_data.into_dimensionality::<Ix2>()
+        .change_context_lazy(|| CopyError::context(format!("converting prior profile '{prior_varname}' to 2D")))?;
+    let prior_index = prior_index.into_dimensionality::<Ix1>()
+        .change_context_lazy(|| CopyError::context(format!("converting prior index '{prior_index_varname}' to 1D")))?;
+    let expanded_priors = nc_utils::expand_priors(prior_data.view(), prior_index.view())
+        .change_context_lazy(|| CopyError::context(format!("expanding prior variable '{prior_varname}'")))?;
+
+    Ok(expanded_priors)
 }
 
 fn read_and_subset_req_var<T: NcTypeDescriptor + Copy + Zero, D: Dimension>(

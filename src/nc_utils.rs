@@ -1,6 +1,6 @@
-use interp::{interp_array, interp_slice};
+use interp::interp_slice;
 use itertools::Itertools;
-use ndarray::{s, Array1, Array2, ArrayD, ArrayView1, ArrayView2};
+use ndarray::{Array1, Array2, ArrayD, ArrayView1, ArrayView2};
 use netcdf::{types::{FloatType, IntType}, Extents};
 
 use crate::{units::dmf_conv_factor, utils::GggError};
@@ -153,6 +153,30 @@ impl NcArray {
             },
         }
     }
+}
+
+// ----------------------------------------- //
+// Helper functions for expanding the priors //
+// ----------------------------------------- //
+
+pub fn expand_priors(
+    compact_priors: ArrayView2<f32>,
+    prior_index: ArrayView1<usize>,
+) -> Result<Array2<f32>, GggError> {
+    let ntimes = prior_index.len();
+    let nlev = compact_priors.dim().1;
+    let mut expanded_priors = Array2::<f32>::zeros([ntimes, nlev]);
+    for (itime, &index) in prior_index.iter().enumerate() {
+        if index >= compact_priors.nrows() {
+            return Err(GggError::custom(format!(
+                "Prior index {index} at position {itime} is out-of-bounds"
+            )))
+        }
+        // .row() panics if the index is out of bounds, hence the check above
+        let orig_prof = compact_priors.row(index);
+        expanded_priors.row_mut(itime).assign(&orig_prof);
+    }
+    Ok(expanded_priors)
 }
 
 // -------------------------------------- //
