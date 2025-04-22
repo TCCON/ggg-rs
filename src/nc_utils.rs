@@ -1,5 +1,9 @@
-use ndarray::ArrayD;
+use interp::{interp_array, interp_slice};
+use itertools::Itertools;
+use ndarray::{s, Array1, Array2, ArrayD, ArrayView1, ArrayView2};
 use netcdf::{types::{FloatType, IntType}, Extents};
+
+use crate::{units::dmf_conv_factor, utils::GggError};
 
 /// A type that can hold a variety of arrays that might be stored
 /// in a netCDF file. It is best created by reading from a netCDF
@@ -149,4 +153,107 @@ impl NcArray {
             },
         }
     }
+}
+
+// -------------------------------------- //
+// Helper functions for expanding the AKs //
+// -------------------------------------- //
+
+pub fn expand_slant_xgas_binned_aks(
+    slant_xgas_values: ArrayView1<f32>,
+    xgas_units: &str,
+    slant_xgas_bins: Array1<f32>,
+    bin_units: &str,
+    aks: ArrayView2<f32>,
+    nsamples: Option<usize>,
+) -> Result<(Array2<f32>, Array1<i8>), GggError> {
+    let min_extrap_slant = 0.0;
+    // First, check that the slant Xgas values and bins are in the same unit; if not, convert
+    // the bins, since that should be the smaller array.
+    let slant_xgas_bins = if xgas_units == bin_units {
+        slant_xgas_bins
+    } else {
+        let cf = dmf_conv_factor(bin_units, xgas_units)
+            .map_err(|e| GggError::custom(format!("Error converting AK slant Xgas bins to proper unit: {e}")))?;
+        slant_xgas_bins * cf
+    };
+    let slant_xgas_bins = slant_xgas_bins.as_standard_layout();
+
+    let (min_bin, max_bin) = match slant_xgas_bins.iter().minmax() {
+        itertools::MinMaxResult::NoElements => return Err(GggError::custom("slant_xgas_bins should not have zero elements")),
+        itertools::MinMaxResult::OneElement(&v) => (v, v),
+        itertools::MinMaxResult::MinMax(&v1, &v2) => (v1, v2),
+    };
+
+    let (slant_xgas_values, extrap_flags) = compute_quantized_slant_xgas(slant_xgas_values, min_extrap_slant, min_bin, max_bin, nsamples);
+
+    // Assume that the AKs have altitude as the first dimension.
+    let nlev = aks.dim().0;
+    let ntime = slant_xgas_values.len();
+    let mut aks_out = Array2::<f32>::zeros([ntime, nlev]);
+
+    // Now interpolate each level
+    let slant_xgas_bins_slice = slant_xgas_bins.as_slice()
+        .expect("Should be able to take a slice of slant_xgas_bins, as we convert to standard layout at the start of the function");
+    let slant_xgas_values_slice = slant_xgas_values.as_standard_layout();
+    let slant_xgas_values_slice = slant_xgas_values_slice.as_slice()
+        .expect("Should be able to take a slice of slant_xgas_value, as we convert to standard layout");
+    for i in 0..nlev {
+        let ak_row_in = aks.row(i);
+        let ak_row_in = ak_row_in.as_standard_layout();
+        let ak_row_in = ak_row_in.as_slice()
+            .expect("Should be able to convert an AK row to a slice, as we convert to standard layout");
+        let ak_interp = interp_slice(slant_xgas_bins_slice, ak_row_in, slant_xgas_values_slice, &interp::InterpMode::Extrapolate);
+        let ak_interp = Array1::from_vec(ak_interp);
+        aks_out.column_mut(i).assign(&ak_interp);
+    }
+    Ok((aks_out, extrap_flags))
+
+}
+
+fn compute_quantized_slant_xgas(slant_xgas_values: ArrayView1<f32>, min_extrap_slant: f32, min_interp_slant: f32, max_interp_slant: f32, nsamples: Option<usize>)
+-> (Array1<f32>, Array1<i8>) {
+    let mut quant_slant = Array1::<f32>::zeros([slant_xgas_values.len()]);
+    let mut extrap_flags = Array1::<i8>::zeros([slant_xgas_values.len()]);
+
+    if let Some(nsamp) = nsamples {
+        let nsamp_main = nsamp as f32;
+        let nsamp_extrap = (nsamp / 10) as f32;
+
+        for (i, v) in slant_xgas_values.iter().copied().enumerate() {
+            if v < min_extrap_slant {
+                quant_slant[i] = min_extrap_slant;
+                extrap_flags[i] = -2;
+            } else if v >= min_extrap_slant && v < min_interp_slant {
+                quant_slant[i] = quantize(v, min_extrap_slant, min_interp_slant, nsamp_extrap);
+                extrap_flags[i] = -1;
+            } else if v >= min_interp_slant && v <= max_interp_slant {
+                quant_slant[i] = quantize(v, min_interp_slant, max_interp_slant, nsamp_main);
+            } else {
+                quant_slant[i] = max_interp_slant;
+                extrap_flags[i] = 2;
+            }
+        }
+    } else {
+        for (i, v) in slant_xgas_values.iter().copied().enumerate() {
+            quant_slant[i] = v.clamp(min_extrap_slant, max_interp_slant);
+            if v < min_extrap_slant {
+                extrap_flags[i] = -2;
+            } else if v > max_interp_slant {
+                extrap_flags[i] = 2;
+            }
+        }
+    }
+    
+    (quant_slant, extrap_flags)
+}
+
+fn quantize(v: f32, minval: f32, maxval: f32, n: f32) -> f32 {
+    // Normalize and limit to [0, 1]
+    let vn = (v - minval) / (maxval - minval);
+    let vn = vn.clamp(0.0, 1.0);
+    // Round to one of n values in [0, 1)
+    let vi = (vn * (n - 1.0)).round() / (n - 1.0); 
+    // Restore original magnitude
+    vi * (maxval - minval) + minval
 }

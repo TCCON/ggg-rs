@@ -1,15 +1,15 @@
 use std::{marker::PhantomData, ops::Mul};
 
 use error_stack::ResultExt;
-use ggg_rs::{nc_utils::NcArray, units::dmf_conv_factor};
+use ggg_rs::{nc_utils::{self, NcArray}, units::dmf_conv_factor};
 use indexmap::IndexMap;
 use itertools::Itertools;
-use ndarray::{ArrayD, ArrayView1, ArrayViewD, Axis};
+use ndarray::{Array, Array1, Array2, ArrayD, ArrayView1, ArrayViewD, Axis, Dimension, Ix1, Ix2};
 use netcdf::{AttributeValue, Extents, NcTypeDescriptor};
 use num_traits::Zero;
 use serde::{Deserializer, Deserialize};
 
-use crate::constants::TIME_DIM_NAME;
+use crate::constants::{AK_ALTITUDE_DIM_NAME, TIME_DIM_NAME};
 
 
 /// Represents an error that occurred while copying a variable
@@ -275,6 +275,7 @@ pub(crate) struct XgasCopy<T: Copy + Zero + NcTypeDescriptor> {
     prior_profile: XgasAncillary,
     prior_xgas: XgasAncillary,
     ak: XgasAncillary,
+    slant_bin: XgasAncillary,
     traceability_scale: XgasAncillary,
     data_type: PhantomData<T>,
 }
@@ -310,6 +311,7 @@ impl<T: Copy + Zero + NcTypeDescriptor> XgasCopy<T> {
             prior_profile: XgasAncillary::InferredIfFirst,
             prior_xgas: XgasAncillary::InferredIfFirst,
             ak: XgasAncillary::InferredIfFirst,
+            slant_bin: XgasAncillary::Inferred,
             traceability_scale: XgasAncillary::Inferred,
             data_type: PhantomData
         }
@@ -339,6 +341,10 @@ impl<T: Copy + Zero + NcTypeDescriptor> XgasCopy<T> {
         parts.join("_")
     }
 
+    fn airmass_name(&self) -> &str {
+        "o2_7885_am_o2"
+    }
+
     fn infer_prior_xgas_names(&self) -> (String, String) {
         // these should be the same in the standard case
         let private_name = format!("prior_{}", self.xgas);
@@ -359,6 +365,20 @@ impl<T: Copy + Zero + NcTypeDescriptor> XgasCopy<T> {
         let public_name = private_name.clone();
         (private_name, public_name)
     }
+
+    fn infer_slant_xgas_bin_name(&self) -> String {
+        format!("ak_slant_{}_bin", self.xgas)
+    }
+
+    fn slant_bin_name(&self) -> String {
+        match self.slant_bin {
+            XgasAncillary::Inferred => self.infer_slant_xgas_bin_name(),
+            XgasAncillary::InferredIfFirst => self.infer_slant_xgas_bin_name(),
+            XgasAncillary::Specified { ref private_name, public_name: _ } => private_name.to_string(),
+            XgasAncillary::CopyIfFirst { ref private_name, public_name: _ } => private_name.to_string(),
+            XgasAncillary::Omit => self.infer_slant_xgas_bin_name(),
+        }
+    }
 }
 
 impl<T: Copy + Zero + NcTypeDescriptor + Mul<Output = T> + From<f32>> CopySet for XgasCopy<T> {
@@ -369,15 +389,24 @@ impl<T: Copy + Zero + NcTypeDescriptor + Mul<Output = T> + From<f32>> CopySet fo
         // TODO: find the AICF variable and extract the WMO scale if present.
 
         // Grab the units from the Xgas variable - we will need them to ensure that the
-        // prior profile and prior Xgas are in the same units
+        // prior profile and prior Xgas are in the same units. Also go ahead and get+subset
+        // the Xgas value, as we'll need that for the AKs.
 
         let xgas_var = private_file.variable(&self.xgas)
             .ok_or_else(|| CopyError::MissingReqVar(self.xgas.clone()))?;
         let gas_units = get_string_attr(&xgas_var, "units")
             .change_context_lazy(|| CopyError::context(format!("getting the {} units", self.xgas)))?;
+        // let xgas_values = xgas_var.get::<f32, _>(Extents::All)
+        //     .change_context_lazy(|| CopyError::context(format!("getting {} values", self.xgas)))?;
+        // let xgas_values = if let Some(idim) = find_subset_dim(&xgas_var, TIME_DIM_NAME) {
+        //     time_subsetter.subset_nd_array(xgas_values.view(), idim)
+        //         .change_context_lazy(|| CopyError::context(format!("subsetting {}", self.xgas)))?
+        // } else {
+        //     xgas_values
+        // };
 
         // Now copy the Xgas itself
-        copy_vmr_variable_from_dset::<T, &str>(
+        copy_vmr_variable_from_dset::<f32, &str>(
             private_file,
             public_file,
             &self.xgas,
@@ -386,12 +415,12 @@ impl<T: Copy + Zero + NcTypeDescriptor + Mul<Output = T> + From<f32>> CopySet fo
             &format!("column average {} mole fraction", self.gas_long),
             IndexMap::new(),
             &[],
-        &gas_units
+        &gas_units,
         )?;
 
         // And its error value
         let error_name = self.xgas_error_name();
-        copy_vmr_variable_from_dset::<T, &str>(
+        copy_vmr_variable_from_dset::<f32, &str>(
             private_file,
             public_file,
             &error_name,
@@ -406,7 +435,7 @@ impl<T: Copy + Zero + NcTypeDescriptor + Mul<Output = T> + From<f32>> CopySet fo
         // And the prior Xgas value
         let opt = self.prior_xgas.get_var_names_opt(public_file, || self.infer_prior_xgas_names());
         if let Some((private_prxgas_name, public_prxgas_name)) = opt {
-            copy_vmr_variable_from_dset::<T, &str>(
+            copy_vmr_variable_from_dset::<f32, &str>(
                 private_file,
                 public_file,
                 &private_prxgas_name,
@@ -441,16 +470,30 @@ impl<T: Copy + Zero + NcTypeDescriptor + Mul<Output = T> + From<f32>> CopySet fo
         let opt = self.ak.get_var_names_opt(&public_file, || self.infer_ak_names());
         if let Some((private_ak_name, public_ak_name)) = opt {
             let ak_var = private_file.variable(&private_ak_name)
-                .ok_or_else(|| CopyError::MissingReqVar(private_ak_name))?;
-            copy_variable_general::<&str>(
+                .ok_or_else(|| CopyError::MissingReqVar(private_ak_name.clone()))?;
+                
+            let (expanded_aks, ak_extrap_flags) = expand_slant_xgas_binned_aks_from_file(
+                private_file,
+                &self.xgas,
+                self.airmass_name(),
+                &private_ak_name,
+                &self.slant_bin_name(),
+                time_subsetter,
+                Some(500)
+            )?;
+
+            copy_variable_new_data::<&str>(
                 public_file,
                 &ak_var,
                 &public_ak_name,
-                time_subsetter,
+                expanded_aks.into_dyn().view(),
+                vec![TIME_DIM_NAME.to_string(), AK_ALTITUDE_DIM_NAME.to_string()],
                 &format!("{} averaging kernel", self.gas_long),
                 &IndexMap::new(),
                 &[]
             )?;
+
+            write_extrapolation_flags(public_file, &public_ak_name, ak_extrap_flags.view())?;
         }
 
         Ok(())
@@ -558,6 +601,16 @@ fn add_needed_dims(public_file: &mut netcdf::FileMut, private_var: &netcdf::Vari
     Ok(())
 }
 
+fn add_needed_new_dims<S: AsRef<str>>(public_file: &mut netcdf::FileMut, private_var: &netcdf::Variable, dimnames: &[S]) -> error_stack::Result<(), CopyError> {
+    for dim in private_var.dimensions() {
+        if dimnames.iter().any(|n| n.as_ref() == dim.name().as_str()) && !check_dim_exists(dim, public_file, &private_var.name())? {
+            public_file.add_dimension(&dim.name(), dim.len())
+            .change_context_lazy(|| CopyError::context(format!("creating dimension '{}'", dim.name())))?;
+        }
+    }
+    Ok(())
+}
+
 /// Return `true` if `var_dim` exists in `public_file`, `false` otherwise.
 /// Also checks that the lengths are equal for variables that already exist.
 /// `varname` is only used in an error message for clarity.
@@ -601,6 +654,7 @@ fn copy_vmr_variable_from_dset<T: Copy + Zero + NcTypeDescriptor + Mul<Output = 
     let var_unit = get_string_attr(&private_var, "units")
         .change_context_lazy(|| CopyError::context(format!("getting units for {private_varname} to scale to the primary Xgas variable unit")))?;
 
+
     let data = private_var.get::<T, _>(Extents::All)
         .change_context_lazy(|| CopyError::context(format!("reading variable '{private_varname}'")))?;
     let do_subset_along = find_subset_dim(&private_var, TIME_DIM_NAME);
@@ -620,12 +674,29 @@ fn copy_vmr_variable_from_dset<T: Copy + Zero + NcTypeDescriptor + Mul<Output = 
         attr_overrides.insert("units".to_string(), target_unit.into());
     }
     
-    let mut public_var = copy_var_pre_write_helper::<T>(public_file, &private_var, public_varname)?;
+    let mut public_var = copy_var_pre_write_helper::<T>(public_file, &private_var, public_varname, None)?;
     public_var.put(data.view(), Extents::All)
         .change_context_lazy(|| CopyError::context(format!("writing variable '{public_varname}'")))?;
 
     copy_var_attr_write_helper(&private_var, &mut public_var, long_name, &attr_overrides, attr_to_remove)?;
     
+    Ok(())
+}
+
+fn copy_variable_new_data<S: AsRef<str>>(
+    public_file: &mut netcdf::FileMut,
+    private_var: &netcdf::Variable,
+    public_varname: &str,
+    data: ArrayViewD<f32>,
+    dims: Vec<String>,
+    long_name: &str,
+    attr_overrides: &IndexMap<String, AttributeValue>,
+    attr_to_remove: &[S],
+) -> error_stack::Result<(), CopyError> {
+    let mut public_var = copy_var_pre_write_helper::<f32>(public_file, private_var, public_varname, Some(dims))?;
+    public_var.put(data, Extents::All)
+        .change_context_lazy(|| CopyError::context(format!("writing variable '{public_varname}'")))?;
+    copy_var_attr_write_helper(private_var, &mut public_var, long_name, attr_overrides, attr_to_remove)?;
     Ok(())
 }
 
@@ -641,9 +712,9 @@ fn copy_variable_general<S: AsRef<str>>(
     attr_to_remove: &[S],
 ) -> error_stack::Result<(), CopyError> {
     let private_varname = private_var.name();
+    
     let generic_array = NcArray::get_from(private_var)
         .change_context_lazy(|| CopyError::context(format!("copying variable '{private_varname}'")))?;
-
     // Find the time dimension, assuming it does not occur more than once.
     let do_subset_along = find_subset_dim(private_var, TIME_DIM_NAME);
     let generic_array = if let Some(idim) = do_subset_along {
@@ -651,70 +722,71 @@ fn copy_variable_general<S: AsRef<str>>(
     } else {
         generic_array
     };
+        
 
     let mut public_var = match generic_array {
         NcArray::I8(arr) => {
-            let mut pubv = copy_var_pre_write_helper::<i8>(public_file, private_var, public_varname)?;
+            let mut pubv = copy_var_pre_write_helper::<i8>(public_file, private_var, public_varname, None)?;
             pubv.put(arr.view(), Extents::All)
                 .change_context_lazy(|| CopyError::context(format!("writing variable '{public_varname}'")))?;
             pubv        
         },
         NcArray::I16(arr) => {
-            let mut pubv = copy_var_pre_write_helper::<i16>(public_file, private_var, public_varname)?;
+            let mut pubv = copy_var_pre_write_helper::<i16>(public_file, private_var, public_varname, None)?;
             pubv.put(arr.view(), Extents::All)
                 .change_context_lazy(|| CopyError::context(format!("writing variable '{public_varname}'")))?;
             pubv        
         },
         NcArray::I32(arr) => {
-            let mut pubv = copy_var_pre_write_helper::<i32>(public_file, private_var, public_varname)?;
+            let mut pubv = copy_var_pre_write_helper::<i32>(public_file, private_var, public_varname, None)?;
             pubv.put(arr.view(), Extents::All)
                 .change_context_lazy(|| CopyError::context(format!("writing variable '{public_varname}'")))?;
             pubv        
         },
         NcArray::I64(arr) => {
-            let mut pubv = copy_var_pre_write_helper::<i64>(public_file, private_var, public_varname)?;
+            let mut pubv = copy_var_pre_write_helper::<i64>(public_file, private_var, public_varname, None)?;
             pubv.put(arr.view(), Extents::All)
                 .change_context_lazy(|| CopyError::context(format!("writing variable '{public_varname}'")))?;
             pubv        
         },
         NcArray::U8(arr) => {
-            let mut pubv = copy_var_pre_write_helper::<u8>(public_file, private_var, public_varname)?;
+            let mut pubv = copy_var_pre_write_helper::<u8>(public_file, private_var, public_varname, None)?;
             pubv.put(arr.view(), Extents::All)
                 .change_context_lazy(|| CopyError::context(format!("writing variable '{public_varname}'")))?;
             pubv        
         },
         NcArray::U16(arr) => {
-            let mut pubv = copy_var_pre_write_helper::<u16>(public_file, private_var, public_varname)?;
+            let mut pubv = copy_var_pre_write_helper::<u16>(public_file, private_var, public_varname, None)?;
             pubv.put(arr.view(), Extents::All)
                 .change_context_lazy(|| CopyError::context(format!("writing variable '{public_varname}'")))?;
             pubv        
         },
         NcArray::U32(arr) => {
-            let mut pubv = copy_var_pre_write_helper::<u32>(public_file, private_var, public_varname)?;
+            let mut pubv = copy_var_pre_write_helper::<u32>(public_file, private_var, public_varname, None)?;
             pubv.put(arr.view(), Extents::All)
                 .change_context_lazy(|| CopyError::context(format!("writing variable '{public_varname}'")))?;
             pubv        
         },
         NcArray::U64(arr) => {
-            let mut pubv = copy_var_pre_write_helper::<u64>(public_file, private_var, public_varname)?;
+            let mut pubv = copy_var_pre_write_helper::<u64>(public_file, private_var, public_varname, None)?;
             pubv.put(arr.view(), Extents::All)
                 .change_context_lazy(|| CopyError::context(format!("writing variable '{public_varname}'")))?;
             pubv        
         },
         NcArray::F32(arr) => {
-            let mut pubv = copy_var_pre_write_helper::<f32>(public_file, private_var, public_varname)?;
+            let mut pubv = copy_var_pre_write_helper::<f32>(public_file, private_var, public_varname, None)?;
             pubv.put(arr.view(), Extents::All)
                 .change_context_lazy(|| CopyError::context(format!("writing variable '{public_varname}'")))?;
             pubv        
         },
         NcArray::F64(arr) => {
-            let mut pubv = copy_var_pre_write_helper::<f64>(public_file, private_var, public_varname)?;
+            let mut pubv = copy_var_pre_write_helper::<f64>(public_file, private_var, public_varname, None)?;
             pubv.put(arr.view(), Extents::All)
                 .change_context_lazy(|| CopyError::context(format!("writing variable '{public_varname}'")))?;
             pubv        
         },
         NcArray::Char(arr) => {
-            let mut pubv = copy_var_pre_write_helper::<u8>(public_file, private_var, public_varname)?;
+            let mut pubv = copy_var_pre_write_helper::<u8>(public_file, private_var, public_varname, None)?;
             pubv.put(arr.view(), Extents::All)
                 .change_context_lazy(|| CopyError::context(format!("writing variable '{public_varname}'")))?;
             pubv        
@@ -731,20 +803,29 @@ fn copy_var_pre_write_helper<'v, T: Copy + Zero + NcTypeDescriptor>(
     public_file: &'v mut netcdf::FileMut,
     private_var: &netcdf::Variable,
     public_varname: &str,
+    new_dims: Option<Vec<String>>,
 ) -> error_stack::Result<netcdf::VariableMut<'v>, CopyError> {
-    let dims = private_var.dimensions()
-        .iter()
-        .map(|dim| dim.name())
-        .collect_vec();
+    let dims = if let Some(dims) = new_dims {
+        add_needed_new_dims(public_file, private_var, &dims)?;
+        dims
+    } else {
+        let dims = private_var.dimensions()
+            .iter()
+            .map(|dim| dim.name())
+            .collect_vec();
+        
+
+        // Create the variable, which needs its dimensions created first.
+        // Handling missing dimensions here is easier than trying to collect a list of
+        // all dimensions that we need.
+        add_needed_dims(public_file, &private_var)
+            .change_context_lazy(|| CopyError::context(format!("creating public variable '{public_varname}'")))?;
+        dims
+    };
     let dims_str = dims.iter()
         .map(|dim| dim.as_str())
         .collect_vec();
 
-    // Create the variable, which needs its dimensions created first.
-    // Handling missing dimensions here is easier than trying to collect a list of
-    // all dimensions that we need.
-    add_needed_dims(public_file, &private_var)
-        .change_context_lazy(|| CopyError::context(format!("creating public variable '{public_varname}'")))?;
     let mut public_var = public_file.add_variable::<T>(public_varname, &dims_str)
         .change_context_lazy(|| CopyError::context(format!("creating public variable '{public_varname}'")))?;
     if dims_str.len() > 1 {
@@ -837,6 +918,100 @@ where D: Deserializer<'de>
         attr_overrides.insert(attr, attr_val);
     }
     Ok(attr_overrides)
+}
+
+fn expand_slant_xgas_binned_aks_from_file(
+    private_file: &netcdf::File,
+    xgas_varname: &str,
+    airmass_varname: &str,
+    ak_varname: &str,
+    slant_bin_varname: &str,
+    time_subsetter: &Subsetter,
+    nsamples: Option<usize>
+) -> error_stack::Result<(Array2<f32>, Array1<i8>), CopyError> {
+    // Read in all the variables we need from the private file
+    let xgas = read_and_subset_req_var::<f32, Ix1>(private_file, xgas_varname, time_subsetter)?;
+    let airmass = read_and_subset_req_var::<f32, Ix1>(private_file, airmass_varname, time_subsetter)?;
+    let aks = read_and_subset_req_var::<f32, Ix2>(private_file, ak_varname, time_subsetter)?;
+    let slant_xgas_bins = read_and_subset_req_var::<f32, Ix1>(private_file, slant_bin_varname, time_subsetter)?;
+
+    // We need the Xgas-related units too
+    let xgas_var = private_file.variable(xgas_varname)
+        .expect("should be able to get Xgas variable as we previously read data from it");
+    let xgas_units = get_string_attr(&xgas_var, "units")
+        .change_context_lazy(|| CopyError::context(format!("getting {xgas_varname} units for AK expansion")))?;
+
+    let slant_bin_var = private_file.variable(slant_bin_varname)
+        .expect("should be able to get slant Xgas variable as we previously read data from it");
+    let slant_bin_units = get_string_attr(&slant_bin_var, "units")
+        .change_context_lazy(|| CopyError::context(format!("getting {slant_bin_varname} units for AK expansion")))?;
+
+    let slant_xgas_values = xgas * airmass;
+    let (expanded_aks, extrap_flags) = nc_utils::expand_slant_xgas_binned_aks(
+        slant_xgas_values.view(),
+        &xgas_units,
+        slant_xgas_bins,
+        &slant_bin_units,
+        aks.view(),
+        nsamples
+    ).change_context_lazy(|| CopyError::custom(format!("expanding '{ak_varname}'")))?;
+
+    Ok((expanded_aks, extrap_flags))
+}
+
+fn read_and_subset_req_var<T: NcTypeDescriptor + Copy + Zero, D: Dimension>(
+    file: &netcdf::File,
+    varname: &str,
+    time_subsetter: &Subsetter
+) -> error_stack::Result<Array<T, D>, CopyError> {
+    let var = file.variable(varname)
+        .ok_or_else(|| CopyError::MissingReqVar(varname.to_string()))?;
+    
+    let arr = var.get::<T, _>(Extents::All)
+        .change_context_lazy(|| CopyError::context(format!("reading variable '{varname}'")))?;
+    
+    let arr = if let Some(idim) = find_subset_dim(&var, TIME_DIM_NAME) {
+        time_subsetter.subset_nd_array(arr.view(), idim)
+            .change_context_lazy(|| CopyError::context("subsetting '{varname}'"))?
+    } else {
+        arr
+    };
+
+    let arr = arr.into_dimensionality::<D>()
+        .change_context_lazy(|| CopyError::context(format!("converting variable '{varname}' dimensionality")))?;
+    Ok(arr)
+}
+
+fn write_extrapolation_flags(
+    public_file: &mut netcdf::FileMut,
+    ak_varname: &str,
+    extrap_flags: ArrayView1<i8>
+) -> error_stack::Result<(), CopyError> {
+
+    let varname = format!("extrapolation_flags_{ak_varname}");
+    let flag_values = vec![-2i8, -1i8, 0i8, 1i8, 2i8];
+    let flag_meanings = r#"clamped_to_min_slant_xgas
+extrapolated_below_lowest_slant_xgas_bin
+interpolated_normally
+extrapolated_above_largest_slant_xgas_bin
+clamped_to_max_slant_xgas"#;
+    let flag_usage = "Please see https://tccon-wiki.caltech.edu/Main/GGG2020DataChanges for more information";
+
+    let mut var = public_file.add_variable::<i8>(&varname, &[TIME_DIM_NAME])
+        .change_context_lazy(|| CopyError::context(format!("adding variable '{varname}'")))?;
+
+    var.put_attribute("long_name", format!("{ak_varname} extrapolation flags"))
+        .change_context_lazy(|| CopyError::context(format!("adding 'long_name' attribute to variable '{varname}'")))?;
+    var.put_attribute("flag_values", flag_values)
+        .change_context_lazy(|| CopyError::context(format!("adding 'flag_values' attribute to variable '{varname}'")))?;
+    var.put_attribute("flag_meanings", flag_meanings)
+        .change_context_lazy(|| CopyError::context(format!("adding 'flag_meanings' attribute to variable '{varname}'")))?;
+    var.put_attribute("usage", flag_usage)
+        .change_context_lazy(|| CopyError::context(format!("adding 'meanings' attribute to variable '{varname}'")))?;
+
+    var.put(extrap_flags, Extents::All)
+        .change_context_lazy(|| CopyError::context(format!("writing data for variable '{varname}'")))?;
+    Ok(())
 }
 
 #[cfg(test)]
