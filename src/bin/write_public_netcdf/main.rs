@@ -33,9 +33,15 @@ fn driver(clargs: Cli) -> error_stack::Result<(), CliError> {
     let private_ds = netcdf::open(&clargs.private_nc_file)
         .change_context(CliError::OpeningPrivateFile)?;
 
+    // TODO: time subsetter needs to account for data latency
     let time_subsetter = make_time_subsetter(&private_ds)?;
     let private_file_name = &clargs.private_nc_file;
-    let public_file_name = make_public_name_from_dates(private_file_name, &time_subsetter)?;
+    let public_file_name = if clargs.no_rename_by_dates {
+        make_public_name_from_stem(private_file_name)?
+    } else {
+        make_public_name_from_dates(private_file_name, &time_subsetter)?
+    };
+    log::info!("Will write to {}", public_file_name.display());
     let mut public_ds = netcdf::create(&public_file_name)
         .change_context(CliError::OpeningPublicFile)?;
 
@@ -47,7 +53,13 @@ fn driver(clargs: Cli) -> error_stack::Result<(), CliError> {
 
 #[derive(Debug, clap::Parser)]
 struct Cli {
+    /// The privat netCDF file to copy.
     private_nc_file: PathBuf,
+
+    /// Do not rename the output file to match the time span of the 
+    /// data retained after flagging and data latency.
+    #[clap(long)]
+    no_rename_by_dates: bool,
     // config_file: Option<PathBuf>,
     #[command(flatten)]
     verbosity: Verbosity<InfoLevel>,
@@ -124,20 +136,38 @@ fn make_public_name_from_dates(private_filename: &Path, time_subsetter: &Subsett
         .change_context(CliError::MakePubName)?;
 
     // Get the site ID, current file extension, and parent directory
-    let private_stem = private_filename.file_name()
+    let private_base_name = private_filename.file_name()
         .ok_or_else(|| CliError::Custom("private file name does not have a basename!"))?
         .to_string_lossy();
 
-    let site_id: String = private_stem.chars().take(2).collect();
-    let public_ext = private_stem.split_once('.')
-        .map(|(_, ext)| ext)
-        .unwrap_or("public.nc");
+    let site_id: String = private_base_name.chars().take(2).collect();
+    let public_ext = private_base_name.split_once('.')
+        .map(|(_, ext)| ext.replace("private", "public"))
+        .unwrap_or_else(|| "public.nc".to_string());
     let parent_dir = private_filename.parent()
         .ok_or_else(|| CliError::Custom("could not get parent directory of the private file"))?;
 
     // Finally, construct the dang name
-    let public_file_name = format!("{site_id}{}_{}.{public_ext}", first_time.format("%Y%m%d"), last_time.format("%Y%m%d"));
-    Ok(parent_dir.join(public_file_name))
+    let public_filename = format!("{site_id}{}_{}.{public_ext}", first_time.format("%Y%m%d"), last_time.format("%Y%m%d"));
+    Ok(parent_dir.join(public_filename))
+}
+
+fn make_public_name_from_stem(private_filename: &Path) -> error_stack::Result<PathBuf, CliError> {
+    let base_name = private_filename.file_name()
+        .ok_or_else(|| CliError::Custom("private file name does not have a basename!"))?
+        .to_string_lossy();
+
+    let public_filename = if let Some((stem, ext)) = base_name.split_once('.') {
+        let public_ext = ext.replace("private", "public");
+        format!("{stem}.{public_ext}")
+    } else {
+        format!("{base_name}.public.nc")
+    };
+    
+    let parent_dir = private_filename.parent()
+        .ok_or_else(|| CliError::Custom("could not get parent directory of the private file"))?;
+    Ok(parent_dir.join(public_filename))
+
 }
 
 fn add_time_dim(public_ds: &mut netcdf::FileMut, time_subsetter: &Subsetter) -> error_stack::Result<(), CliError> {
