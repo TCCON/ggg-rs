@@ -3,7 +3,7 @@ use std::{path::{Path, PathBuf}, process::ExitCode};
 use clap::Parser;
 use clap_verbosity_flag::{InfoLevel, Verbosity};
 use constants::TIME_DIM_NAME;
-use copying::{AuxVarCopy, CopySet, Subsetter, XgasCopy};
+use copying::{AuxVarCopy, ComputedVariables, CopySet, Subsetter, XgasCopy};
 use error_stack::ResultExt;
 use ggg_rs::{logging::init_logging, utils::nctime_to_datetime};
 use itertools::Itertools;
@@ -16,10 +16,12 @@ mod config;
 mod copying;
 
 // Todos:
-//   1. Traceability scale
-//   2. GEOS source summary
-//   3. Xgas discovering
+//   1. Traceability scale [x]
+//   2. GEOS source summary [x]
+//   3. Xgas discovery
 //   4. Standard and experimental configs
+//   5. Data latency
+//   6. Global attributes
 
 fn main() -> ExitCode {
     let clargs = Cli::parse();
@@ -53,6 +55,7 @@ fn driver(clargs: Cli) -> error_stack::Result<(), CliError> {
     add_time_dim(&mut public_ds, &time_subsetter)?;
     add_aux_vars(&private_ds, &mut public_ds, &time_subsetter)?;
     add_xgas_vars(&private_ds, &mut public_ds, &time_subsetter)?;
+    add_computed_vars(&private_ds, &mut public_ds, &time_subsetter)?;
     Ok(())
 }
 
@@ -86,6 +89,8 @@ enum CliError {
     WritingAux,
     #[error("An error occurred while writing the Xgas and related variables to the public file")]
     WritingXgas,
+    #[error("An error occurred while writing the computed variables to the public file")]
+    WritingComputed,
     #[error("{0}")]
     Custom(&'static str),
 }
@@ -207,6 +212,19 @@ fn add_xgas_vars(private_ds: &netcdf::File, public_ds: &mut netcdf::FileMut, tim
     for var in xgas_vars {
         var.copy(private_ds, public_ds, time_subsetter)
             .change_context(CliError::WritingXgas)?;
+    }
+
+    Ok(())
+}
+
+fn add_computed_vars(private_ds: &netcdf::File, public_ds: &mut netcdf::FileMut, time_subsetter: &Subsetter) -> error_stack::Result<(), CliError> {
+    let computed_vars = vec![
+        ComputedVariables::PriorSource { public_varname: None }
+    ];
+
+    for var in computed_vars {
+        var.copy(private_ds, public_ds, time_subsetter)
+            .change_context(CliError::WritingComputed)?;
     }
 
     Ok(())

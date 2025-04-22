@@ -1,6 +1,8 @@
 //! Intermediate level utility functions to support copying variables
+use std::ops::Add;
+
 use error_stack::ResultExt;
-use ndarray::{Array, Dimension};
+use ndarray::{Array, ArrayView1, Dimension};
 use netcdf::{types::NcVariableType, Extents, NcTypeDescriptor};
 use num_traits::Zero;
 
@@ -129,4 +131,34 @@ impl From<&NcChar> for u8 {
     fn from(value: &NcChar) -> Self {
         value.0
     }
+}
+
+impl From<&NcChar> for char {
+    fn from(value: &NcChar) -> Self {
+        char::from(value.0)
+    }
+}
+
+impl Zero for NcChar {
+    fn zero() -> Self {
+        Self(0)
+    }
+
+    fn is_zero(&self) -> bool {
+        self.0 == 0
+    }
+}
+
+impl Add for NcChar {
+    type Output = NcChar;
+
+    fn add(self, rhs: Self) -> Self::Output {
+        Self(self.0 + rhs.0)
+    }
+}
+
+pub(super) fn chars_to_string(char_arr: ArrayView1<NcChar>) -> String {
+    let byte_it = char_arr.into_iter().map(|c| char::from(c));
+    let s = String::from_iter(byte_it);
+    s.trim_end_matches('\0').to_string()
 }

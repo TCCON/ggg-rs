@@ -1,6 +1,7 @@
 use std::{marker::PhantomData, ops::Mul};
 
 
+use compute_helpers::add_geos_version_variable;
 use error_stack::ResultExt;
 use ggg_rs::{nc_utils::NcArray, units::dmf_long_name};
 use indexmap::IndexMap;
@@ -18,6 +19,7 @@ use copy_helpers::{copy_variable_general, copy_variable_new_data, copy_vmr_varia
 mod copy_utils;
 mod xgas_helpers;
 mod copy_helpers;
+mod compute_helpers;
 
 /// Represents an error that occurred while copying a variable
 /// to the public file.
@@ -418,7 +420,6 @@ impl<T: Copy + Zero + NcTypeDescriptor + Mul<Output = T> + From<f32>> CopySet fo
         let attr_to_remove = default_attr_remove();
         let traceability_scale = if let Some((private_scale_name, _)) = self.traceability_scale.get_var_names_opt(public_file, || self.infer_traceability_names()) {
             let scale = get_traceability_scale(private_file, &private_scale_name)?;
-            dbg!(&scale);
             if scale.is_empty() {
                 "N/A".to_string()
             } else {
@@ -628,6 +629,25 @@ impl XgasAncillary {
                 public_file.variable(public_name).is_none()
             },
             XgasAncillary::Omit => false,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "type")]
+pub(crate) enum ComputedVariables {
+    PriorSource{public_varname: Option<String>}
+}
+
+impl CopySet for ComputedVariables {
+    fn copy(&self, private_file: &netcdf::File, public_file: &mut netcdf::FileMut, time_subsetter: &Subsetter) -> error_stack::Result<(), CopyError> {
+        match self {
+            ComputedVariables::PriorSource { public_varname } => {
+                let pubname = public_varname
+                    .as_deref()
+                    .unwrap_or("apriori_data_source");
+                add_geos_version_variable(private_file, public_file, pubname, time_subsetter)
+            },
         }
     }
 }

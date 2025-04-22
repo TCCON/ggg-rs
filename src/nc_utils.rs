@@ -2,6 +2,7 @@ use interp::interp_slice;
 use itertools::Itertools;
 use ndarray::{Array1, Array2, ArrayD, ArrayView1, ArrayView2};
 use netcdf::{types::{FloatType, IntType}, Extents};
+use num_traits::Zero;
 
 use crate::{units::dmf_conv_factor, utils::GggError};
 
@@ -159,13 +160,13 @@ impl NcArray {
 // Helper functions for expanding the priors //
 // ----------------------------------------- //
 
-pub fn expand_priors(
-    compact_priors: ArrayView2<f32>,
+pub fn expand_priors<T: Zero + Copy>(
+    compact_priors: ArrayView2<T>,
     prior_index: ArrayView1<usize>,
-) -> Result<Array2<f32>, GggError> {
+) -> Result<Array2<T>, GggError> {
     let ntimes = prior_index.len();
     let nlev = compact_priors.dim().1;
-    let mut expanded_priors = Array2::<f32>::zeros([ntimes, nlev]);
+    let mut expanded_priors = Array2::<T>::zeros([ntimes, nlev]);
     for (itime, &index) in prior_index.iter().enumerate() {
         if index >= compact_priors.nrows() {
             return Err(GggError::custom(format!(

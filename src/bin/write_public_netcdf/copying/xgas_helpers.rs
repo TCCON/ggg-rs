@@ -3,14 +3,13 @@ use std::ops::Mul;
 
 use error_stack::ResultExt;
 use ggg_rs::{nc_utils, units::{dmf_conv_factor, UnknownUnitError}};
-use itertools::Itertools;
 use ndarray::{Array1, Array2, ArrayD, ArrayView1, Ix1, Ix2};
 use netcdf::{Extents, NcTypeDescriptor};
 use num_traits::Zero;
 
 use crate::{copying::copy_utils::NcChar, TIME_DIM_NAME};
 
-use super::{copy_utils::read_and_subset_req_var, find_subset_dim, get_string_attr, CopyError, Subsetter};
+use super::{copy_utils::{chars_to_string, read_and_subset_req_var}, find_subset_dim, get_string_attr, CopyError, Subsetter};
 
 pub(super) fn convert_dmf_array<T>(mut data: ArrayD<T>, orig_unit: &str, target_unit: &str) -> Result<ArrayD<T>, UnknownUnitError> 
 where T: Copy + Zero + NcTypeDescriptor + Mul<Output = T> + From<f32>
@@ -80,10 +79,11 @@ pub(super) fn expand_prior_profiles_from_file(
     let prior_data = convert_dmf_array(prior_data, &prior_unit, target_unit)
         .change_context_lazy(|| CopyError::context(format!("converting prior profile variable '{prior_varname}' units")))?;
 
-    // Get the prior index
+    // Get the prior index. Read it as a u32 so that the later conversion to usize is less likely to fail
+    // (e.g., on 32-bit systems).
     let prior_index_var = private_file.variable(prior_index_varname)
         .ok_or_else(|| CopyError::MissingReqVar(prior_index_varname.to_string()))?;
-    let prior_index = prior_index_var.get::<u64, _>(Extents::All)
+    let prior_index = prior_index_var.get::<u32, _>(Extents::All)
         .change_context_lazy(|| CopyError::context(format!("getting data for prior index variable '{prior_index_varname}'")))?
         .mapv(|v| v as usize);
 
@@ -162,19 +162,6 @@ pub(super) fn get_traceability_scale(private_file: &netcdf::File, scale_varname:
             return Err(CopyError::inconsistent_value(scale_varname, 0, i).into());
         }
     }
-
-    // All the values are consistent, convert the bytes to a string. Rust doesn't use
-    // null-terminated strings, so strip off any such null bytes. Really this should
-    // only take them off of the end, but this works okay for now.
-    let scale_bytes = scale_bytes.into_iter()
-        .filter_map(|b| {
-            let b = u8::from(b);
-            if b == 0 {
-                None
-            } else {
-                Some(b)
-            }
-        }).collect_vec();
-    let scale = String::from_utf8_lossy(&scale_bytes).to_string();
+    let scale = chars_to_string(scale_bytes.view());
     Ok(scale)
 }
