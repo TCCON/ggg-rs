@@ -15,6 +15,11 @@ mod template_strings;
 mod config;
 mod copying;
 
+// Todos:
+//   1. Traceability scale
+//   2. GEOS source summary
+//   3. Xgas discovering
+//   4. Standard and experimental configs
 
 fn main() -> ExitCode {
     let clargs = Cli::parse();
