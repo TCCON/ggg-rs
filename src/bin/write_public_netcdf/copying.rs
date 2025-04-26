@@ -337,7 +337,7 @@ impl CopySet for AuxVarCopy {
 }
 
 #[derive(Debug, Deserialize)]
-pub(crate) struct XgasCopy<T: Copy + Zero + NcTypeDescriptor> {
+pub(crate) struct XgasCopy {
     xgas: String,
     gas: String,
     gas_long: String,
@@ -346,10 +346,9 @@ pub(crate) struct XgasCopy<T: Copy + Zero + NcTypeDescriptor> {
     ak: XgasAncillary,
     slant_bin: XgasAncillary,
     traceability_scale: XgasAncillary,
-    data_type: PhantomData<T>,
 }
 
-impl<T: Copy + Zero + NcTypeDescriptor> XgasCopy<T> {
+impl XgasCopy {
     /// Create a set of variables to copy for an Xgas with the ancillary/supporting variables
     /// configured as follows: the prior profile, prior Xgas, and AK will be copied unless
     /// they were copied by an earlier Xgas set, while the traceability scale must not collide
@@ -386,7 +385,6 @@ impl<T: Copy + Zero + NcTypeDescriptor> XgasCopy<T> {
             ak: XgasAncillary::InferredIfFirst,
             slant_bin: XgasAncillary::Inferred,
             traceability_scale: XgasAncillary::Inferred,
-            data_type: PhantomData,
         }
     }
 
@@ -471,7 +469,7 @@ impl<T: Copy + Zero + NcTypeDescriptor> XgasCopy<T> {
     }
 }
 
-impl<T: Copy + Zero + NcTypeDescriptor + Mul<Output = T> + From<f32>> CopySet for XgasCopy<T> {
+impl CopySet for XgasCopy {
     fn copy(
         &self,
         private_file: &netcdf::File,

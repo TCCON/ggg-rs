@@ -135,7 +135,9 @@ fn make_public_name_from_dates(
     let time_units = if let AttributeValue::Str(u) = time_units {
         u
     } else {
-        return Err(CliError::Custom("'units' attribute on 'time' variable is not a string").into());
+        return Err(
+            CliError::Custom("'units' attribute on 'time' variable is not a string").into(),
+        );
     };
 
     let times = time_subsetter
@@ -232,7 +234,7 @@ fn add_xgas_vars(
     // My plan is that the default discovery is to find all variables matching "x[a-z0-9]+", optionally with suffixes.
     // The suffixes should handle the experimental gases. The discovered gases are added to those manually defined.
     // We can also exclude certain gases (e.g., "th2o", "fco2", "zco2") that are more diagnostic than the end user needs.
-    let xgas_vars: Vec<XgasCopy<f32>> = vec![
+    let xgas_vars: Vec<XgasCopy> = vec![
         XgasCopy::new("xch4", "ch4", "methane"),
         XgasCopy::new("xco", "co", "carbon monoxide"),
         XgasCopy::new("xn2o", "n2o", "nitrous oxide"),
