@@ -2,17 +2,28 @@
 use std::ops::Mul;
 
 use error_stack::ResultExt;
-use ggg_rs::{nc_utils, units::{dmf_conv_factor, UnknownUnitError}};
+use ggg_rs::{
+    nc_utils,
+    units::{dmf_conv_factor, UnknownUnitError},
+};
 use ndarray::{Array1, Array2, ArrayD, ArrayView1, Ix1, Ix2};
 use netcdf::{Extents, NcTypeDescriptor};
 use num_traits::Zero;
 
 use crate::{copying::copy_utils::NcChar, TIME_DIM_NAME};
 
-use super::{copy_utils::{chars_to_string, read_and_subset_req_var}, find_subset_dim, get_string_attr, CopyError, Subsetter};
+use super::{
+    copy_utils::{chars_to_string, read_and_subset_req_var},
+    find_subset_dim, get_string_attr, CopyError, Subsetter,
+};
 
-pub(super) fn convert_dmf_array<T>(mut data: ArrayD<T>, orig_unit: &str, target_unit: &str) -> Result<ArrayD<T>, UnknownUnitError> 
-where T: Copy + Zero + NcTypeDescriptor + Mul<Output = T> + From<f32>
+pub(super) fn convert_dmf_array<T>(
+    mut data: ArrayD<T>,
+    orig_unit: &str,
+    target_unit: &str,
+) -> Result<ArrayD<T>, UnknownUnitError>
+where
+    T: Copy + Zero + NcTypeDescriptor + Mul<Output = T> + From<f32>,
 {
     // Only do a conversion if the units are different. This saves some
     // multiplying and avoids any weird floating point error
@@ -23,7 +34,6 @@ where T: Copy + Zero + NcTypeDescriptor + Mul<Output = T> + From<f32>
     Ok(data)
 }
 
-
 pub(super) fn expand_slant_xgas_binned_aks_from_file(
     private_file: &netcdf::File,
     xgas_varname: &str,
@@ -31,24 +41,32 @@ pub(super) fn expand_slant_xgas_binned_aks_from_file(
     ak_varname: &str,
     slant_bin_varname: &str,
     time_subsetter: &Subsetter,
-    nsamples: Option<usize>
+    nsamples: Option<usize>,
 ) -> error_stack::Result<(Array2<f32>, Array1<i8>), CopyError> {
     // Read in all the variables we need from the private file
     let xgas = read_and_subset_req_var::<f32, Ix1>(private_file, xgas_varname, time_subsetter)?;
-    let airmass = read_and_subset_req_var::<f32, Ix1>(private_file, airmass_varname, time_subsetter)?;
+    let airmass =
+        read_and_subset_req_var::<f32, Ix1>(private_file, airmass_varname, time_subsetter)?;
     let aks = read_and_subset_req_var::<f32, Ix2>(private_file, ak_varname, time_subsetter)?;
-    let slant_xgas_bins = read_and_subset_req_var::<f32, Ix1>(private_file, slant_bin_varname, time_subsetter)?;
+    let slant_xgas_bins =
+        read_and_subset_req_var::<f32, Ix1>(private_file, slant_bin_varname, time_subsetter)?;
 
     // We need the Xgas-related units too
-    let xgas_var = private_file.variable(xgas_varname)
+    let xgas_var = private_file
+        .variable(xgas_varname)
         .expect("should be able to get Xgas variable as we previously read data from it");
-    let xgas_units = get_string_attr(&xgas_var, "units")
-        .change_context_lazy(|| CopyError::context(format!("getting {xgas_varname} units for AK expansion")))?;
+    let xgas_units = get_string_attr(&xgas_var, "units").change_context_lazy(|| {
+        CopyError::context(format!("getting {xgas_varname} units for AK expansion"))
+    })?;
 
-    let slant_bin_var = private_file.variable(slant_bin_varname)
+    let slant_bin_var = private_file
+        .variable(slant_bin_varname)
         .expect("should be able to get slant Xgas variable as we previously read data from it");
-    let slant_bin_units = get_string_attr(&slant_bin_var, "units")
-        .change_context_lazy(|| CopyError::context(format!("getting {slant_bin_varname} units for AK expansion")))?;
+    let slant_bin_units = get_string_attr(&slant_bin_var, "units").change_context_lazy(|| {
+        CopyError::context(format!(
+            "getting {slant_bin_varname} units for AK expansion"
+        ))
+    })?;
 
     let slant_xgas_values = xgas * airmass;
     let (expanded_aks, extrap_flags) = nc_utils::expand_slant_xgas_binned_aks(
@@ -57,8 +75,9 @@ pub(super) fn expand_slant_xgas_binned_aks_from_file(
         slant_xgas_bins,
         &slant_bin_units,
         aks.view(),
-        nsamples
-    ).change_context_lazy(|| CopyError::custom(format!("expanding '{ak_varname}'")))?;
+        nsamples,
+    )
+    .change_context_lazy(|| CopyError::custom(format!("expanding '{ak_varname}'")))?;
 
     Ok((expanded_aks, extrap_flags))
 }
@@ -68,23 +87,37 @@ pub(super) fn expand_prior_profiles_from_file(
     prior_varname: &str,
     prior_index_varname: &str,
     target_unit: &str,
-    time_subsetter: &Subsetter
+    time_subsetter: &Subsetter,
 ) -> error_stack::Result<Array2<f32>, CopyError> {
     // Get the compact prior profiles and convert them to the target units
-    let prior_var = private_file.variable(prior_varname)
+    let prior_var = private_file
+        .variable(prior_varname)
         .ok_or_else(|| CopyError::MissingReqVar(prior_varname.to_string()))?;
-    let prior_data = prior_var.get(Extents::All)
-        .change_context_lazy(|| CopyError::context(format!("getting data for prior profile variable '{prior_varname}'")))?;
+    let prior_data = prior_var.get(Extents::All).change_context_lazy(|| {
+        CopyError::context(format!(
+            "getting data for prior profile variable '{prior_varname}'"
+        ))
+    })?;
     let prior_unit = get_string_attr(&prior_var, "units")?;
-    let prior_data = convert_dmf_array(prior_data, &prior_unit, target_unit)
-        .change_context_lazy(|| CopyError::context(format!("converting prior profile variable '{prior_varname}' units")))?;
+    let prior_data =
+        convert_dmf_array(prior_data, &prior_unit, target_unit).change_context_lazy(|| {
+            CopyError::context(format!(
+                "converting prior profile variable '{prior_varname}' units"
+            ))
+        })?;
 
     // Get the prior index. Read it as a u32 so that the later conversion to usize is less likely to fail
     // (e.g., on 32-bit systems).
-    let prior_index_var = private_file.variable(prior_index_varname)
+    let prior_index_var = private_file
+        .variable(prior_index_varname)
         .ok_or_else(|| CopyError::MissingReqVar(prior_index_varname.to_string()))?;
-    let prior_index = prior_index_var.get::<u32, _>(Extents::All)
-        .change_context_lazy(|| CopyError::context(format!("getting data for prior index variable '{prior_index_varname}'")))?
+    let prior_index = prior_index_var
+        .get::<u32, _>(Extents::All)
+        .change_context_lazy(|| {
+            CopyError::context(format!(
+                "getting data for prior index variable '{prior_index_varname}'"
+            ))
+        })?
         .mapv(|v| v as usize);
 
     let prior_index = if let Some(idim) = find_subset_dim(&prior_index_var, TIME_DIM_NAME) {
@@ -94,58 +127,101 @@ pub(super) fn expand_prior_profiles_from_file(
     };
 
     // Convert the arrays to the correct dimensionality and expand
-    let prior_data = prior_data.into_dimensionality::<Ix2>()
-        .change_context_lazy(|| CopyError::context(format!("converting prior profile '{prior_varname}' to 2D")))?;
-    let prior_index = prior_index.into_dimensionality::<Ix1>()
-        .change_context_lazy(|| CopyError::context(format!("converting prior index '{prior_index_varname}' to 1D")))?;
+    let prior_data = prior_data
+        .into_dimensionality::<Ix2>()
+        .change_context_lazy(|| {
+            CopyError::context(format!("converting prior profile '{prior_varname}' to 2D"))
+        })?;
+    let prior_index = prior_index
+        .into_dimensionality::<Ix1>()
+        .change_context_lazy(|| {
+            CopyError::context(format!(
+                "converting prior index '{prior_index_varname}' to 1D"
+            ))
+        })?;
     let expanded_priors = nc_utils::expand_priors(prior_data.view(), prior_index.view())
-        .change_context_lazy(|| CopyError::context(format!("expanding prior variable '{prior_varname}'")))?;
+        .change_context_lazy(|| {
+            CopyError::context(format!("expanding prior variable '{prior_varname}'"))
+        })?;
 
     Ok(expanded_priors)
 }
-
 
 pub(super) fn write_extrapolation_flags(
     public_file: &mut netcdf::FileMut,
     ak_varname: &str,
     extrap_flag_varname: &str,
-    extrap_flags: ArrayView1<i8>
+    extrap_flags: ArrayView1<i8>,
 ) -> error_stack::Result<(), CopyError> {
-
     let flag_values = vec![-2i8, -1i8, 0i8, 1i8, 2i8];
     let flag_meanings = r#"clamped_to_min_slant_xgas
 extrapolated_below_lowest_slant_xgas_bin
 interpolated_normally
 extrapolated_above_largest_slant_xgas_bin
 clamped_to_max_slant_xgas"#;
-    let flag_usage = "Please see https://tccon-wiki.caltech.edu/Main/GGG2020DataChanges for more information";
+    let flag_usage =
+        "Please see https://tccon-wiki.caltech.edu/Main/GGG2020DataChanges for more information";
 
-    let mut var = public_file.add_variable::<i8>(&extrap_flag_varname, &[TIME_DIM_NAME])
-        .change_context_lazy(|| CopyError::context(format!("adding variable '{extrap_flag_varname}'")))?;
+    let mut var = public_file
+        .add_variable::<i8>(&extrap_flag_varname, &[TIME_DIM_NAME])
+        .change_context_lazy(|| {
+            CopyError::context(format!("adding variable '{extrap_flag_varname}'"))
+        })?;
 
     var.put_attribute("long_name", format!("{ak_varname} extrapolation flags"))
-        .change_context_lazy(|| CopyError::context(format!("adding 'long_name' attribute to variable '{extrap_flag_varname}'")))?;
+        .change_context_lazy(|| {
+            CopyError::context(format!(
+                "adding 'long_name' attribute to variable '{extrap_flag_varname}'"
+            ))
+        })?;
     var.put_attribute("flag_values", flag_values)
-        .change_context_lazy(|| CopyError::context(format!("adding 'flag_values' attribute to variable '{extrap_flag_varname}'")))?;
+        .change_context_lazy(|| {
+            CopyError::context(format!(
+                "adding 'flag_values' attribute to variable '{extrap_flag_varname}'"
+            ))
+        })?;
     var.put_attribute("flag_meanings", flag_meanings)
-        .change_context_lazy(|| CopyError::context(format!("adding 'flag_meanings' attribute to variable '{extrap_flag_varname}'")))?;
+        .change_context_lazy(|| {
+            CopyError::context(format!(
+                "adding 'flag_meanings' attribute to variable '{extrap_flag_varname}'"
+            ))
+        })?;
     var.put_attribute("usage", flag_usage)
-        .change_context_lazy(|| CopyError::context(format!("adding 'meanings' attribute to variable '{extrap_flag_varname}'")))?;
+        .change_context_lazy(|| {
+            CopyError::context(format!(
+                "adding 'meanings' attribute to variable '{extrap_flag_varname}'"
+            ))
+        })?;
 
     var.put(extrap_flags, Extents::All)
-        .change_context_lazy(|| CopyError::context(format!("writing data for variable '{extrap_flag_varname}'")))?;
+        .change_context_lazy(|| {
+            CopyError::context(format!("writing data for variable '{extrap_flag_varname}'"))
+        })?;
     Ok(())
 }
 
-pub(super) fn get_traceability_scale(private_file: &netcdf::File, scale_varname: &str) -> error_stack::Result<String, CopyError> {
-    let scale_var = private_file.variable(scale_varname)
+pub(super) fn get_traceability_scale(
+    private_file: &netcdf::File,
+    scale_varname: &str,
+) -> error_stack::Result<String, CopyError> {
+    let scale_var = private_file
+        .variable(scale_varname)
         .ok_or_else(|| CopyError::MissingReqVar(scale_varname.to_string()))?;
     // In the GGG2020.1 private files, these variables should be characters (not strings),
     // we also aren't subsetting by time because this *should* be the same for all spectra.
-    let scale_chars = scale_var.get::<NcChar, _>(Extents::All)
-        .change_context_lazy(|| CopyError::context(format!("getting traceability scale variable '{scale_varname}' data")))?
+    let scale_chars = scale_var
+        .get::<NcChar, _>(Extents::All)
+        .change_context_lazy(|| {
+            CopyError::context(format!(
+                "getting traceability scale variable '{scale_varname}' data"
+            ))
+        })?
         .into_dimensionality::<Ix2>()
-        .change_context_lazy(|| CopyError::context(format!("converting traceability scale variable '{scale_varname}' to 2D")))?;
+        .change_context_lazy(|| {
+            CopyError::context(format!(
+                "converting traceability scale variable '{scale_varname}' to 2D"
+            ))
+        })?;
 
     // Check that all slices match the first one - we require that all of the spectra are on the same scale to collapse it into
     // an attribute.
@@ -153,7 +229,8 @@ pub(super) fn get_traceability_scale(private_file: &netcdf::File, scale_varname:
     if nspec < 1 {
         return Err(CopyError::custom(format!(
             "Traceability scale variable '{scale_varname}' is length 0 along the first dimension"
-        )).into())
+        ))
+        .into());
     }
 
     let scale_bytes = scale_chars.row(0);
