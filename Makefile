@@ -80,7 +80,7 @@ release: $(NC_LIB)
 	$(CARGOCMD) build $(CARGOARGS) --release
 
 test: $(NC_LIB)
-	$(CARGOCMD) test $(CARGOARGS) $(TEST_PATTERN)
+	$(CARGOCMD) test $(CARGOARGS) --bins $(TEST_PATTERN)
 
 check: $(NC_LIB)
 	$(CARGOCMD) check $(CARGOARGS)

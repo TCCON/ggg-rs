@@ -7,7 +7,7 @@ use clap::Parser;
 use clap_verbosity_flag::{InfoLevel, Verbosity};
 use config::{Config, STANDARD_TCCON_TOML};
 use constants::TIME_DIM_NAME;
-use copying::{AuxVarCopy, ComputedVariables, CopySet, Subsetter, XgasCopy};
+use copying::{AuxVarCopy, ComputedVariable, CopySet, Subsetter, XgasCopy};
 use discovery::discover_xgas_vars;
 use error_stack::ResultExt;
 use ggg_rs::{logging::init_logging, utils::nctime_to_datetime};
@@ -64,8 +64,8 @@ fn driver(clargs: Cli) -> error_stack::Result<(), CliError> {
 
     add_time_dim(&mut public_ds, &time_subsetter)?;
     add_aux_vars(&config, &private_ds, &mut public_ds, &time_subsetter)?;
+    add_computed_vars(&config, &private_ds, &mut public_ds, &time_subsetter)?;
     add_xgas_vars(&config, &private_ds, &mut public_ds, &time_subsetter)?;
-    add_computed_vars(&private_ds, &mut public_ds, &time_subsetter)?;
     Ok(())
 }
 
@@ -283,15 +283,12 @@ fn add_xgas_vars(
 }
 
 fn add_computed_vars(
+    config: &Config,
     private_ds: &netcdf::File,
     public_ds: &mut netcdf::FileMut,
     time_subsetter: &Subsetter,
 ) -> error_stack::Result<(), CliError> {
-    let computed_vars = vec![ComputedVariables::PriorSource {
-        public_varname: None,
-    }];
-
-    for var in computed_vars {
+    for var in config.computed.iter() {
         var.copy(private_ds, public_ds, time_subsetter)
             .change_context(CliError::WritingComputed)?;
     }

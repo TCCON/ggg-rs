@@ -211,12 +211,12 @@ impl Subsetter {
 #[derive(Debug, Deserialize, PartialEq)]
 pub(crate) struct AuxVarCopy {
     /// The variable from the private file to copy.
-    pub(crate) private_varname: String,
+    pub(crate) private_name: String,
 
     /// The name to give the variable in the output file. If `None`, the
     /// variable will have the same name as in the private file.
     #[serde(default)]
-    pub(crate) public_varname: Option<String>,
+    pub(crate) public_name: Option<String>,
 
     /// Value to use for the long name attribute.
     pub(crate) long_name: String,
@@ -243,8 +243,8 @@ impl AuxVarCopy {
         required: bool,
     ) -> Self {
         Self {
-            private_varname: private_varname.to_string(),
-            public_varname: None,
+            private_name: private_varname.to_string(),
+            public_name: None,
             long_name: long_name.to_string(),
             attr_overrides: IndexMap::new(),
             attr_to_remove: crate::config::default_attr_remove(),
@@ -259,8 +259,8 @@ impl AuxVarCopy {
         required: bool,
     ) -> Self {
         Self {
-            private_varname: private_varname.to_string(),
-            public_varname: None,
+            private_name: private_varname.to_string(),
+            public_name: None,
             long_name: long_name.to_string(),
             attr_overrides: IndexMap::new(),
             attr_to_remove: vec![],
@@ -269,7 +269,7 @@ impl AuxVarCopy {
     }
 
     pub(crate) fn with_public_varname<P: ToString>(mut self, public_varname: P) -> Self {
-        self.public_varname = Some(public_varname.to_string());
+        self.public_name = Some(public_varname.to_string());
         self
     }
 
@@ -301,22 +301,19 @@ impl CopySet for AuxVarCopy {
     ) -> error_stack::Result<(), CopyError> {
         // Will need to create a variable with the same dimensions, then copy the good subset of values
         // and the attributes.
-        let private_var = if let Some(var) = private_file.variable(&self.private_varname) {
+        let private_var = if let Some(var) = private_file.variable(&self.private_name) {
             var
         } else if self.required {
-            return Err(CopyError::MissingReqVar(self.private_varname.clone()).into());
+            return Err(CopyError::MissingReqVar(self.private_name.clone()).into());
         } else {
             log::info!(
                 "Not copying {} as it is not present in the private file",
-                self.private_varname
+                self.private_name
             );
             return Ok(());
         };
 
-        let public_varname = self
-            .public_varname
-            .as_deref()
-            .unwrap_or(&self.private_varname);
+        let public_varname = self.public_name.as_deref().unwrap_or(&self.private_name);
 
         copy_variable_general(
             public_file,
@@ -813,12 +810,12 @@ impl XgasAncillary {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(tag = "type")]
-pub(crate) enum ComputedVariables {
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub(crate) enum ComputedVariable {
     PriorSource { public_varname: Option<String> },
 }
 
-impl CopySet for ComputedVariables {
+impl CopySet for ComputedVariable {
     fn copy(
         &self,
         private_file: &netcdf::File,
@@ -826,7 +823,7 @@ impl CopySet for ComputedVariables {
         time_subsetter: &Subsetter,
     ) -> error_stack::Result<(), CopyError> {
         match self {
-            ComputedVariables::PriorSource { public_varname } => {
+            ComputedVariable::PriorSource { public_varname } => {
                 let pubname = public_varname.as_deref().unwrap_or("apriori_data_source");
                 add_geos_version_variable(private_file, public_file, pubname, time_subsetter)
             }

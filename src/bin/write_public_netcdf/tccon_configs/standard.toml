@@ -1,3 +1,6 @@
+[[computed]]
+type = "prior_source"
+
 [[xgas]]
 xgas = "xluft"
 gas = "luft"

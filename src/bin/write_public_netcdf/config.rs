@@ -25,7 +25,7 @@
 //!
 //! ```toml
 //! [[aux]]
-//! private_varname = "solzen"
+//! private_name = "solzen"
 //! long_name = "solar zenith angle"
 //! ```
 //!
@@ -39,12 +39,12 @@
 //! do not adequately describe remotely sensed quantities.
 //!
 //! If instead you wanted to rename the variable in the public file, you can add the
-//! `public_varname` field:
+//! `public_name` field:
 //!
 //! ```toml
 //! [[aux]]
-//! private_varname = "solzen"
-//! public_varname = "solar_zenith_angle"
+//! private_name = "solzen"
+//! public_name = "solar_zenith_angle"
 //! long_name = "solar zenith angle"
 //! ```
 //!
@@ -60,7 +60,7 @@
 //!
 //! ```toml
 //! [[aux]]
-//! private_varname = "day"
+//! private_name = "day"
 //! long_name = "day of year"
 //! attr_overrides = {units = "Julian day", description = "1-based day of year"}
 //! attr_to_remove = ["vmin", "vmax"]
@@ -78,7 +78,7 @@
 //!
 //! ```toml
 //! [[aux]]
-//! private_varname = "day"
+//! private_name = "day"
 //! long_name = "day of year"
 //! required = false
 //! ```
@@ -87,20 +87,20 @@
 //!
 //! ```toml
 //! [[aux]]
-//! private_varname = "time"
+//! private_name = "time"
 //! long_name = "zero path difference UTC time"
 //!
 //! [[aux]]
-//! private_varname = "year"
+//! private_name = "year"
 //! long_name = "year"
 //!
 //! [[aux]]
-//! private_varname = "day"
+//! private_name = "day"
 //! long_name = "day of year"
 //! attr_overrides = {units = "Julian day", description = "1-based day of year"}
 //!
 //! [[aux]]
-//! private_varname = "solzen"
+//! private_name = "solzen"
 //! long_name = "solar zenith angle"
 //! ```
 //!
@@ -155,7 +155,7 @@ use serde::{de::Error, Deserialize};
 use crate::{
     copying::XgasAncillary,
     discovery::{XgasMatchMethod, XgasMatchRule},
-    AuxVarCopy, XgasCopy,
+    AuxVarCopy, ComputedVariable, XgasCopy,
 };
 
 pub(crate) static STANDARD_TCCON_TOML: &'static str = include_str!("tccon_configs/standard.toml");
@@ -193,6 +193,9 @@ pub(crate) struct Config {
     /// to update or remove.
     #[serde(default)]
     pub(crate) aux: Vec<AuxVarCopy>,
+
+    #[serde(default)]
+    pub(crate) computed: Vec<ComputedVariable>,
 
     /// A mapping of gas abbreviations (e.g., "co2") to their proper names
     /// (e.g., "carbon dioxide").
@@ -262,6 +265,7 @@ impl Default for Config {
     fn default() -> Self {
         let mut me = Self {
             aux: Default::default(),
+            computed: Default::default(),
             gas_long_names: Default::default(),
             xgas: Default::default(),
             discovery: Default::default(),
@@ -364,11 +368,11 @@ fn add_default_aux_vars(config: &mut Config) {
     let aux_var_names: HashSet<String> = config
         .aux
         .iter()
-        .map(|aux| aux.private_varname.clone())
+        .map(|aux| aux.private_name.clone())
         .collect();
 
     for default_aux in default_aux_vars() {
-        if !aux_var_names.contains(&default_aux.private_varname) {
+        if !aux_var_names.contains(&default_aux.private_name) {
             config.aux.push(default_aux);
         }
     }
