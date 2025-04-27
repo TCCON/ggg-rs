@@ -1,0 +1,6 @@
+[book]
+authors = ["Joshua Laughner"]
+language = "en"
+multilingual = false
+src = "src"
+title = "GGG-RS User Guide"
