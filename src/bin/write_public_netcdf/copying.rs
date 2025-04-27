@@ -209,6 +209,7 @@ impl Subsetter {
 }
 
 #[derive(Debug, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct AuxVarCopy {
     /// The variable from the private file to copy.
     pub(crate) private_name: String,
@@ -238,12 +239,12 @@ pub(crate) struct AuxVarCopy {
 
 impl AuxVarCopy {
     pub(crate) fn new<P: ToString, L: ToString>(
-        private_varname: P,
+        private_name: P,
         long_name: L,
         required: bool,
     ) -> Self {
         Self {
-            private_name: private_varname.to_string(),
+            private_name: private_name.to_string(),
             public_name: None,
             long_name: long_name.to_string(),
             attr_overrides: IndexMap::new(),
@@ -254,12 +255,12 @@ impl AuxVarCopy {
 
     #[allow(dead_code)] // needed at least for testing
     pub(crate) fn new_keep_attrs<P: ToString, L: ToString>(
-        private_varname: P,
+        private_name: P,
         long_name: L,
         required: bool,
     ) -> Self {
         Self {
-            private_name: private_varname.to_string(),
+            private_name: private_name.to_string(),
             public_name: None,
             long_name: long_name.to_string(),
             attr_overrides: IndexMap::new(),
@@ -268,8 +269,8 @@ impl AuxVarCopy {
         }
     }
 
-    pub(crate) fn with_public_varname<P: ToString>(mut self, public_varname: P) -> Self {
-        self.public_name = Some(public_varname.to_string());
+    pub(crate) fn with_public_name<P: ToString>(mut self, public_name: P) -> Self {
+        self.public_name = Some(public_name.to_string());
         self
     }
 
@@ -313,12 +314,12 @@ impl CopySet for AuxVarCopy {
             return Ok(());
         };
 
-        let public_varname = self.public_name.as_deref().unwrap_or(&self.private_name);
+        let public_name = self.public_name.as_deref().unwrap_or(&self.private_name);
 
         copy_variable_general(
             public_file,
             &private_var,
-            public_varname,
+            public_name,
             time_subsetter,
             &self.long_name,
             &self.attr_overrides,
@@ -330,17 +331,43 @@ impl CopySet for AuxVarCopy {
 #[derive(Debug, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct XgasCopy {
+    /// The name of the Xgas variable to copy
     xgas: String,
+
+    /// The abbreviation of the physical gas, e.g., both `wco2` and `lco2`
+    /// should set this to "co2". This can be used to identify variables that
+    /// have the same priors, for example.
     gas: String,
+
+    /// The proper name of the gas, e.g. "carbon dioxide" for CO2. This will
+    /// be used in netCDF attributes. It is acceptable to insert the abbreviation
+    /// as a fallback, though this is not preferred.
+    #[serde(default = "crate::config::default_empty_string")]
     gas_long: String,
+
+    /// How/whether to copy the a priori profiles.
     #[serde(default = "crate::config::default_ancillary_infer_first")]
     prior_profile: XgasAncillary,
+
+    /// How/whether to copy the a prior column average.
     #[serde(default = "crate::config::default_ancillary_infer_first")]
     prior_xgas: XgasAncillary,
+
+    /// How/whether to copy the averaging kernels.
     #[serde(default = "crate::config::default_ancillary_infer_first")]
     ak: XgasAncillary,
+
+    /// Where to find the slant Xgas bins that correspond to the AKs.
+    /// This is a special case, and will only be accessed if the AKs are
+    /// needed, but MUST be available in that case. Thus, this should never
+    /// be `XgasAncillary::Omit`.
     #[serde(default = "crate::config::default_ancillary_infer")]
     slant_bin: XgasAncillary,
+
+    /// How/whether to find the traceability scale for the gas. This should
+    /// point to a character variable that lists the scale for each observation;
+    /// the writer can then check if this is consistent and collapse it to a
+    /// single attribute.
     #[serde(default = "crate::config::default_ancillary_infer")]
     traceability_scale: XgasAncillary,
 }
@@ -423,6 +450,18 @@ impl XgasCopy {
 
     pub(crate) fn xgas_varname(&self) -> &str {
         &self.xgas
+    }
+
+    pub(crate) fn gas(&self) -> &str {
+        &self.gas
+    }
+
+    pub(crate) fn gas_full_name(&self) -> &str {
+        &self.gas_long
+    }
+
+    pub(crate) fn set_gas_full_name(&mut self, name: String) {
+        self.gas_long = name;
     }
 
     fn xgas_error_name(&self) -> String {
@@ -520,6 +559,10 @@ impl CopySet for XgasCopy {
             .get_var_names_opt(private_file, public_file, || {
                 self.infer_traceability_names()
             }) {
+            log::debug!(
+                "Getting {} traceability scale from {private_scale_name}",
+                self.xgas
+            );
             let scale = get_traceability_scale(private_file, &private_scale_name)?;
             if scale.is_empty() {
                 "N/A".to_string()
@@ -527,6 +570,10 @@ impl CopySet for XgasCopy {
                 scale
             }
         } else {
+            log::debug!(
+                "Not getting traceability scale for {} from any variable",
+                self.xgas
+            );
             "N/A".to_string()
         };
 
@@ -812,7 +859,7 @@ impl XgasAncillary {
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum ComputedVariable {
-    PriorSource { public_varname: Option<String> },
+    PriorSource { public_name: Option<String> },
 }
 
 impl CopySet for ComputedVariable {
@@ -823,8 +870,8 @@ impl CopySet for ComputedVariable {
         time_subsetter: &Subsetter,
     ) -> error_stack::Result<(), CopyError> {
         match self {
-            ComputedVariable::PriorSource { public_varname } => {
-                let pubname = public_varname.as_deref().unwrap_or("apriori_data_source");
+            ComputedVariable::PriorSource { public_name } => {
+                let pubname = public_name.as_deref().unwrap_or("apriori_data_source");
                 add_geos_version_variable(private_file, public_file, pubname, time_subsetter)
             }
         }
@@ -876,7 +923,7 @@ mod tests {
 
     #[test]
     fn test_de_aux_var() {
-        let toml_str = r#"private_varname = "time"
+        let toml_str = r#"private_name = "time"
         long_name = "zero path difference time"
         "#;
         let aux_de: AuxVarCopy = toml::from_str(toml_str).expect("deserialization should work");
@@ -886,18 +933,18 @@ mod tests {
 
     #[test]
     fn test_de_aux_var_pub_name() {
-        let toml_str = r#"private_varname = "year"
+        let toml_str = r#"private_name = "year"
         long_name = "year"
-        public_varname = "decimal_year"
+        public_name = "decimal_year"
         "#;
         let aux_de: AuxVarCopy = toml::from_str(toml_str).expect("deserialization should work");
-        let aux_val = AuxVarCopy::new("year", "year", true).with_public_varname("decimal_year");
+        let aux_val = AuxVarCopy::new("year", "year", true).with_public_name("decimal_year");
         assert_eq!(aux_de, aux_val);
     }
 
     #[test]
     fn test_de_aux_var_attrs() {
-        let toml_str = r#"private_varname = "day"
+        let toml_str = r#"private_name = "day"
         long_name = "day of year"
         attr_overrides = {units = "Julian day", description = "1-based day of year"}
         attr_to_remove = ["vmin", "vmax"]
@@ -915,7 +962,7 @@ mod tests {
 
     #[test]
     fn test_de_aux_var_not_req() {
-        let toml_str = r#"private_varname = "hour"
+        let toml_str = r#"private_name = "hour"
         long_name = "UTC hour"
         required = false
         "#;

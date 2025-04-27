@@ -27,10 +27,10 @@ impl DiscoveryError {
 // -------------------------------- //
 
 #[derive(Debug, Deserialize)]
-#[serde(tag = "type")]
+#[serde(untagged, rename_all = "snake_case")]
 enum XgasMatchDeser {
-    Suffix(String),
-    Regex(String),
+    Suffix { suffix: String },
+    Regex { regex: String },
 }
 
 impl TryFrom<XgasMatchDeser> for XgasMatchMethod {
@@ -38,8 +38,8 @@ impl TryFrom<XgasMatchDeser> for XgasMatchMethod {
 
     fn try_from(value: XgasMatchDeser) -> Result<Self, Self::Error> {
         match value {
-            XgasMatchDeser::Suffix(suf) => Ok(Self::Suffix(suf)),
-            XgasMatchDeser::Regex(pat) => Self::regex_from_string(pat),
+            XgasMatchDeser::Suffix { suffix } => Ok(Self::suffix_from_string(suffix)),
+            XgasMatchDeser::Regex { regex: pattern } => Self::regex_from_string(pattern),
         }
     }
 }
@@ -47,11 +47,34 @@ impl TryFrom<XgasMatchDeser> for XgasMatchMethod {
 #[derive(Debug, Deserialize)]
 #[serde(try_from = "XgasMatchDeser")]
 pub(crate) enum XgasMatchMethod {
-    Suffix(String),
-    Regex(Regex, String),
+    Suffix { re: Regex, suf: String },
+    Regex { re: Regex, pat: String },
+}
+
+impl PartialEq for XgasMatchMethod {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Suffix { re: _, suf: l_suf }, Self::Suffix { re: _, suf: r_suf }) => {
+                l_suf == r_suf
+            }
+            (Self::Regex { re: _, pat: l_pat }, Self::Regex { re: _, pat: r_pat }) => {
+                l_pat == r_pat
+            }
+            _ => false,
+        }
+    }
 }
 
 impl XgasMatchMethod {
+    pub(crate) fn suffix_from_string(suffix: String) -> Self {
+        let suffix = regex::escape(&suffix);
+        let pattern = format!(r"^x(?<gas>[a-z][a-z0-9]*)_\w+_{suffix}$");
+        let re = Regex::from_str(&pattern).expect(
+            "Xgas discovery suffix failed to compile into a regular expression (this is a bug)",
+        );
+        Self::Suffix { re, suf: suffix }
+    }
+
     pub(crate) fn regex_from_string(pattern: String) -> Result<Self, DiscoveryError> {
         let re = Regex::from_str(&pattern).map_err(|e| {
             DiscoveryError::bad_regex(pattern.clone(), format!("it is not a valid pattern ({e})"))
@@ -65,35 +88,20 @@ impl XgasMatchMethod {
                 "while this is a valid regex, it must contain a named capture group, 'gas'",
             ));
         }
-        Ok(Self::Regex(re, pattern.to_string()))
+        Ok(Self::Regex {
+            re,
+            pat: pattern.to_string(),
+        })
     }
 }
 
 impl Display for XgasMatchMethod {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            XgasMatchMethod::Suffix(suffix) => write!(f, "suffix '{suffix}'"),
-            XgasMatchMethod::Regex(_, pattern) => write!(f, "regex '{pattern}'"),
+            XgasMatchMethod::Suffix { re: _, suf } => write!(f, "suffix '{suf}'"),
+            XgasMatchMethod::Regex { re: _, pat } => write!(f, "regex '{pat}'"),
         }
     }
-}
-
-fn match_xgas_var_suffix<'a>(varname: &'a str, suffix: &str) -> Option<&'a str> {
-    if varname.is_empty() {
-        return None;
-    }
-
-    if !varname.starts_with('x') || varname.ends_with(suffix) {
-        return None;
-    }
-
-    let xgas = varname
-        .split('_')
-        .next()
-        .expect("splitting a variable name on an underscore should yield at least one part");
-    // Since we know the starting value is 'x' (an ASCII character), slicing off the first byte
-    // should remove it.
-    Some(&xgas[1..])
 }
 
 fn match_xgas_var_regex<'a>(varname: &'a str, re: &Regex) -> Option<&'a str> {
@@ -104,8 +112,9 @@ fn match_xgas_var_regex<'a>(varname: &'a str, re: &Regex) -> Option<&'a str> {
     Some(gas.as_str())
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, PartialEq)]
 pub(crate) struct XgasMatchRule {
+    #[serde(flatten)]
     pattern: XgasMatchMethod,
     #[serde(default)]
     pub(crate) prior_profile: Option<XgasAncillary>,
@@ -133,15 +142,15 @@ impl XgasMatchRule {
 
     pub(crate) fn is_given_regex(&self, pattern: &str) -> bool {
         match &self.pattern {
-            XgasMatchMethod::Suffix(_) => false,
-            XgasMatchMethod::Regex(_, p) => p == pattern,
+            XgasMatchMethod::Suffix { re: _, suf: _ } => false,
+            XgasMatchMethod::Regex { re: _, pat } => pat == pattern,
         }
     }
 
     fn get_gas_opt<'a>(&self, varname: &'a str) -> Option<&'a str> {
         match &self.pattern {
-            XgasMatchMethod::Suffix(suffix) => match_xgas_var_suffix(varname, suffix),
-            XgasMatchMethod::Regex(regex, _) => match_xgas_var_regex(varname, regex),
+            XgasMatchMethod::Suffix { re, suf: _ } => match_xgas_var_regex(varname, re),
+            XgasMatchMethod::Regex { re, pat: _ } => match_xgas_var_regex(varname, re),
         }
     }
 }
@@ -225,4 +234,50 @@ fn should_add_xgas_var<'a, 'r, G: AsRef<str>, V: AsRef<str>>(
     }
 
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{copying::XgasAncillary, discovery::XgasMatchMethod};
+
+    use super::XgasMatchRule;
+
+    #[test]
+    fn test_de_simple_rules() {
+        let toml_str = r#"suffix = "insb""#;
+        let rule: XgasMatchRule =
+            toml::from_str(toml_str).expect("deserialization should not fail");
+        if let XgasMatchMethod::Suffix { re: _, suf } = rule.pattern {
+            assert_eq!(suf, "insb")
+        } else {
+            assert!(false, "wrong type of match method")
+        }
+
+        let toml_str = r#"regex = 'column_average_(?<gas>\w+)'"#;
+        let rule: XgasMatchRule =
+            toml::from_str(toml_str).expect("deserialization should not fail");
+        if let XgasMatchMethod::Regex { re: _, pat } = rule.pattern {
+            assert_eq!(pat, r"column_average_(?<gas>\w+)")
+        } else {
+            assert!(false, "wrong type of match method")
+        }
+    }
+
+    #[test]
+    fn test_de_with_ancillary() {
+        let toml_str = r#"suffix = "mir"
+        ak = { type = "omit" }
+        traceability_scale = { type = "omit" }"#;
+        let rule: XgasMatchRule =
+            toml::from_str(toml_str).expect("deserialization should not fail");
+        let expected = XgasMatchRule {
+            pattern: XgasMatchMethod::suffix_from_string("mir".to_string()),
+            prior_profile: None,
+            prior_xgas: None,
+            ak: Some(XgasAncillary::Omit),
+            slant_bin: None,
+            traceability_scale: Some(XgasAncillary::Omit),
+        };
+        assert_eq!(rule, expected);
+    }
 }

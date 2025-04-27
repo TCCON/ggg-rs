@@ -275,6 +275,7 @@ fn add_xgas_vars(
     let it = defined_xgases.iter().chain(discovered_xgases.iter());
 
     for var in it {
+        log::trace!("Xgas variable: {var:?}");
         var.copy(private_ds, public_ds, time_subsetter)
             .change_context(CliError::WritingXgas)?;
     }
