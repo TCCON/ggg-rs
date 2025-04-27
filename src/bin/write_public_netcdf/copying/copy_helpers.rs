@@ -33,6 +33,9 @@ pub(super) fn copy_vmr_variable_from_dset<
     attr_to_remove: &[S],
     target_unit: &str,
 ) -> error_stack::Result<(), CopyError> {
+    log::debug!(
+        "Copying private variable '{private_varname}' to public variable '{public_varname}'"
+    );
     let private_var = private_file
         .variable(private_varname)
         .ok_or_else(|| CopyError::MissingReqVar(private_varname.to_string()))?;
@@ -41,6 +44,14 @@ pub(super) fn copy_vmr_variable_from_dset<
             "getting units for {private_varname} to scale to the primary Xgas variable unit"
         ))
     })?;
+    let var_unit = if var_unit.is_empty() {
+        log::info!(
+            "Units for {private_varname} were an empty string, assuming this should be unscaled mole fraction",
+        );
+        "parts"
+    } else {
+        &var_unit
+    };
 
     let data = private_var
         .get::<T, _>(Extents::All)
@@ -87,6 +98,10 @@ pub(super) fn copy_variable_new_data<S: AsRef<str>>(
     attr_overrides: &IndexMap<String, AttributeValue>,
     attr_to_remove: &[S],
 ) -> error_stack::Result<(), CopyError> {
+    log::debug!(
+        "Transforming private variable '{}' into public variable '{public_varname}'",
+        private_var.name()
+    );
     let mut public_var =
         copy_var_pre_write_helper::<f32>(public_file, private_var, public_varname, Some(dims))?;
     public_var.put(data, Extents::All).change_context_lazy(|| {
@@ -114,6 +129,9 @@ pub(super) fn copy_variable_general<S: AsRef<str>>(
     attr_to_remove: &[S],
 ) -> error_stack::Result<(), CopyError> {
     let private_varname = private_var.name();
+    log::debug!(
+        "Copying private variable '{private_varname}' to public variable '{public_varname}'"
+    );
 
     let generic_array = NcArray::get_from(private_var).change_context_lazy(|| {
         CopyError::context(format!("copying variable '{private_varname}'"))

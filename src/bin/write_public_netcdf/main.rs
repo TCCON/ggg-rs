@@ -5,8 +5,10 @@ use std::{
 
 use clap::Parser;
 use clap_verbosity_flag::{InfoLevel, Verbosity};
+use config::{Config, STANDARD_TCCON_TOML};
 use constants::TIME_DIM_NAME;
 use copying::{AuxVarCopy, ComputedVariables, CopySet, Subsetter, XgasCopy};
+use discovery::discover_xgas_vars;
 use error_stack::ResultExt;
 use ggg_rs::{logging::init_logging, utils::nctime_to_datetime};
 use itertools::Itertools;
@@ -16,18 +18,20 @@ use netcdf::{AttributeValue, Extents};
 mod config;
 mod constants;
 mod copying;
+mod discovery;
 mod template_strings;
 
 // Todos:
 //   1. Traceability scale [x]
 //   2. GEOS source summary [x]
-//   3. Xgas discovery
-//   4. Standard and experimental configs
+//   3. Xgas discovery [x]
+//   4. Standard [x] and experimental [ ] configs
 //   5. Data latency
 //   6. Global attributes
 
 fn main() -> ExitCode {
     let clargs = Cli::parse();
+
     init_logging(clargs.verbosity.log_level_filter());
 
     match driver(clargs) {
@@ -40,6 +44,9 @@ fn main() -> ExitCode {
 }
 
 fn driver(clargs: Cli) -> error_stack::Result<(), CliError> {
+    let config = load_config(clargs.extended, clargs.config.as_deref())
+        .change_context(CliError::ReadingConfig)?;
+
     let private_ds =
         netcdf::open(&clargs.private_nc_file).change_context(CliError::OpeningPrivateFile)?;
 
@@ -56,21 +63,32 @@ fn driver(clargs: Cli) -> error_stack::Result<(), CliError> {
         netcdf::create(&public_file_name).change_context(CliError::OpeningPublicFile)?;
 
     add_time_dim(&mut public_ds, &time_subsetter)?;
-    add_aux_vars(&private_ds, &mut public_ds, &time_subsetter)?;
-    add_xgas_vars(&private_ds, &mut public_ds, &time_subsetter)?;
+    add_aux_vars(&config, &private_ds, &mut public_ds, &time_subsetter)?;
+    add_xgas_vars(&config, &private_ds, &mut public_ds, &time_subsetter)?;
     add_computed_vars(&private_ds, &mut public_ds, &time_subsetter)?;
     Ok(())
 }
 
 #[derive(Debug, clap::Parser)]
 struct Cli {
-    /// The privat netCDF file to copy.
+    /// The private netCDF file to copy.
     private_nc_file: PathBuf,
+
+    /// Run using the default configuration for the extended
+    /// TCCON public files, which include Xgas values from the
+    /// secondary detector if available.
+    #[clap(long, group = "configuration")]
+    extended: bool,
+
+    /// Run using a custom configuration.
+    #[clap(long, group = "configuration")]
+    config: Option<PathBuf>,
 
     /// Do not rename the output file to match the time span of the
     /// data retained after flagging and data latency.
     #[clap(long)]
     no_rename_by_dates: bool,
+
     // config_file: Option<PathBuf>,
     #[command(flatten)]
     verbosity: Verbosity<InfoLevel>,
@@ -78,6 +96,8 @@ struct Cli {
 
 #[derive(Debug, thiserror::Error)]
 enum CliError {
+    #[error("An error occurred while reading the configuration")]
+    ReadingConfig,
     #[error("An error occurred while opening the private file")]
     OpeningPrivateFile,
     #[error("An error occurred while opening the public file for writing")]
@@ -96,6 +116,17 @@ enum CliError {
     WritingComputed,
     #[error("{0}")]
     Custom(&'static str),
+}
+
+fn load_config(extended: bool, custom_file: Option<&Path>) -> Result<Config, toml::de::Error> {
+    match (extended, custom_file) {
+        (true, None) => todo!(),
+        (true, Some(_)) => panic!(
+            "invalid combination of arguments: --extended and --config cannot be used together"
+        ),
+        (false, None) => Config::from_toml_str(STANDARD_TCCON_TOML),
+        (false, Some(p)) => Config::from_toml_file(p),
+    }
 }
 
 fn make_time_subsetter(private_ds: &netcdf::File) -> error_stack::Result<Subsetter, CliError> {
@@ -211,13 +242,12 @@ fn add_time_dim(
 }
 
 fn add_aux_vars(
+    config: &Config,
     private_ds: &netcdf::File,
     public_ds: &mut netcdf::FileMut,
     time_subsetter: &Subsetter,
 ) -> error_stack::Result<(), CliError> {
-    let aux_vars = config::default_aux_vars();
-
-    for var in aux_vars {
+    for var in config.aux.iter() {
         var.copy(private_ds, public_ds, time_subsetter)
             .change_context(CliError::WritingAux)?;
     }
@@ -226,21 +256,25 @@ fn add_aux_vars(
 }
 
 fn add_xgas_vars(
+    config: &Config,
     private_ds: &netcdf::File,
     public_ds: &mut netcdf::FileMut,
     time_subsetter: &Subsetter,
 ) -> error_stack::Result<(), CliError> {
-    // TODO: discover the Xgas variables. This is just a quick verification
-    // My plan is that the default discovery is to find all variables matching "x[a-z0-9]+", optionally with suffixes.
-    // The suffixes should handle the experimental gases. The discovered gases are added to those manually defined.
-    // We can also exclude certain gases (e.g., "th2o", "fco2", "zco2") that are more diagnostic than the end user needs.
-    let xgas_vars: Vec<XgasCopy> = vec![
-        XgasCopy::new("xch4", "ch4", "methane"),
-        XgasCopy::new("xco", "co", "carbon monoxide"),
-        XgasCopy::new("xn2o", "n2o", "nitrous oxide"),
-    ];
+    let defined_xgases = &config.xgas;
+    let discovered_xgases = discover_xgas_vars(
+        &defined_xgases,
+        &config.discovery.rules,
+        &config.discovery.excluded_gases,
+        &config.discovery.excluded_xgas_variables,
+        &config.gas_long_names,
+        private_ds,
+    )
+    .change_context(CliError::WritingXgas)?;
 
-    for var in xgas_vars {
+    let it = defined_xgases.iter().chain(discovered_xgases.iter());
+
+    for var in it {
         var.copy(private_ds, public_ds, time_subsetter)
             .change_context(CliError::WritingXgas)?;
     }

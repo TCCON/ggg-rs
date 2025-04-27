@@ -1,18 +1,17 @@
-use std::{marker::PhantomData, ops::Mul};
-
 use compute_helpers::add_geos_version_variable;
 use error_stack::ResultExt;
 use ggg_rs::{nc_utils::NcArray, units::dmf_long_name};
 use indexmap::IndexMap;
 use itertools::Itertools;
 use ndarray::{ArrayD, ArrayView1, ArrayViewD, Axis};
-use netcdf::{AttributeValue, NcTypeDescriptor};
+use netcdf::AttributeValue;
 use num_traits::Zero;
 use serde::{Deserialize, Deserializer};
 
 use crate::{
     config::default_attr_remove,
     constants::{PRIOR_INDEX_VARNAME, TIME_DIM_NAME},
+    discovery::XgasMatchRule,
 };
 use copy_helpers::{copy_variable_general, copy_variable_new_data, copy_vmr_variable_from_dset};
 use copy_utils::{add_needed_dims, add_needed_new_dims, find_subset_dim, get_string_attr};
@@ -30,11 +29,6 @@ mod xgas_helpers;
 /// to the public file.
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum CopyError {
-    /// Indicates that the program tried to access an out-of-bounds element on an
-    /// existing array.
-    #[error("Tried access index {index} on an array dimension with length {array_len}")]
-    BadIndex { index: usize, array_len: usize },
-
     /// Indicates that the input private file is missing a variable that was
     /// expected to be present.
     #[error("Private file is missing the required variable '{0}'")]
@@ -336,15 +330,21 @@ impl CopySet for AuxVarCopy {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct XgasCopy {
     xgas: String,
     gas: String,
     gas_long: String,
+    #[serde(default = "crate::config::default_ancillary_infer_first")]
     prior_profile: XgasAncillary,
+    #[serde(default = "crate::config::default_ancillary_infer_first")]
     prior_xgas: XgasAncillary,
+    #[serde(default = "crate::config::default_ancillary_infer_first")]
     ak: XgasAncillary,
+    #[serde(default = "crate::config::default_ancillary_infer")]
     slant_bin: XgasAncillary,
+    #[serde(default = "crate::config::default_ancillary_infer")]
     traceability_scale: XgasAncillary,
 }
 
@@ -361,16 +361,9 @@ impl XgasCopy {
     /// Normally this will just be `xgas` without the leading "x", but you must specify this in case the
     /// `xgas` variable has a suffix (e.g., for a secondary detector) or otherwise is not simply "x" + gas.
     /// (For example, the CO2 variables specifying X2007 or X2019 WMO scales.)
-    ///
-    /// Note that the type of the Xgas and associated variables must be defined with the generic parameter, `T`:
-    ///
-    /// ```
-    /// # use crate::copying::XgasCopy;
-    ///
-    /// let xgas = XgasCopy::<f32>::new("xch4", "ch4", "methane");
-    /// ```
-    ///
-    /// This should be a float type in all normal use cases. `f32` is normally sufficiently precise.
+    /// - `gas_long`: the full name of the gas, as opposed to its abbreviation. For example, "carbon dioxide"
+    /// instead of "co2".
+    #[allow(dead_code)]
     pub(crate) fn new<X: ToString, GS: ToString, GL: ToString>(
         xgas: X,
         gas: GS,
@@ -388,28 +381,51 @@ impl XgasCopy {
         }
     }
 
-    pub(crate) fn new_from_varname(
-        varname: &str,
-        gas_long_names: IndexMap<String, String>,
-    ) -> Result<Self, CopyError> {
-        if !varname.starts_with('x') {
-            return Err(CopyError::custom(format!(
-                "Expected Xgas variable name ('{varname}') to start with 'x'"
-            )));
+    pub(crate) fn new_from_discovery<X: ToString, GS: ToString, GL: ToString>(
+        xgas: X,
+        gas: GS,
+        gas_long: GL,
+        rule: &XgasMatchRule,
+    ) -> Self {
+        let prior_profile = rule
+            .prior_profile
+            .as_ref()
+            .map(|x| x.clone())
+            .unwrap_or(XgasAncillary::InferredIfFirst);
+        let prior_xgas = rule
+            .prior_xgas
+            .as_ref()
+            .map(|x| x.clone())
+            .unwrap_or(XgasAncillary::InferredIfFirst);
+        let ak = rule
+            .ak
+            .as_ref()
+            .map(|x| x.clone())
+            .unwrap_or(XgasAncillary::InferredIfFirst);
+        let slant_bin = rule
+            .slant_bin
+            .as_ref()
+            .map(|x| x.clone())
+            .unwrap_or(XgasAncillary::Inferred);
+        let traceability_scale = rule
+            .traceability_scale
+            .as_ref()
+            .map(|x| x.clone())
+            .unwrap_or(XgasAncillary::Inferred);
+        Self {
+            xgas: xgas.to_string(),
+            gas: gas.to_string(),
+            gas_long: gas_long.to_string(),
+            prior_profile,
+            prior_xgas,
+            ak,
+            slant_bin,
+            traceability_scale,
         }
+    }
 
-        let xgas = varname.split('_')
-            .next()
-            .ok_or_else(|| CopyError::custom(format!("Expected Xgas variable name ('{varname}') to have at least one part when split on '_'")))?
-            .to_string();
-
-        // Already checked that it starts with "x", so just take everything after the first character.
-        let gas: String = xgas.chars().get(1..).collect();
-        let gas_long = gas_long_names
-            .get(&gas)
-            .map(|name| name.to_string())
-            .unwrap_or_else(|| gas.clone());
-        Ok(Self::new(xgas, gas, gas_long))
+    pub(crate) fn xgas_varname(&self) -> &str {
+        &self.xgas
     }
 
     fn xgas_error_name(&self) -> String {
@@ -456,11 +472,12 @@ impl XgasCopy {
         match self.slant_bin {
             XgasAncillary::Inferred => self.infer_slant_xgas_bin_name(),
             XgasAncillary::InferredIfFirst => self.infer_slant_xgas_bin_name(),
+            XgasAncillary::OptInferredIfFirst => self.infer_slant_xgas_bin_name(),
             XgasAncillary::Specified {
                 ref private_name,
                 public_name: _,
             } => private_name.to_string(),
-            XgasAncillary::CopyIfFirst {
+            XgasAncillary::SpecifiedIfFirst {
                 ref private_name,
                 public_name: _,
             } => private_name.to_string(),
@@ -489,12 +506,23 @@ impl CopySet for XgasCopy {
         let gas_units = get_string_attr(&xgas_var, "units").change_context_lazy(|| {
             CopyError::context(format!("getting the {} units", self.xgas))
         })?;
+        let gas_units = if gas_units.is_empty() {
+            log::info!(
+                "Units for {} were an empty string, assuming this should be unscaled mole fraction",
+                self.xgas
+            );
+            "parts"
+        } else {
+            &gas_units
+        };
+
         let long_units = dmf_long_name(&gas_units).unwrap_or(&gas_units);
         let attr_to_remove = default_attr_remove();
         let traceability_scale = if let Some((private_scale_name, _)) = self
             .traceability_scale
-            .get_var_names_opt(public_file, || self.infer_traceability_names())
-        {
+            .get_var_names_opt(private_file, public_file, || {
+                self.infer_traceability_names()
+            }) {
             let scale = get_traceability_scale(private_file, &private_scale_name)?;
             if scale.is_empty() {
                 "N/A".to_string()
@@ -538,7 +566,7 @@ impl CopySet for XgasCopy {
         // And the prior Xgas value
         let opt = self
             .prior_xgas
-            .get_var_names_opt(public_file, || self.infer_prior_xgas_names());
+            .get_var_names_opt(private_file, public_file, || self.infer_prior_xgas_names());
         if let Some((private_prxgas_name, public_prxgas_name)) = opt {
             copy_vmr_variable_from_dset::<f32, _>(
                 private_file,
@@ -557,7 +585,7 @@ impl CopySet for XgasCopy {
         // here.
         let opt = self
             .prior_profile
-            .get_var_names_opt(&public_file, || self.infer_prior_prof_names());
+            .get_var_names_opt(private_file, &public_file, || self.infer_prior_prof_names());
         if let Some((private_prior_name, public_prior_name)) = opt {
             let prior_var = private_file
                 .variable(&private_prior_name)
@@ -574,7 +602,7 @@ impl CopySet for XgasCopy {
                 .ok_or_else(|| CopyError::custom(format!("Expected '{private_prior_name}' to have altitude as the second dimension, but it has fewer than 2 dimensions")))?
                 .name();
             let attr_overrides = IndexMap::from_iter([
-                ("units".to_string(), gas_units.as_str().into()),
+                ("units".to_string(), gas_units.into()),
                 (
                     "long_units".to_string(),
                     format!("{long_units} (wet mole fraction)").into(),
@@ -600,7 +628,7 @@ impl CopySet for XgasCopy {
         // Likewise for the AKs
         let opt = self
             .ak
-            .get_var_names_opt(&public_file, || self.infer_ak_names());
+            .get_var_names_opt(private_file, &public_file, || self.infer_ak_names());
         if let Some((private_ak_name, public_ak_name)) = opt {
             let ak_var = private_file
                 .variable(&private_ak_name)
@@ -648,22 +676,26 @@ impl CopySet for XgasCopy {
     }
 }
 
-#[derive(Debug, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Deserialize, PartialEq, Eq, Clone)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum XgasAncillary {
     /// Infer which private variable to copy from the Xgas variable name
     Inferred,
     /// Infer which private variable to copy from the Xgas variable name,
-    /// but do not copy if that variable as already been copied to the
+    /// but do not copy if that variable has already been copied to the
     /// public file.
     InferredIfFirst,
+    /// Infer which private variable to copy from the Xgas variable name,
+    /// but do not copy if that variable has already been copied OR it does
+    /// not exist in the private file.
+    OptInferredIfFirst,
     /// Copy the specified private variable (the `XgasCopy` instance will assign the correct public name)
     Specified {
         private_name: String,
         public_name: Option<String>,
     },
     /// Assume that another Xgas will provide the necessary variable
-    CopyIfFirst {
+    SpecifiedIfFirst {
         private_name: String,
         public_name: Option<String>,
     },
@@ -684,6 +716,7 @@ impl XgasAncillary {
         match self {
             XgasAncillary::Inferred => infer_names_fxn(),
             XgasAncillary::InferredIfFirst => infer_names_fxn(),
+            XgasAncillary::OptInferredIfFirst => infer_names_fxn(),
             XgasAncillary::Specified {
                 private_name,
                 public_name,
@@ -691,7 +724,7 @@ impl XgasAncillary {
                 let public_name = public_name.as_deref().unwrap_or(&private_name).to_owned();
                 (private_name.to_owned(), public_name)
             }
-            XgasAncillary::CopyIfFirst {
+            XgasAncillary::SpecifiedIfFirst {
                 private_name,
                 public_name,
             } => {
@@ -708,13 +741,14 @@ impl XgasAncillary {
     /// able to be called repeatedly due to an implementation detail.
     fn get_var_names_opt<F>(
         &self,
+        private_file: &netcdf::File,
         public_file: &netcdf::File,
         infer_names_fxn: F,
     ) -> Option<(String, String)>
     where
         F: Fn() -> (String, String),
     {
-        if !self.do_copy(public_file, || infer_names_fxn()) {
+        if !self.do_copy(private_file, public_file, || infer_names_fxn()) {
             None
         } else {
             Some(self.get_var_names(infer_names_fxn))
@@ -725,26 +759,53 @@ impl XgasAncillary {
     /// This checks if the variable should always be copied,
     /// never be copied, or if that depends on whether it was
     /// previously copied,
-    fn do_copy<F>(&self, public_file: &netcdf::File, infer_names_fxn: F) -> bool
+    fn do_copy<F>(
+        &self,
+        private_file: &netcdf::File,
+        public_file: &netcdf::File,
+        infer_names_fxn: F,
+    ) -> bool
     where
         F: Fn() -> (String, String),
     {
         match self {
             XgasAncillary::Inferred => true,
             XgasAncillary::InferredIfFirst => {
-                let (_, public_name) = infer_names_fxn();
-                public_file.variable(&public_name).is_none()
+                let (private_name, public_name) = infer_names_fxn();
+                let do_copy = public_file.variable(&public_name).is_none();
+                if !do_copy {
+                    log::debug!("Not copying variable '{private_name}' as public variable '{public_name}' was already copied");
+                }
+                do_copy
+            }
+            XgasAncillary::OptInferredIfFirst => {
+                let (private_name, public_name) = infer_names_fxn();
+                if private_file.variable(&private_name).is_none() {
+                    log::debug!(
+                        "Optional private variable '{private_name}' does not exist, so not copying"
+                    );
+                    return false;
+                }
+                let do_copy = public_file.variable(&public_name).is_none();
+                if !do_copy {
+                    log::debug!("Not copying variable '{private_name}' as public variable '{public_name}' was already copied");
+                }
+                do_copy
             }
             XgasAncillary::Specified {
                 private_name: _,
                 public_name: _,
             } => true,
-            XgasAncillary::CopyIfFirst {
+            XgasAncillary::SpecifiedIfFirst {
                 private_name,
                 public_name,
             } => {
                 let public_name = public_name.as_deref().unwrap_or(&private_name);
-                public_file.variable(public_name).is_none()
+                let do_copy = public_file.variable(public_name).is_none();
+                if !do_copy {
+                    log::debug!("Not copying variable '{private_name}' as public variable '{public_name}' was already copied");
+                }
+                do_copy
             }
             XgasAncillary::Omit => false,
         }
@@ -909,26 +970,26 @@ mod tests {
     }
 
     #[test]
-    fn test_de_xgas_anc_copy_if_first() {
-        let toml_str = r#"type = "copy_if_first"
+    fn test_de_xgas_anc_specified_if_first() {
+        let toml_str = r#"type = "specified_if_first"
         private_name = "prior_xco2""#;
         let anc_de: XgasAncillary = toml::from_str(toml_str).expect("deserialization should work");
         assert_eq!(
             anc_de,
-            XgasAncillary::CopyIfFirst {
+            XgasAncillary::SpecifiedIfFirst {
                 private_name: "prior_xco2".to_string(),
                 public_name: None
             }
         );
 
-        let toml_str = r#"type = "copy_if_first"
+        let toml_str = r#"type = "specified_if_first"
         private_name = "prior_1co2"
         public_name = "prior_co2"
         "#;
         let anc_de: XgasAncillary = toml::from_str(toml_str).expect("deserialization should work");
         assert_eq!(
             anc_de,
-            XgasAncillary::CopyIfFirst {
+            XgasAncillary::SpecifiedIfFirst {
                 private_name: "prior_1co2".to_string(),
                 public_name: Some("prior_co2".to_string())
             }
@@ -940,5 +1001,66 @@ mod tests {
         let toml_str = r#"type = "omit""#;
         let anc_de: XgasAncillary = toml::from_str(toml_str).expect("deserialization should work");
         assert_eq!(anc_de, XgasAncillary::Omit);
+    }
+
+    #[test]
+    fn test_de_xgas_simple() {
+        let toml_str = r#"xgas = "xco2"
+        gas = "co2"
+        gas_long = "carbon dioxide"
+        "#;
+
+        let xgas_de: XgasCopy = toml::from_str(toml_str).expect("deserialization should not fail");
+        let xgas_expected = XgasCopy::new("xco2", "co2", "carbon dioxide");
+        assert_eq!(xgas_de, xgas_expected);
+    }
+
+    #[test]
+    fn test_de_xgas_full() {
+        let toml_str = r#"xgas = "xco2"
+        gas = "co2"
+        gas_long = "carbon dioxide"
+        prior_profile = { type = "specified_if_first", private_name = "prior_1co2", public_name = "prior_co2" }
+        prior_xgas = { type = "specified_if_first", private_name = "prior_xco2_x2019", public_name = "prior_xco2" }
+        ak = { type = "specified_if_first", private_name = "ak_xco2" }
+        slant_bin = { type = "specified", private_name = "ak_slant_xco2_bin" }
+        "#;
+
+        let xgas_de: XgasCopy = toml::from_str(toml_str).expect("deserialization should not fail");
+        let mut xgas_expected = XgasCopy::new("xco2", "co2", "carbon dioxide");
+        xgas_expected.prior_profile = XgasAncillary::SpecifiedIfFirst {
+            private_name: "prior_1co2".to_string(),
+            public_name: Some("prior_co2".to_string()),
+        };
+        xgas_expected.prior_xgas = XgasAncillary::SpecifiedIfFirst {
+            private_name: "prior_xco2_x2019".to_string(),
+            public_name: Some("prior_xco2".to_string()),
+        };
+        xgas_expected.ak = XgasAncillary::SpecifiedIfFirst {
+            private_name: "ak_xco2".to_string(),
+            public_name: None,
+        };
+        xgas_expected.slant_bin = XgasAncillary::Specified {
+            private_name: "ak_slant_xco2_bin".to_string(),
+            public_name: None,
+        };
+
+        assert_eq!(xgas_de, xgas_expected);
+    }
+
+    #[test]
+    fn test_de_xgas_omits() {
+        let toml_str = r#"xgas = "xluft"
+            gas = "luft"
+            gas_long = "dry air"
+            prior_profile = { type = "omit" }
+            prior_xgas = { type = "omit" }
+            ak = { type = "omit" }"#;
+        let xgas_de: XgasCopy = toml::from_str(toml_str).expect("deserialization should not fail");
+        let mut xgas_expected = XgasCopy::new("xluft", "luft", "dry air");
+        xgas_expected.prior_profile = XgasAncillary::Omit;
+        xgas_expected.prior_xgas = XgasAncillary::Omit;
+        xgas_expected.ak = XgasAncillary::Omit;
+        assert_eq!(xgas_de, xgas_expected);
     }
 }

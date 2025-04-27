@@ -152,7 +152,13 @@ use std::{collections::HashSet, io::Read, path::Path};
 use indexmap::IndexMap;
 use serde::{de::Error, Deserialize};
 
-use crate::{copying::XgasAncillary, AuxVarCopy};
+use crate::{
+    copying::XgasAncillary,
+    discovery::{XgasMatchMethod, XgasMatchRule},
+    AuxVarCopy, XgasCopy,
+};
+
+pub(crate) static STANDARD_TCCON_TOML: &'static str = include_str!("tccon_configs/standard.toml");
 
 pub(crate) static DEFAULT_GAS_LONG_NAMES: &'static [(&'static str, &'static str)] = &[
     ("co2", "carbon dioxide"),
@@ -164,6 +170,8 @@ pub(crate) static DEFAULT_GAS_LONG_NAMES: &'static [(&'static str, &'static str)
     ("hf", "hydrofluoric acid"),
     ("o3", "ozone"),
 ];
+
+static DEFAULT_EXCLUDE_GASES: &'static [&'static str] = &["th2o", "fco2", "zco2"];
 
 /// Configuration for the public netCDF writer.
 ///
@@ -179,6 +187,7 @@ pub(crate) static DEFAULT_GAS_LONG_NAMES: &'static [(&'static str, &'static str)
 /// [`Config::maybe_add_defaults`] method after deserialization, which provides this
 /// behavior.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct Config {
     /// Configurations for which auxiliary variables to copy, along with attributes
     /// to update or remove.
@@ -189,6 +198,12 @@ pub(crate) struct Config {
     /// (e.g., "carbon dioxide").
     #[serde(default)]
     pub(crate) gas_long_names: IndexMap<String, String>,
+
+    #[serde(default)]
+    pub(crate) xgas: Vec<XgasCopy>,
+
+    #[serde(default)]
+    pub(crate) discovery: XgasDiscoveryConfig,
 
     /// Toggles for whether to add default values to each section.
     ///
@@ -232,6 +247,14 @@ impl Config {
         if self.defaults.gas_long_names && !self.defaults.disable_all {
             add_default_gas_long_names(self);
         }
+
+        if self.defaults.xgas_rules && !self.defaults.disable_all {
+            add_default_xgas_rules(self);
+        }
+
+        if self.defaults.excluded_gases && !self.defaults.disable_all {
+            add_default_exclude_gases(self);
+        }
     }
 }
 
@@ -240,6 +263,8 @@ impl Default for Config {
         let mut me = Self {
             aux: Default::default(),
             gas_long_names: Default::default(),
+            xgas: Default::default(),
+            discovery: Default::default(),
             defaults: Default::default(),
         };
         me.maybe_add_defaults();
@@ -247,7 +272,19 @@ impl Default for Config {
     }
 }
 
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct XgasDiscoveryConfig {
+    #[serde(default)]
+    pub(crate) excluded_xgas_variables: Vec<String>,
+    #[serde(default)]
+    pub(crate) excluded_gases: Vec<String>,
+    #[serde(default)]
+    pub(crate) rules: Vec<XgasMatchRule>,
+}
+
 #[derive(Debug, Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
 struct DefaultsConfig {
     #[serde(default)]
     disable_all: bool,
@@ -255,6 +292,10 @@ struct DefaultsConfig {
     aux_vars: bool,
     #[serde(default = "default_true")]
     gas_long_names: bool,
+    #[serde(default = "default_true")]
+    xgas_rules: bool,
+    #[serde(default = "default_true")]
+    excluded_gases: bool,
 }
 
 impl Default for DefaultsConfig {
@@ -262,6 +303,8 @@ impl Default for DefaultsConfig {
         Self {
             aux_vars: true,
             gas_long_names: true,
+            xgas_rules: true,
+            excluded_gases: true,
             disable_all: false,
         }
     }
@@ -313,6 +356,10 @@ pub(crate) fn default_ancillary_infer_first() -> XgasAncillary {
     XgasAncillary::InferredIfFirst
 }
 
+pub(crate) fn default_ancillary_infer() -> XgasAncillary {
+    XgasAncillary::Inferred
+}
+
 fn add_default_aux_vars(config: &mut Config) {
     let aux_var_names: HashSet<String> = config
         .aux
@@ -332,6 +379,36 @@ fn add_default_gas_long_names(config: &mut Config) {
         let gas = gas.to_string();
         if !config.gas_long_names.contains_key(&gas) {
             config.gas_long_names.insert(gas, name.to_string());
+        }
+    }
+}
+
+fn add_default_xgas_rules(config: &mut Config) {
+    let pattern = "^x(?<gas>[a-z0-9]+)$".to_string();
+
+    for rule in config.discovery.rules.iter() {
+        if rule.is_given_regex(&pattern) {
+            return;
+        }
+    }
+
+    let mut std_rule = XgasMatchRule::new(
+        XgasMatchMethod::regex_from_string(pattern)
+            .expect("default Xgas regular expression must be valid"),
+    );
+    std_rule.traceability_scale = Some(XgasAncillary::OptInferredIfFirst);
+    config.discovery.rules.push(std_rule);
+}
+
+fn add_default_exclude_gases(config: &mut Config) {
+    for &gas in DEFAULT_EXCLUDE_GASES {
+        if !config
+            .discovery
+            .excluded_gases
+            .iter()
+            .any(|g| gas == g.as_str())
+        {
+            config.discovery.excluded_gases.push(gas.to_string());
         }
     }
 }
