@@ -122,7 +122,7 @@ impl Default for Config {
 #[serde(deny_unknown_fields)]
 pub(crate) struct XgasDiscoveryConfig {
     #[serde(default)]
-    pub(crate) rules: Vec<XgasMatchRule>,
+    pub(crate) rule: Vec<XgasMatchRule>,
     #[serde(default)]
     pub(crate) excluded_xgas_variables: Vec<String>,
     #[serde(default)]
@@ -233,7 +233,7 @@ fn add_default_gas_long_names(config: &mut Config) {
 fn add_default_xgas_rules(config: &mut Config) {
     let pattern = "^x(?<gas>[a-z][a-z0-9]*)$".to_string();
 
-    for rule in config.discovery.rules.iter() {
+    for rule in config.discovery.rule.iter() {
         if rule.is_given_regex(&pattern) {
             return;
         }
@@ -244,7 +244,7 @@ fn add_default_xgas_rules(config: &mut Config) {
             .expect("default Xgas regular expression must be valid"),
     );
     std_rule.traceability_scale = Some(XgasAncillary::OptInferredIfFirst);
-    config.discovery.rules.push(std_rule);
+    config.discovery.rule.push(std_rule);
 }
 
 fn add_defined_xgas_full_names(config: &mut Config) {
@@ -265,6 +265,8 @@ fn add_defined_xgas_full_names(config: &mut Config) {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use super::*;
 
     #[test]
@@ -297,5 +299,28 @@ mod tests {
         let cfg = Config::from_toml_str(toml_str).expect("deserialization should not fail");
         assert_eq!(cfg.aux.len(), 0);
         assert_eq!(cfg.gas_long_names.len(), 0);
+    }
+
+    #[test]
+    fn test_book_examples() {
+        let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let book_subdir = crate_root.join("book/src/write_public_netcdf");
+        let md_files = book_subdir
+            .read_dir()
+            .expect("should be able to get files from the book subdir")
+            .map(|e| e.expect("should be able to get md files from book").path());
+        let block_iter = ggg_rs::test_utils::iter_fenced_blocks("toml", md_files);
+        for block in block_iter {
+            let block = block.expect("should be able to read fenced block");
+            let res = Config::from_toml_str(&block.text);
+            assert!(
+                res.is_ok(),
+                "could not deserialize an example in line {} of file {}:\n\n{}\n\nerror was\n\n{}",
+                block.line,
+                block.file.display(),
+                block.text,
+                res.unwrap_err()
+            );
+        }
     }
 }

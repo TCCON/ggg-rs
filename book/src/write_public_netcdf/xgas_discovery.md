@@ -61,6 +61,7 @@ The other option is `excluded_gases`, which matches not the variable name, but t
 The easiest way to explain this is to consider the standard TCCON configuration:
 
 ```toml
+[discovery]
 excluded_xgas_variables = ["xo2"]
 excluded_gases = ["th2o", "fco2", "zco2"]
 ```

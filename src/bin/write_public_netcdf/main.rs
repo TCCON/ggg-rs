@@ -26,7 +26,7 @@ mod template_strings;
 //   2. GEOS source summary [x]
 //   3. Xgas discovery [x]
 //   4. Standard [x] and experimental [ ] configs
-//      4a. Create unit tests that parse the book TOML examples and try deserializing them
+//      4a. Create unit tests that parse the book TOML examples and try deserializing them [x]
 //      4b. Add ability to specify Xgas and Xgas error public name
 //      4c. Add rename option to Xgas discovery
 //      4d. Make a subset of the ancillary variable specs allowed for Xgas discovery, and From<THAT> for the regular ancillary spec
@@ -269,7 +269,7 @@ fn add_xgas_vars(
     let defined_xgases = &config.xgas;
     let discovered_xgases = discover_xgas_vars(
         &defined_xgases,
-        &config.discovery.rules,
+        &config.discovery.rule,
         &config.discovery.excluded_gases,
         &config.discovery.excluded_xgas_variables,
         &config.gas_long_names,

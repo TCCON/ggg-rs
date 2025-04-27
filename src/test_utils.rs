@@ -43,6 +43,12 @@ where
     FencedBlocks::new(tag, files)
 }
 
+pub struct FencedBlock {
+    pub text: String,
+    pub file: PathBuf,
+    pub line: usize,
+}
+
 pub struct FencedBlocks<P, F>
 where
     P: AsRef<Path>,
@@ -51,6 +57,7 @@ where
     fence_start: String,
     files: F,
     lines: Option<Lines<BufReader<std::fs::File>>>,
+    curr_file: Option<PathBuf>,
     line_num: usize,
 }
 
@@ -59,7 +66,7 @@ where
     P: AsRef<Path>,
     F: Iterator<Item = P>,
 {
-    type Item = std::io::Result<String>;
+    type Item = std::io::Result<FencedBlock>;
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
@@ -101,6 +108,7 @@ where
             fence_start: format!("```{tag}"),
             files: files.into_iter(),
             lines: None,
+            curr_file: None,
             line_num: 0,
         }
     }
@@ -113,12 +121,13 @@ where
         };
         let rdr = BufReader::new(f);
         self.lines = Some(rdr.lines());
+        self.curr_file = Some(next_file.as_ref().to_path_buf());
         self.line_num = 0;
         Some(Ok(()))
     }
 
-    fn get_block(&mut self, starting_line: usize) -> std::io::Result<String> {
-        let mut block = String::new();
+    fn get_block(&mut self, starting_line: usize) -> std::io::Result<FencedBlock> {
+        let mut text = String::new();
         // We should only be here if we found a line starting with the opening of
         // a fenced block, so the next line should be the actual first line of the fenced
         // block.
@@ -133,14 +142,19 @@ where
             };
 
             if next_line.starts_with("```") {
+                let block = FencedBlock {
+                    text,
+                    file: self.curr_file.clone().unwrap(),
+                    line: self.line_num,
+                };
                 return Ok(block);
             }
 
-            if !block.is_empty() {
+            if !text.is_empty() {
                 // lines() doesn't return newlines, so add them back in for all but the last line
-                block.push('\n');
+                text.push('\n');
             }
-            block.push_str(&next_line);
+            text.push_str(&next_line);
         }
     }
 
@@ -168,7 +182,7 @@ mod tests {
 
         let expected = ["key1 = 1\nkey2 = 2", "key3 = 3", "key4 = \"4\"\nkey5 = '5'"];
         for (s, exp) in it.zip_eq(expected) {
-            assert_eq!(s.unwrap(), exp);
+            assert_eq!(s.unwrap().text, exp);
         }
     }
 }
