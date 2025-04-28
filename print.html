@@ -334,7 +334,8 @@ The first option is <code>excluded_xgas_variables</code>.
 If a variable's private file name matches one of the names in that list, it will not be copied even if it matches one of the rules.
 The other option is <code>excluded_gases</code>, which matches not the variable name, but the physical gas.
 The easiest way to explain this is to consider the standard TCCON configuration:</p>
-<pre><code class="language-toml">excluded_xgas_variables = ["xo2"]
+<pre><code class="language-toml">[discovery]
+excluded_xgas_variables = ["xo2"]
 excluded_gases = ["th2o", "fco2", "zco2"]
 </code></pre>
 <p><code>excluded_xgas_variables</code> specifically excludes the "xo2" variable; this would match the default regex rule meant to capture Xgases measured on the primary detector, but we don't want to include it because it is not useful for data users.
