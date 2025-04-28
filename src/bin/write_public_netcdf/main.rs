@@ -27,9 +27,9 @@ mod template_strings;
 //   3. Xgas discovery [x]
 //   4. Standard [x] and experimental [ ] configs
 //      4a. Create unit tests that parse the book TOML examples and try deserializing them [x]
-//      4b. Add ability to specify Xgas and Xgas error public name
-//      4c. Add rename option to Xgas discovery
-//      4d. Make a subset of the ancillary variable specs allowed for Xgas discovery, and From<THAT> for the regular ancillary spec
+//      4b. Add ability to specify Xgas and Xgas error public name [x - tentative]
+//      4c. Add rename option to Xgas discovery [x - tentative]
+//      4d. Make a subset of the ancillary variable specs allowed for Xgas discovery, and From<THAT> for the regular ancillary spec [x - tentative]
 //      4e. Use https://docs.rs/figment/latest/figment/ to handle merging configurations.
 //   5. Data latency
 //   6. Global attributes

@@ -11,7 +11,7 @@ use serde::{Deserialize, Deserializer};
 use crate::{
     config::default_attr_remove,
     constants::{PRIOR_INDEX_VARNAME, TIME_DIM_NAME},
-    discovery::XgasMatchRule,
+    discovery::{AncillaryDiscoveryMethod, XgasMatchRule},
 };
 use copy_helpers::{copy_variable_general, copy_variable_new_data, copy_vmr_variable_from_dset};
 use copy_utils::{add_needed_dims, add_needed_new_dims, find_subset_dim, get_string_attr};
@@ -334,6 +334,10 @@ pub(crate) struct XgasCopy {
     /// The name of the Xgas variable to copy
     xgas: String,
 
+    /// The name to give the Xgas variable in the public file
+    #[serde(default)]
+    xgas_public: Option<String>,
+
     /// The abbreviation of the physical gas, e.g., both `wco2` and `lco2`
     /// should set this to "co2". This can be used to identify variables that
     /// have the same priors, for example.
@@ -344,6 +348,9 @@ pub(crate) struct XgasCopy {
     /// as a fallback, though this is not preferred.
     #[serde(default = "crate::config::default_empty_string")]
     gas_long: String,
+
+    #[serde(default = "crate::config::default_ancillary_infer")]
+    xgas_error: XgasAncillary,
 
     /// How/whether to copy the a priori profiles.
     #[serde(default = "crate::config::default_ancillary_infer_first")]
@@ -395,8 +402,10 @@ impl XgasCopy {
     ) -> Self {
         Self {
             xgas: xgas.to_string(),
+            xgas_public: None,
             gas: gas.to_string(),
             gas_long: gas_long.to_string(),
+            xgas_error: XgasAncillary::Inferred,
             prior_profile: XgasAncillary::InferredIfFirst,
             prior_xgas: XgasAncillary::InferredIfFirst,
             ak: XgasAncillary::InferredIfFirst,
@@ -405,41 +414,43 @@ impl XgasCopy {
         }
     }
 
-    pub(crate) fn new_from_discovery<X: ToString, GS: ToString, GL: ToString>(
+    pub(crate) fn new_from_discovery<X: ToString, XP: ToString, GS: ToString, GL: ToString>(
         xgas: X,
+        xgas_public: Option<XP>,
         gas: GS,
         gas_long: GL,
         rule: &XgasMatchRule,
     ) -> Self {
+        let xgas_error = rule
+            .xgas_error
+            .map(|x| x.into())
+            .unwrap_or(XgasAncillary::Inferred);
         let prior_profile = rule
             .prior_profile
-            .as_ref()
-            .map(|x| x.clone())
+            .map(|x| x.into())
             .unwrap_or(XgasAncillary::InferredIfFirst);
         let prior_xgas = rule
             .prior_xgas
-            .as_ref()
-            .map(|x| x.clone())
+            .map(|x| x.into())
             .unwrap_or(XgasAncillary::InferredIfFirst);
         let ak = rule
             .ak
-            .as_ref()
-            .map(|x| x.clone())
+            .map(|x| x.into())
             .unwrap_or(XgasAncillary::InferredIfFirst);
         let slant_bin = rule
             .slant_bin
-            .as_ref()
-            .map(|x| x.clone())
+            .map(|x| x.into())
             .unwrap_or(XgasAncillary::Inferred);
         let traceability_scale = rule
             .traceability_scale
-            .as_ref()
-            .map(|x| x.clone())
+            .map(|x| x.into())
             .unwrap_or(XgasAncillary::Inferred);
         Self {
             xgas: xgas.to_string(),
+            xgas_public: xgas_public.map(|name| name.to_string()),
             gas: gas.to_string(),
             gas_long: gas_long.to_string(),
+            xgas_error,
             prior_profile,
             prior_xgas,
             ak,
@@ -464,14 +475,24 @@ impl XgasCopy {
         self.gas_long = name;
     }
 
-    fn xgas_error_name(&self) -> String {
-        let mut parts = self.xgas.split('_').collect_vec();
-        parts.insert(1, "error");
-        parts.join("_")
-    }
-
     fn airmass_name(&self) -> &str {
         "o2_7885_am_o2"
+    }
+
+    fn infer_xgas_error_names(&self) -> (String, String) {
+        fn make_name(xn: &str) -> String {
+            let mut parts = xn.split('_').collect_vec();
+            parts.insert(1, "error");
+            parts.join("_")
+        }
+
+        let private_name = make_name(&self.xgas);
+        let public_name = self
+            .xgas_public
+            .as_deref()
+            .map(|name| make_name(name))
+            .unwrap_or_else(|| private_name.clone());
+        (private_name, public_name)
     }
 
     fn infer_traceability_names(&self) -> (String, String) {
@@ -520,6 +541,37 @@ impl XgasCopy {
             XgasAncillary::Omit => self.infer_slant_xgas_bin_name(),
         }
     }
+
+    fn maybe_add_traceability_scale_attr(
+        &self,
+        private_file: &netcdf::File,
+        public_file: &netcdf::File,
+        attr_overrides: &mut IndexMap<String, AttributeValue>,
+    ) -> error_stack::Result<(), CopyError> {
+        let scale_varnames =
+            self.traceability_scale
+                .get_var_names_opt(private_file, public_file, || {
+                    self.infer_traceability_names()
+                });
+
+        if let Some((private_scale_name, _)) = scale_varnames {
+            log::debug!(
+                "Getting {} traceability scale from {private_scale_name}",
+                self.xgas
+            );
+            let scale = get_traceability_scale(private_file, &private_scale_name)?;
+            if !scale.is_empty() {
+                attr_overrides.insert("wmo_or_analogous_scale".to_string(), scale.into());
+            }
+        } else {
+            log::debug!(
+                "Not getting traceability scale for {} from any variable",
+                self.xgas
+            );
+        };
+
+        Ok(())
+    }
 }
 
 impl CopySet for XgasCopy {
@@ -554,64 +606,45 @@ impl CopySet for XgasCopy {
 
         let long_units = dmf_long_name(&gas_units).unwrap_or(&gas_units);
         let attr_to_remove = default_attr_remove();
-        let traceability_scale = if let Some((private_scale_name, _)) = self
-            .traceability_scale
-            .get_var_names_opt(private_file, public_file, || {
-                self.infer_traceability_names()
-            }) {
-            log::debug!(
-                "Getting {} traceability scale from {private_scale_name}",
-                self.xgas
-            );
-            let scale = get_traceability_scale(private_file, &private_scale_name)?;
-            if scale.is_empty() {
-                "N/A".to_string()
-            } else {
-                scale
-            }
-        } else {
-            log::debug!(
-                "Not getting traceability scale for {} from any variable",
-                self.xgas
-            );
-            "N/A".to_string()
-        };
+        let mut attr_overrides = IndexMap::new();
+        self.maybe_add_traceability_scale_attr(private_file, public_file, &mut attr_overrides)?;
 
         // Now copy the Xgas itself
         copy_vmr_variable_from_dset::<f32, _>(
             private_file,
             public_file,
             &self.xgas,
-            &self.xgas,
+            &self.xgas_public.as_deref().unwrap_or(&self.xgas),
             time_subsetter,
             &format!("column average {} mole fraction", self.gas_long),
-            IndexMap::from_iter([(
-                "wmo_or_analogous_scale".to_string(),
-                traceability_scale.into(),
-            )]),
+            attr_overrides,
             &attr_to_remove,
             &gas_units,
         )?;
 
         // And its error value
-        let error_name = self.xgas_error_name();
-        copy_vmr_variable_from_dset::<f32, _>(
-            private_file,
-            public_file,
-            &error_name,
-            &error_name,
-            time_subsetter,
-            &format!("column average {} mole fraction error", self.gas_long),
-            IndexMap::new(),
-            &attr_to_remove,
-            &gas_units,
-        )?;
+        let error_names_opt = self
+            .xgas_error
+            .get_var_names_opt(private_file, public_file, || self.infer_xgas_error_names());
+        if let Some((private_error_name, public_error_name)) = error_names_opt {
+            copy_vmr_variable_from_dset::<f32, _>(
+                private_file,
+                public_file,
+                &private_error_name,
+                &public_error_name,
+                time_subsetter,
+                &format!("column average {} mole fraction error", self.gas_long),
+                IndexMap::new(),
+                &attr_to_remove,
+                &gas_units,
+            )?;
+        }
 
         // And the prior Xgas value
-        let opt = self
+        let prxgas_names_opt = self
             .prior_xgas
             .get_var_names_opt(private_file, public_file, || self.infer_prior_xgas_names());
-        if let Some((private_prxgas_name, public_prxgas_name)) = opt {
+        if let Some((private_prxgas_name, public_prxgas_name)) = prxgas_names_opt {
             copy_vmr_variable_from_dset::<f32, _>(
                 private_file,
                 public_file,
@@ -745,6 +778,17 @@ pub(crate) enum XgasAncillary {
     },
     /// Do not create this ancillary variable
     Omit,
+}
+
+impl From<AncillaryDiscoveryMethod> for XgasAncillary {
+    fn from(value: AncillaryDiscoveryMethod) -> Self {
+        match value {
+            AncillaryDiscoveryMethod::Inferred => Self::Inferred,
+            AncillaryDiscoveryMethod::InferredIfFirst => Self::InferredIfFirst,
+            AncillaryDiscoveryMethod::OptInferredIfFirst => Self::OptInferredIfFirst,
+            AncillaryDiscoveryMethod::Omit => Self::Omit,
+        }
+    }
 }
 
 impl XgasAncillary {

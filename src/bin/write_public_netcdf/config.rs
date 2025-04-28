@@ -7,7 +7,7 @@ use serde::{de::Error, Deserialize};
 use crate::{
     constants::DEFAULT_GAS_LONG_NAMES,
     copying::XgasAncillary,
-    discovery::{XgasMatchMethod, XgasMatchRule},
+    discovery::{AncillaryDiscoveryMethod, XgasMatchMethod, XgasMatchRule},
     AuxVarCopy, ComputedVariable, XgasCopy,
 };
 
@@ -240,10 +240,10 @@ fn add_default_xgas_rules(config: &mut Config) {
     }
 
     let mut std_rule = XgasMatchRule::new(
-        XgasMatchMethod::regex_from_string(pattern)
+        XgasMatchMethod::regex_from_string(pattern, None)
             .expect("default Xgas regular expression must be valid"),
     );
-    std_rule.traceability_scale = Some(XgasAncillary::OptInferredIfFirst);
+    std_rule.traceability_scale = Some(AncillaryDiscoveryMethod::OptInferredIfFirst);
     config.discovery.rule.push(std_rule);
 }
 
