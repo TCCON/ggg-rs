@@ -1,6 +1,21 @@
 # GGG-Rust
 
+[![Static Badge](https://img.shields.io/badge/Documentation-User%20Guide-blue)](https://tccon.github.io/ggg-rs/)
+
 Ports of existing GGG code or additional utilities written in Rust.
+
+## Documentation
+
+Each program has command line help which can be accessed by passing the `-h` or `--help` flag, e.g.:
+
+```bash
+$GGGPATH/bin/collate_tccon_results --help
+```
+
+Note that this only works for the GGG-RS programs; the standard GGG programs do not recognize this flag.
+
+Advanced documentation for the programs is available [through GitHub pages](https://tccon.github.io/ggg-rs/).
+
 
 ## Installation
 
