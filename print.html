@@ -30,6 +30,7 @@
         <link rel="stylesheet" id="ayu-highlight-css" href="ayu-highlight.css">
 
         <!-- Custom theme stylesheets -->
+        <link rel="stylesheet" href="./mdbook-admonish.css">
 
 
         <!-- Provide site root and default themes to javascript -->
@@ -130,6 +131,9 @@
                         <a href="print.html" title="Print this book" aria-label="Print this book">
                             <i id="print-button" class="fa fa-print"></i>
                         </a>
+                        <a href="https://github.com/TCCON/ggg-rs" title="Git repository" aria-label="Git repository">
+                            <i id="git-repository-button" class="fa fa-github"></i>
+                        </a>
 
                     </div>
                 </div>
@@ -175,9 +179,312 @@ As the library is made available, the APIs will be documented through <a href="h
 <p>Each command line program will provide help when given the <code>-h</code> or <code>--help</code> flags.
 That help should be your first resource to understand how the programs work, as it will be the most up-to-date.
 The chapters in this book go into more detail about advanced usage of the programs.
-If you find something in this book that is out of date or unclear, please <a href="https://github.com/TCCON/ggg-rs/issues">open an issue</a> with the <code>documentation</code> tag.</p>
+If you find something in this book that is out of date or unclear, please <a href="https://github.com/TCCON/ggg-rs/issues">open an issue</a> or <a href="https://github.com/TCCON/ggg-rs/pulls">pull request</a> with the <code>documentation</code> tag.</p>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="setup-helper-programs"><a class="header" href="#setup-helper-programs">Setup helper programs</a></h1>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="change_ggg_files"><a class="header" href="#change_ggg_files">change_ggg_files</a></h1>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="list_spectra"><a class="header" href="#list_spectra">list_spectra</a></h1>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="post-processing-programs"><a class="header" href="#post-processing-programs">Post processing programs</a></h1>
+<p>Post processing programs are used after completing GFIT runs on all windows.
+These programs perform a combination of collating and averaging data from the different
+windows and applying the necessary <em>post hoc</em> corrections to produce the best quality data.</p>
+<p>We are currently in a transitional period, where the post processing programs are still
+provided in a mix of languages.
+Some remain the original Fortran versions from GGG2020, others have been replaces with Rust
+versions, and the private netCDF writer remains written in Python.
+The intention is to transition away from the Python netCDF writer in GGG2020.2,
+but to retain a mix of Fortran and Rust programs at that time.
+Whether all post processing programs transition to Rust depends on whether there is a need
+for more flexibility in all programs.</p>
+<h2 id="em27sun-users"><a class="header" href="#em27sun-users">EM27/SUN users</a></h2>
+<p>Those who use GGG to process EM27/SUN data must be aware that EGI (the wrapper program to
+streamline processing of EM27/SUN data with GGG) is <em>also</em> in a transitional phase.
+The <a href="https://tccon-wiki.caltech.edu/Main/EGI">original EGI</a> does not use GGG-RS programs,
+and instead patches some of the existing GGG Fortran programs to work with EM27/SUN data,
+as well as works around some limitations of the Fortran post processing code by swapping
+out some of the configuration files on disk.
+This works, but is inconvenient when you need to process both TCCON and EM27/SUN data.</p>
+<p>A full rewrite of EGI, <a href="https://github.com/TCCON/egi-rs">EGI-RS</a> is in progress.
+This is intended to be easier to maintain and modular, allowing smaller parts of the
+GGG workflow to be run independently with EGI-RS automation as needed.
+EGI-RS <em>does</em> use the programs provided by GGG-RS, and in fact relies on several of them
+to simplify switching between TCCON and EM27/SUN configurations.
+Throughout this section, the EM27/SUN standard use sections will be referring to the EGI-RS
+use.
+Those still using the original EGI should be aware that while the <em>role</em> of each program
+in the EM27/SUN post processing is the same as its original Fortran predecessor, the
+specifics of how it is run may differ.</p>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="collate_tccon_results"><a class="header" href="#collate_tccon_results">collate_tccon_results</a></h1>
+<h2 id="purpose"><a class="header" href="#purpose">Purpose</a></h2>
+<p><code>collate_tccon_results</code> combines output from the various <code>.col</code> files in a GGG run directory with ancillary data from the runlog and <code>.ray</code> file into a single file.
+It also computed retrieved quantities from the <code>.col</code> files if needed.
+Which <code>.col</code> files are read is determined by a <code>multiggg.sh</code> file, which is expected to contain calls to <code>gfit</code> (one per line) for each window processed.
+An example of a the first few lines of a <code>multiggg.sh</code> file is:</p>
+<pre><code class="language-text">/home/user/ggg/bin/gfit luft_6146.pa_ggg_benchmark.ggg&gt;/dev/null
+/home/user/ggg/bin/gfit hf_4038.pa_ggg_benchmark.ggg&gt;/dev/null
+/home/user/ggg/bin/gfit h2o_4565.pa_ggg_benchmark.ggg&gt;/dev/null
+/home/user/ggg/bin/gfit h2o_4570.pa_ggg_benchmark.ggg&gt;/dev/null
+</code></pre>
+<p>Unlike the standard <code>collate_results</code>, <code>collate_tccon_results</code> does not rely on the ZPD times of spectra to determine whether successive spectra in the runlog
+(from different detectors) should have their outputs grouped into a single line in the output file.
+Instead, it uses the spectrum names.</p>
+<h2 id="examples"><a class="header" href="#examples">Examples</a></h2>
+<p>The most common way to run this is from inside a GGG run directory (i.e., a directory containing the <code>multiggg.sh</code>, <code>.ggg</code>, <code>.mav</code>, and <code>.ray</code> files created by <code>gsetup</code>).
+In that case, you will call it with a single positional argument, <code>v</code> to create a file containg vertical column densities or <code>t</code> to create one containing VMR scale factors.
+The output file will have the same name as the runlog pointed to in the <code>.ggg</code> and <code>.col</code> files, with the extension <code>.vsw</code> or <code>.tsw</code>:</p>
+<pre><code class="language-bash">$GGGPATH/bin/collate_tccon_results v
+</code></pre>
+<p>If you need to run this program from outside of a GGG run directory, you can use the <code>--multiggg-file</code> option to point to the <code>multiggg.sh</code> file to read windows from.
+In this case, the output will be written to the same directory as the <code>multiggg.sh</code> file:</p>
+<pre><code class="language-bash">$GGGPATH/bin/collate_tccon_results --multiggg-file /data/ggg/xx20250101_20250301/multiggg.sh
+</code></pre>
+<p>This program relies on being able to determine a "primary" detector in order to know which spectra represent a new observation.
+If you have a nonstandard setup that does not use "a" as the character in the spectrum name to represent the InGaAs detector, you can use
+the <code>--primary-detector</code> option to specify a different character.
+For example, if it should look for spectra with "g" as the detector indicator:</p>
+<pre><code class="language-bash">$GGGPATH/bin/collate_tccon_results --primary-detector g v
+</code></pre>
+<h2 id="use-in-tccon-standard-processing"><a class="header" href="#use-in-tccon-standard-processing">Use in TCCON standard processing</a></h2>
+<p>Most users will use this as part of running the <code>post_processing.sh</code> script to create the initial <code>.vsw</code> and <code>.tsw</code> files.
+However, in any case, it will always be the first program run after GFIT as the other post processing programs need a post
+processed file as input (i.e., they do not read from the <code>.col</code> files.)</p>
+<h2 id="use-in-em27sun-standard-processing"><a class="header" href="#use-in-em27sun-standard-processing">Use in EM27/SUN standard processing</a></h2>
+<p><code>collate_tccon_results</code> is used identically when processing EM27/SUN data as when processing TCCON data.
+Unlike with the Fortran version of <code>collate_results</code>, it does not need adapted to account for the shorter time between successive observations.</p>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="apply_tccon_airmass_correction"><a class="header" href="#apply_tccon_airmass_correction">apply_tccon_airmass_correction</a></h1>
+<h2 id="purpose-1"><a class="header" href="#purpose-1">Purpose</a></h2>
+<p><code>apply_tccon_airmass_correction</code> does two things:</p>
+<ol>
+<li>Converts gas column densities (in molecules per area) to column averages by dividing
+by the O2 column and multiplying by the mean O2 atmospheric dry mole fraction.</li>
+<li>Applies a solar zenith angle-dependent correction to those column averages that require
+it, as defined by a configuration file.</li>
+</ol>
+<p>This can operate either on individual windows' column densities or on column densities calculated
+by averaging together all the windows for a given gas.
+The former is considered to be more accurate, as it allows for different airmass dependence per window
+(which depends on the spectroscopy in that window), but the latter is preserved for backwards compatibility.</p>
+<h2 id="examples-1"><a class="header" href="#examples-1">Examples</a></h2>
+<p>This program requires two arguments: a path to a file defining the airmass corrections and
+a path to either a <code>.vsw</code> file (created by <code>collate_tccon_results</code>) or <code>.vav</code> file (created
+by <code>average_results</code>):</p>
+<pre><code class="language-bash">$GGGPATH/bin/apply_tccon_airmass_correction CORRECTION_FILE VSW_OR_VAV_FILE
+</code></pre>
+<p>The <code>CORRECTION_FILE</code> will usually be one of those supplied with GGG, in the <code>$GGGPATH/tccon</code> subdirectory.
+See <a href="postproc//postproc/corrections/airmass_correction_file.html">the configuration section</a> for the details of this
+file's format if you need to modify one or create your own.</p>
+<h2 id="use-in-tccon-standard-processing-1"><a class="header" href="#use-in-tccon-standard-processing-1">Use in TCCON standard processing</a></h2>
+<p>For TCCON standard processing, the <code>CORRECTION_FILE</code> <em>must</em> be <code>$GGGPATH/tccon/corrections_airmass_preavg.dat</code>,
+as these are the airmass correction factors derived for the required TCCON data version.
+It must be run on the <code>vsw</code> file output by <code>collate_tccon_results</code>, as the TCCON standard processing uses per-window
+airmass corrections.
+This is automatically configured in the <code>post_processing.sh</code> file, therefore standard users should rely on the
+<code>post_processing.sh</code> script to run the required post processing steps in the correct order.</p>
+<h2 id="use-in-em27sun-standard-processing-1"><a class="header" href="#use-in-em27sun-standard-processing-1">Use in EM27/SUN standard processing</a></h2>
+<p>As of GGG2020, EM27/SUNs still use per-gas airmass corrections, rather than per-window.
+Therefore, this must be run on the <code>.vav</code> file output by <code>average_results</code> using the EM27/SUN-specific
+airmass corrections included with EGI-RS.
+If using EGI-RS correctly, it will automatically create a <code>post_processing.sh</code> file with the correct
+post processing order for an EM27/SUN, so normal users should rely on that.</p>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="airmass-correction-file-format"><a class="header" href="#airmass-correction-file-format">Airmass correction file format</a></h1>
+<p>For backwards compatibility, this file is in the typical GGG input file format
+of a line specifying the "shape" of the file, one or more header rows, then
+tabular data.
+These files come in two forms.
+The first defines airmass corrections for each window, and includes not only
+the magnitude of the correction, but two additional parameters that adjust the
+form of the equation used for the correction.</p>
+<h2 id="per-window-format"><a class="header" href="#per-window-format">Per-window format</a></h2>
+<p>The GGG2020 TCCON standard file in this format is as follows:</p>
+<pre><code class="language-text">15 5
+2017-02-16  GCT
+2015-08-11  DW
+2019-01-14  JLL
+2020-12-04  JLL: extrapolated to Xluft = 0.999
+2021-02-22  JLL: fit for mid-trop PT = 310 K
+2021-07-15  JLL: uncertainties added from 2-sigma std dev of bootstrapped PT = 310 K fits
+Contains airmass-dependent correction factors to be applied to the
+column-averaged mole fractions. These are determined offline from the
+symmetric component of the diurnal variation using derive_airmass_correction.
+The ADCF_Err should be the 1-sigma standard deviations which represent day-to-
+day variability. This vastly overestimates the uncertainty in the average
+value, however the standard error underestimates the uncertainty.
+g and p are the zero-SZA and exponent in the ADCF form.
+ Gas         ADCF      ADCF_Err  g    p
+"xco2_6220"  -0.00903  0.00025   15   4
+"xco2_6339"  -0.00512  0.00025   45   5
+"xlco2_4852"  0.00008  0.00018  -45   1
+"xwco2_6073" -0.00235  0.00016  -45   1
+"xwco2_6500" -0.00970  0.00026   45   5
+"xch4_5938"  -0.00971  0.00046   25   4
+"xch4_6002"  -0.00602  0.00053  -5    2
+"xch4_6076"  -0.00594  0.00044   15   3
+"xn2o_4395"   0.00523  0.00054  -5    2
+"xn2o_4430"   0.00426  0.00042   13   3
+"xn2o_4719"  -0.00267  0.00056  -15   2
+"xco_4233"    0.00000  0.00000   13   3
+"xco_4290"    0.00000  0.00000   13   3
+"xluft_6146"  0.00053  0.00017  -45   1
+</code></pre>
+<p>The components are as follows:</p>
+<ul>
+<li>The first line specifies the number of header lines and the number of data columns.
+This must be two integers separated by whitespace.
+The number of header lines includes this line and the column headers.</li>
+<li>The next <code>nhead-2</code> lines (line numbers 2 to 14 in this case) are free format; these are
+skipped by the program. You can see in the example that thse are used to record the
+history of the file and notes about the content of the file.</li>
+<li>The last header line (line number 15 in this case) gives the column names; it must include
+the five columns shown here.</li>
+</ul>
+<div id="admonition-info" class="admonition admonish-info" role="note" aria-labelledby="admonition-info-title">
+<div class="admonition-title">
+<div id="admonition-info-title">
+<p>Info</p>
+</div>
+<a class="admonition-anchor-link" href="postproc/corrections/airmass_correction_file.html#admonition-info"></a>
+</div>
+<div>
+<p>A common error is to add lines to the header without updating the number of header lines
+on the first line.
+If you get an error running <code>apply_tccon_airmass_correction</code> after editing the correction
+file's header, double check that you also updated the number of header lines!</p>
+</div>
+</div>
+<p>The data are as follows:</p>
+<ul>
+<li>"Gas" is the Xgas window name that the correction defined on this line applies to.
+It must be a string that matches a non-error column in the input <code>.vsw</code> file with "x" prepended.
+As this is read in as <a href="https://docs.oracle.com/cd/E19957-01/805-4939/6j4m0vnc5/index.html">list directed format data</a>,
+it is recommended to quote the strings.</li>
+<li>"ADCF" is the airmass dependent correction factor, it determines the magnitude of the airmass correction.</li>
+<li>"ADCF_Err" is the uncertainty on the ADCF.</li>
+<li>"g" and "p" are parameters in the airmass correction equation.</li>
+</ul>
+<p>Deriving the correction parameters is a complicated process.
+For details, along with the definition of the airmass correction equation, please see section 8.1 of the <a href="https://doi.org/10.5194/essd-16-2197-2024">GGG2020 paper</a>.</p>
+<h2 id="per-gas-format"><a class="header" href="#per-gas-format">Per-gas format</a></h2>
+<p>The second format of the airmass correction file is as follows:</p>
+<pre><code class="language-text">13 3
+2017-02-16  GCT
+2015-08-11  DW
+Contains airmass-dependent and airmass-independent (in situ)
+correction factors to be applied to the column-averaged mole fractions.
+The former (ADCF) is determined offline from the symmetric component
+of the diurnal variation using derive_airmass_correction.
+The ADCF_Err are the 1-sigma standard deviations which represent day-to-
+day variability. This vastly overestimates the uncertainty in the average
+value, however the standard error underestimates the uncertainty.
+The latter (AICF) is determined offline by comparisons with in situ profiles.
+AICF_Err (uncertainties) are 1-sigma standard deviations from the best fit.
+ Gas      ADCF  ADCF_Err
+"xco2"  -0.0049  0.0009
+"xch4"  -0.0045  0.0005
+"xn2o"   0.0133  0.0001
+"xco"    0.0000  0.0001
+"xh2o"  -0.0000  0.0001
+"xluft"  0.0027  0.0005
+</code></pre>
+<p>This is a simplified version of the per-window format <a href="postproc/corrections/airmass_correction_file.html#per-window-format">above</a>.
+As above, the first line defines the number of header lines and data columns.
+This file must have three data columns: "Gas", "ADCF", and "ADCF_Err".
+These have the same meanings as in the per-window format.
+The "g" and "p" columns can be omitted, as shown here.</p>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="apply_tccon_insitu_correction"><a class="header" href="#apply_tccon_insitu_correction">apply_tccon_insitu_correction</a></h1>
+<h2 id="purpose-2"><a class="header" href="#purpose-2">Purpose</a></h2>
+<p><code>apply_tccon_insitu_correction</code> has a single purpose, that is to apply a scalar divisor scale factor
+to specific column-average quantities.
+This is typically used to ensure that these quantities are tied to the same metrological scale as
+comparable <em>in situ</em> data.</p>
+<h2 id="examples-2"><a class="header" href="#examples-2">Examples</a></h2>
+<p>This program requires two arguments: a path to a file defining the scaling corrections and
+a path to either a <code>.vav.ada</code> file, created by <code>apply_tccon_airmass_correction</code>:</p>
+<pre><code class="language-bash">$GGGPATH/bin/apply_tccon_insitu_correction CORRECTION_FILE VAV_ADA_FILE
+</code></pre>
+<p>The <code>CORRECTION_FILE</code> will usually be one of those supplied with GGG, in the <code>$GGGPATH/tccon</code> subdirectory.
+See <a href="postproc//postproc/corrections/insitu_correction_file.html">the configuration section</a> for the details of this
+file's format if you need to modify one or create your own.</p>
+<h2 id="use-in-tccon-standard-processing-2"><a class="header" href="#use-in-tccon-standard-processing-2">Use in TCCON standard processing</a></h2>
+<p>For TCCON standard processing, the <code>CORRECTION_FILE</code> <em>must</em> be <code>$GGGPATH/tccon/corrections_insitu_postavg.dat</code>,
+as these are the <em>in situ</em> correction factors derived for the required TCCON data version.
+It must be run on the <code>.vav.ada</code> file output by <code>apply_tccon_airmass_correction</code>.
+This is automatically configured in the <code>post_processing.sh</code> file, therefore standard users should rely on the
+<code>post_processing.sh</code> script to run the required post processing steps in the correct order.</p>
+<h2 id="use-in-em27sun-standard-processing-2"><a class="header" href="#use-in-em27sun-standard-processing-2">Use in EM27/SUN standard processing</a></h2>
+<p>EM27/SUNs have their own <em>in situ</em> correction factors.
+These correction factors are provided with EGI-RS, and automatically added to the <code>$GGGPATH/tccon</code> directory
+when running the <code>em27-init</code> program included with EGI-RS.
+If using EGI-RS correctly, it will automatically create a <code>post_processing.sh</code> file with the correct
+post processing order for an EM27/SUN, so normal users should rely on that.</p>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="in-situ-correction-file-format"><a class="header" href="#in-situ-correction-file-format">In situ correction file format</a></h1>
+<p>For backwards compatibility, this file is in the typical GGG input file format
+of a line specifying the "shape" of the file, one or more header rows, then
+tabular data.
+The standard TCCON GGG2020 is show here as an example:</p>
+<pre><code class="language-text">19 4
+2017-02-16  GCT
+2015-08-11  DW
+2021-07-26  JLL
+This file contains airmass-independent correction factors (AICFs) determined
+offline by comparison against in situ data. CO2, wCO2, lCO2, CH4, and H2O use AICFs
+determined as the weighted mean ratio of TCCON to in situ Xgas values. N2O
+uses the ratio of TCCON to surface-derived in situ XN2O fit to a mid-tropospheric
+potential temperature of 310 K, ensuring that it is fixed to the same temperature
+as the ADCFs. CO, H2O, and Luft are not corrected.
+For CO2, wCO2, lCO2, CH4, H2O, and CO the AICF_Err (uncertainties) are 2-sigma standard
+deviations of bootstrapped mean ratios. For N2O, the error equals the fit vs. potential
+temperature multiplied by twice the standard deviation of potential temperatures
+experienced by the TCCON network.
+The WMO_Scale column gives the WMO scale from the in situ data that the scale
+factor ties to. There must be something in this column and must be quoted;
+use "N/A" for gases with no WMO scaling. NB: although CO has no WMO scale (because it
+is not scaled), the uncertainty was determined from the measurements on the WMO X2014A scale.
+ Gas     AICF  AICF_Err  WMO_Scale
+"xco2"   1.0101  0.0005  "WMO CO2 X2007"
+"xwco2"  1.0008  0.0005  "WMO CO2 X2007"
+"xlco2"  1.0014  0.0007  "WMO CO2 X2007"
+"xch4"   1.0031  0.0014  "WMO CH4 X2004"
+"xn2o"   0.9821  0.0098  "NOAA 2006A"
+"xco"    1.0000  0.0526  "N/A"
+"xh2o"   0.9883  0.0157  "ARM Radiosondes (Lamont+Darwin)"
+"xluft"  1.0000  0.0000  "N/A"
+</code></pre>
+<p>The components are as follows:</p>
+<ul>
+<li>The first line specifies the number of header lines and the number of data columns.
+This must be two integers separated by whitespace.
+The number of header lines includes this line and the column headers.</li>
+<li>The next <code>nhead-2</code> lines (line numbers 2 to 18 in this case) are free format; these are
+skipped by the program. You can see in the example that these are used to record the
+history of the file and notes about the content of the file.</li>
+<li>The last header line (line number 19 in this case) gives the column names; it must include
+the four columns shown here.</li>
+</ul>
+<div id="admonition-info" class="admonition admonish-info" role="note" aria-labelledby="admonition-info-title">
+<div class="admonition-title">
+<div id="admonition-info-title">
+<p>Info</p>
+</div>
+<a class="admonition-anchor-link" href="postproc/corrections/insitu_correction_file.html#admonition-info"></a>
+</div>
+<div>
+<p>A common error is to add lines to the header without updating the number of header lines
+on the first line.
+If you get an error running <code>apply_tccon_insitu_correction</code> after editing the correction
+file's header, double check that you also updated the number of header lines!</p>
+</div>
+</div>
+<p>The data are as follows:</p>
+<ul>
+<li>"Gas" refers to the column in the <code>.vav.ada</code> file that the correction applies to
+(along with the associated error, i.e., "xco2" will apply to both the "xco2" and "xco2_error" columns).</li>
+<li>"AICF" is the scaling factor; the Xgas and error will be divided by this.</li>
+<li>"AICF_Err" is the uncertainty on the scaling factor.</li>
+<li>"WMO_Scale" is the metrological scale or other reference to which the scale factor ties the
+These must be quoted strings.</li>
+</ul>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="add_nc_flags"><a class="header" href="#add_nc_flags">add_nc_flags</a></h1>
 <div style="break-before: page; page-break-before: always;"></div><h1 id="write_public_netcdf"><a class="header" href="#write_public_netcdf">write_public_netcdf</a></h1>
-<h2 id="basic-usage"><a class="header" href="#basic-usage">Basic usage</a></h2>
+<h2 id="purpose-3"><a class="header" href="#purpose-3">Purpose</a></h2>
 <p><code>write_public_netcdf</code> converts the private (a.k.a. engineering) netCDF files into smaller, more user-friendly, files distributed to most TCCON users.
 This includes:</p>
 <ul>
@@ -186,16 +493,31 @@ This includes:</p>
 <li>limiting the data in the file based on the desired data latency, and</li>
 <li>expanding the averaging kernels and prior profiles to be one-per-spectrum.</li>
 </ul>
-<p>In the simplest use, running <code>write_public_netcdf PRIVATE_NC_FILE</code>, where <code>PRIVATE_NC_FILE</code> is a path to the private file you wish to convert, is all that is required.
-For other options, use the <code>--help</code> flag.
-If you require a custom configuration for what variables to copy, see the <a href="/write_public_netcdf/configuration.html">Configuration</a> section.</p>
-<h3 id="use-in-tccon-standard-processing"><a class="header" href="#use-in-tccon-standard-processing">Use in TCCON standard processing</a></h3>
+<h2 id="examples-3"><a class="header" href="#examples-3">Examples</a></h2>
+<p>The simplest use will convert the <code>PRIVATE_NC_FILE</code> into a public format file.
+This assumes that the <code>PRIVATE_NC_FILE</code> filename begins with the two-character site ID for your site.
+The public file will be in the same directory as the private file, and its name will reflect the site ID and the date range of the <code>flag == 0</code> data:</p>
+<pre><code class="language-bash">$GGGPATH/bin/write_public_netcdf PRIVATE_NC_FILE
+</code></pre>
+<p>To avoid renaming the public file to match the dates of <code>flag == 0</code> data, use the <code>--no-rename-by-dates</code> flag.
+This will replace "private" in the extension with "public", so if <code>PRIVATE_NC_FILE</code> was <code>pa_ggg_benchmark.private.qc.nc</code>, the public file would be named <code>pa_ggg_benchmark.public.qc.nc</code>:</p>
+<pre><code class="language-bash">$GGGPATH/bin/write_public_netcdf --no-rename-by-dates PRIVATE_NC_FILE
+</code></pre>
+<p>Both of the above examples will use the standard TCCON configuration for which variables to copy.
+To use the extended TCCON configuration (which will include gases from the secondary detector), add the <code>--extended</code> flag:</p>
+<pre><code class="language-bash">$GGGPATH/bin/write_public_netcdf --extended PRIVATE_NC_FILE
+</code></pre>
+<p>If you need to customize which variables are copied, you must create your own configuration TOML file and pass it to the <code>--config</code> option:</p>
+<pre><code class="language-bash">$GGGPATH/bin/write_public_netcdf --config CUSTOM_CONFIG.toml PRIVATE_NC_FILE
+</code></pre>
+<p>For information on the configuration file format, see <a href="postproc//write_public_netcdf/configuration.html">its section of this book</a>.</p>
+<h2 id="use-in-tccon-standard-processing-3"><a class="header" href="#use-in-tccon-standard-processing-3">Use in TCCON standard processing</a></h2>
 <p>Individual TCCON sites <strong>should not need to use this program</strong> under normal circumstances.
 This program will be run at Caltech on the concatenated and quality controlled private netCDF files, and the resulting public netCDF files will be made available through <a href="https://tccondata.org">tccondata.org</a>.
 This function is provided as part of GGG-RS for sites that have, for example, low latency or custom products delivered to specific users as non-standard TCCON data, but wish to provide the data in the user-friendly public format instead of the much more intimidating private file format.
 Presently, you will need to follow the instructions <a href="https://tccon-wiki.caltech.edu/Main/GeneratingPublicFilesGGG2020">on the TCCON wiki</a> to generate a concatenated and quality controlled private file, then run this program on the resulting file.
 Note that access permission is required for this wiki page to track who is generating GGG public files.</p>
-<h3 id="use-in-em27sun-standard-processing"><a class="header" href="#use-in-em27sun-standard-processing">Use in EM27/SUN standard processing</a></h3>
+<h2 id="use-in-em27sun-standard-processing-3"><a class="header" href="#use-in-em27sun-standard-processing-3">Use in EM27/SUN standard processing</a></h2>
 <p>As there is not yet an equivalent of the TCCON data pipeline at Caltech for EM27/SUN data processed with GGG, operators will likely want to use this program to generate public files of their data for upload to whatever data repository they host from.
 Presently, you will need to follow the instructions <a href="https://tccon-wiki.caltech.edu/Main/GeneratingPublicFilesGGG2020">on the TCCON wiki</a> to generate a concatenated and quality controlled private file, then run this program on the resulting file.
 Note that access permission is required for this wiki page to track who is generating GGG public files.</p>
@@ -269,7 +591,7 @@ private_name = "solzen"
 long_name = "solar zenith angle"
 </code></pre>
 <p>By default, any of the standard TCCON auxiliary variables not listed will be added.
-See the <a href="write_public_netcdf//write_public_netcdf/defaults.html">Defaults</a> section for how to modify that behavior.</p>
+See the <a href="postproc/write_public_netcdf//write_public_netcdf/defaults.html">Defaults</a> section for how to modify that behavior.</p>
 <div style="break-before: page; page-break-before: always;"></div><h1 id="computed-variables"><a class="header" href="#computed-variables">Computed variables</a></h1>
 <p>Computed variables are similar to auxiliary variables in that they are not directly associated with a single Xgas.
 Unlike auxiliary variables, these cannot be simply copied from the private netCDF file.
@@ -302,10 +624,10 @@ capture group with the name "gas" that extracts the physical gas abbreviation (i
 This looks like <code>(?&lt;gas&gt;...)</code> where the <code>...</code> is the regular subexpression that matches that part of the string.</li>
 </ol>
 <p>By default, the configuration will add a single regex rule that matches the pattern <code>^x(?&lt;gas&gt;[a-z][a-z0-9]*)$</code>.
-You can disable this by setting <code>xgas_rules = false</code> in the <a href="write_public_netcdf//write_public_netcdf/defaults.html"><code>[defaults]</code></a> section of the config.
+You can disable this by setting <code>xgas_rules = false</code> in the <a href="postproc/write_public_netcdf//write_public_netcdf/defaults.html"><code>[defaults]</code></a> section of the config.
 This rule is designed to match basic Xgas variables, e.g., "xch4", "xn2o", etc.</p>
 <p>The rules also include default settings for the prior profile, prior column average, averaging kernel (and its slant Xgas bins), and the traceability scale.
-These can be specified the same way as described <a href="write_public_netcdf//write_public_netcdf/explicit_xgases.html#ancillary-variable-specifications">in the Xgases ancillary subsection</a>,
+These can be specified the same way as described <a href="postproc/write_public_netcdf//write_public_netcdf/explicit_xgases.html#ancillary-variable-specifications">in the Xgases ancillary subsection</a>,
 and the defaults are the same as well.</p>
 <p>An example of a regular expression rule that uses the default ways to infer its ancillary variables is:</p>
 <pre><code class="language-toml">[[discovery.rule]]
@@ -345,7 +667,7 @@ However, O2 measured on a silicon detector may be useful, so we do not want to e
 "th2o" is temperature sensitive water, which is generally confusing for the average user, so we want to ensure that it is also excluded from every detector.</p>
 <div style="break-before: page; page-break-before: always;"></div><h1 id="explicitly-specified-xgases"><a class="header" href="#explicitly-specified-xgases">Explicitly specified Xgases</a></h1>
 <p>This section allows you to list specific Xgas variables to copy, along with some or all of the ancillary variables needed to properly interpret them.
-Usually, you will not specify each Xgas by hand, but instead will use the <a href="write_public_netcdf//write_public_netcdf/xgas_discovery.html">discovery</a> capability of the writer to automatically find each Xgas to copy.
+Usually, you will not specify each Xgas by hand, but instead will use the <a href="postproc/write_public_netcdf//write_public_netcdf/xgas_discovery.html">discovery</a> capability of the writer to automatically find each Xgas to copy.
 However, variables explicitly listed in this section take precedence over those found by the discovery rules.
 This leads to two cases where you might specify an Xgas in this section:</p>
 <ol>
@@ -359,7 +681,7 @@ to map from the Xgas variable to the ancillary variable.</li>
 <li><code>gas</code> (required): the physical gas name, e.g., "co2" for all the various CO2 variables (regular, <code>wco2</code>, and <code>lco2</code>).
 This is used to match up to, e.g., the priors which do not distinguish between the different spectra windows.</li>
 <li><code>gas_long</code> (optional): the full name of the gas instead of its abbreviation, e.g. "carbon dioxide" for CO2. If not given,
-then the configuration will try to find the <code>gas</code> value in its <a href="write_public_netcdf//write_public_netcdf/gas_proper_names.html"><code>[gas_long_names]</code></a> section and use that,
+then the configuration will try to find the <code>gas</code> value in its <a href="postproc/write_public_netcdf//write_public_netcdf/gas_proper_names.html"><code>[gas_long_names]</code></a> section and use that,
 falling back on the <code>gas</code> value if the gas is not defined in the gas long names section.</li>
 <li><code>prior_profile</code> (optional): how to copy the a priori profile.</li>
 <li><code>prior_xgas</code> (optional): how to copy the a priori column average.</li>
@@ -367,7 +689,7 @@ falling back on the <code>gas</code> value if the gas is not defined in the gas 
 <li><code>slant_bin</code> (optional): how to find the slant Xgas bin variable needed to expand the AKs.</li>
 <li><code>traceability_scale</code> (optional): how to find the variable containing the WMO or analogous scale for this data.</li>
 </ul>
-<p><code>prior_profile</code>, <code>prior_xgas</code>, <code>ak</code>, <code>slant_bin</code>, and <code>traceability_scale</code> can all be defined following the syntax in the <a href="write_public_netcdf/explicit_xgases.html#ancillary-variable-specifications">ancillary variable specifications</a>.
+<p><code>prior_profile</code>, <code>prior_xgas</code>, <code>ak</code>, <code>slant_bin</code>, and <code>traceability_scale</code> can all be defined following the syntax in the <a href="postproc/write_public_netcdf/explicit_xgases.html#ancillary-variable-specifications">ancillary variable specifications</a>.
 Note that <code>slant_bin</code> is a special case in that it will only be used if the AKs are to be copied, but cannot be omitted in that case.</p>
 <p>To illustrate the two main use cases for this section, here is an excerpt from the standard TCCON configuration:</p>
 <pre><code class="language-toml">[[xgas]]
@@ -395,13 +717,13 @@ ak = { type = "specified_if_first", private_name = "ak_xwco2" }
 slant_bin = { type = "specified", private_name = "ak_slant_xwco2_bin" }
 </code></pre>
 <p>First we have <code>xluft</code>.
-This variable would be discovered by the <a href="write_public_netcdf//write_public_netcdf/xgas_discovery.html#rules">default rule</a>; however, that rule will require prior information and AKs.
+This variable would be discovered by the <a href="postproc/write_public_netcdf//write_public_netcdf/xgas_discovery.html#rules">default rule</a>; however, that rule will require prior information and AKs.
 The prior information is not useful for Xluft, so we want to avoid copying that to reduce the number of extraneous variables, and there are no AKs for Xluft.
 Thus we specify "omit" for each of these to tell the writer not to look for them.
 We do not have to tell it to omit <code>slant_bin</code>, because omitting the AKs implicitly skips that, and <code>traceability_scale</code> can be left as normal because there is an "aicf_xluft_scale" variable in the private netCDF files.</p>
 <p>Second we have <code>xco2_x2019</code> and <code>xwco2_x2019</code>.
 (We have omitted the x2007 variables and <code>lco2_x2019</code> from the above example for brevity).
-These would not be discovered by the <a href="write_public_netcdf//write_public_netcdf/xgas_discovery.html#rules">default rule</a>.
+These would not be discovered by the <a href="postproc/write_public_netcdf//write_public_netcdf/xgas_discovery.html#rules">default rule</a>.
 Further, the mapping to their prior and AK variables is unique: all the CO2 Xgas variables can share the prior profiles and column averages, and each "flavor" of CO2 (regular, wCO2, or lCO2) can use the same AKs whether it is on the X2007 or X2019 scale.
 Thus, we not only define that these variables need copied, but that we want to rename the prior variables to just "prior_co2" and "prior_xco2" and only copy these the first time we find them.
 We also ensure that the AKs and slant bins point to the correct variables.</p>
@@ -415,7 +737,7 @@ in the public file. This is meant to support cases like described for CO2 above,
 a single ancillary variable - as long as one Xgas copies it, the other Xgases do not need to.
 <strong>Note that the writer does not check that the existing variable's data are equal to what would be written for the new variable!</strong></li>
 <li><code>opt_inferred_if_first</code>: similar to <code>inferred_if_first</code>, except that if the private variable does not exist,
-then this variable will be skipped instead of causing an error. This is intended for <a href="write_public_netcdf//write_public_netcdf/xgas_discovery.html#rules">Xgas discovery rules</a> more than explicit Xgas definitions.</li>
+then this variable will be skipped instead of causing an error. This is intended for <a href="postproc/write_public_netcdf//write_public_netcdf/xgas_discovery.html#rules">Xgas discovery rules</a> more than explicit Xgas definitions.</li>
 <li><code>specified</code>: allows you to specify exactly which variable to copy with the <code>private_name</code> field. You can also
 give the <code>public_name</code> field to indicate what the variable name in the output file should be; if that is omitted,
 then the public variable will have the same name as the private variable. It is an error if the public variable
@@ -446,10 +768,10 @@ ch4 = "methane"
 co = "carbon monoxide"
 </code></pre>
 <p>Note that the keys are the gases, not Xgases.
-A default list is included if not turned off in the <a href="write_public_netcdf//write_public_netcdf/defaults.html"><code>[Defaults]</code></a> section.
+A default list is included if not turned off in the <a href="postproc/write_public_netcdf//write_public_netcdf/defaults.html"><code>[Defaults]</code></a> section.
 See the source code for <a href="https://github.com/TCCON/ggg-rs/blob/main/src/bin/write_public_netcdf/constants.rs"><code>DEFAULT_GAS_LONG_NAMES</code></a> for the current list.
 You can override any of those without turning off the defaults; e.g., setting <code>h2o = "dihydrogen monoxide"</code> in this section will replace the default of "water".</p>
-<p>Of course, when <a href="write_public_netcdf//write_public_netcdf/explicit_xgases.html">explicitly defining an Xgas to copy</a>, you can write in the proper name as the <code>gas_long</code> value.
+<p>Of course, when <a href="postproc/write_public_netcdf//write_public_netcdf/explicit_xgases.html">explicitly defining an Xgas to copy</a>, you can write in the proper name as the <code>gas_long</code> value.
 The <code>[gas_long_names]</code> section is most useful for automatically discovered Xgases, but it can also be useful when defining multiple Xgas variables that refer to the same physical gas, as the <a href="https://github.com/TCCON/ggg-rs/blob/main/src/bin/write_public_netcdf/tccon_configs/standard.toml">standard TCCON configuration</a> does with CO2.</p>
 <div style="break-before: page; page-break-before: always;"></div><h1 id="defaults"><a class="header" href="#defaults">Defaults</a></h1>
 <p>Unlike other sections, the <code>[defaults]</code> section does not define variables to copy; instead, it modifies how the other sections are filled in.
@@ -467,6 +789,10 @@ The following boolean options are available to change that behavior:</p>
 or <code>-vv</code> to the command line. The first will activate debug output, which includes a lot of information about
 Xgas discovery. <code>-vv</code> will also activate trace-level logging, which will output even more information about the
 configuration as the program read it.</p>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="other-utility-programs"><a class="header" href="#other-utility-programs">Other utility programs</a></h1>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="bin2nc"><a class="header" href="#bin2nc">bin2nc</a></h1>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="query_output"><a class="header" href="#query_output">query_output</a></h1>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="strip_header"><a class="header" href="#strip_header">strip_header</a></h1>
 
                     </main>
 

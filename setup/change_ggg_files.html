@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>Defaults - GGG-RS User Guide</title>
+        <title>change_ggg_files - GGG-RS User Guide</title>
 
 
         <!-- Custom HTML head -->
@@ -29,6 +29,7 @@
         <link rel="stylesheet" id="ayu-highlight-css" href="../ayu-highlight.css">
 
         <!-- Custom theme stylesheets -->
+        <link rel="stylesheet" href=".././mdbook-admonish.css">
 
 
         <!-- Provide site root and default themes to javascript -->
@@ -129,6 +130,9 @@
                         <a href="../print.html" title="Print this book" aria-label="Print this book">
                             <i id="print-button" class="fa fa-print"></i>
                         </a>
+                        <a href="https://github.com/TCCON/ggg-rs" title="Git repository" aria-label="Git repository">
+                            <i id="git-repository-button" class="fa fa-github"></i>
+                        </a>
 
                     </div>
                 </div>
@@ -155,26 +159,17 @@
 
                 <div id="content" class="content">
                     <main>
-                        <h1 id="defaults"><a class="header" href="#defaults">Defaults</a></h1>
-<p>Unlike other sections, the <code>[defaults]</code> section does not define variables to copy; instead, it modifies how the other sections are filled in.
-If this section is omitted, then each of the other sections will add reasonable default values if omitted.
-The following boolean options are available to change that behavior:</p>
-<ul>
-<li><code>disable_all</code>: setting this to <code>true</code> will ensure that no defaults are added in any section.</li>
-<li><code>aux_vars</code>: setting this to <code>false</code> will prevent TCCON standard auxiliary variables from being added in the <code>aux</code> section.</li>
-<li><code>gas_long_names</code>: setting this to <code>false</code> will prevent the standard mapping of chemical formulae to proper gas names being added to <code>[gas_long_names]</code>.</li>
-<li><code>xgas_rules</code>: setting this to <code>false</code> will prevent the standard list of patterns to match when looking for Xgas variables from being added to <code>[discovery.rules]</code>.</li>
-</ul>
+                        <h1 id="change_ggg_files"><a class="header" href="#change_ggg_files">change_ggg_files</a></h1>
 
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
-                            <a rel="prev" href="../write_public_netcdf/gas_proper_names.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                            <a rel="prev" href="../setup_helpers.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                                 <i class="fa fa-angle-left"></i>
                             </a>
 
-                            <a rel="next prefetch" href="../write_public_netcdf/debugging_tips.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                            <a rel="next prefetch" href="../setup/list_spectra.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                                 <i class="fa fa-angle-right"></i>
                             </a>
 
@@ -184,11 +179,11 @@ The following boolean options are available to change that behavior:</p>
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
-                    <a rel="prev" href="../write_public_netcdf/gas_proper_names.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                    <a rel="prev" href="../setup_helpers.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                         <i class="fa fa-angle-left"></i>
                     </a>
 
-                    <a rel="next prefetch" href="../write_public_netcdf/debugging_tips.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                    <a rel="next prefetch" href="../setup/list_spectra.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                         <i class="fa fa-angle-right"></i>
                     </a>
             </nav>

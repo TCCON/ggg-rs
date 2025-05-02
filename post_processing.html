@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>Xgas discovery - GGG-RS User Guide</title>
+        <title>Post processing programs - GGG-RS User Guide</title>
 
 
         <!-- Custom HTML head -->
@@ -12,33 +12,34 @@
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <meta name="theme-color" content="#ffffff">
 
-        <link rel="icon" href="../favicon.svg">
-        <link rel="shortcut icon" href="../favicon.png">
-        <link rel="stylesheet" href="../css/variables.css">
-        <link rel="stylesheet" href="../css/general.css">
-        <link rel="stylesheet" href="../css/chrome.css">
-        <link rel="stylesheet" href="../css/print.css" media="print">
+        <link rel="icon" href="favicon.svg">
+        <link rel="shortcut icon" href="favicon.png">
+        <link rel="stylesheet" href="css/variables.css">
+        <link rel="stylesheet" href="css/general.css">
+        <link rel="stylesheet" href="css/chrome.css">
+        <link rel="stylesheet" href="css/print.css" media="print">
 
         <!-- Fonts -->
-        <link rel="stylesheet" href="../FontAwesome/css/font-awesome.css">
-        <link rel="stylesheet" href="../fonts/fonts.css">
+        <link rel="stylesheet" href="FontAwesome/css/font-awesome.css">
+        <link rel="stylesheet" href="fonts/fonts.css">
 
         <!-- Highlight.js Stylesheets -->
-        <link rel="stylesheet" id="highlight-css" href="../highlight.css">
-        <link rel="stylesheet" id="tomorrow-night-css" href="../tomorrow-night.css">
-        <link rel="stylesheet" id="ayu-highlight-css" href="../ayu-highlight.css">
+        <link rel="stylesheet" id="highlight-css" href="highlight.css">
+        <link rel="stylesheet" id="tomorrow-night-css" href="tomorrow-night.css">
+        <link rel="stylesheet" id="ayu-highlight-css" href="ayu-highlight.css">
 
         <!-- Custom theme stylesheets -->
+        <link rel="stylesheet" href="./mdbook-admonish.css">
 
 
         <!-- Provide site root and default themes to javascript -->
         <script>
-            const path_to_root = "../";
+            const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc.js"></script>
+        <script src="toc.js"></script>
     </head>
     <body>
     <div id="body-container">
@@ -91,7 +92,7 @@
             <!-- populated by js -->
             <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
             <noscript>
-                <iframe class="sidebar-iframe-outer" src="../toc.html"></iframe>
+                <iframe class="sidebar-iframe-outer" src="toc.html"></iframe>
             </noscript>
             <div id="sidebar-resize-handle" class="sidebar-resize-handle">
                 <div class="sidebar-resize-indicator"></div>
@@ -126,8 +127,11 @@
                     <h1 class="menu-title">GGG-RS User Guide</h1>
 
                     <div class="right-buttons">
-                        <a href="../print.html" title="Print this book" aria-label="Print this book">
+                        <a href="print.html" title="Print this book" aria-label="Print this book">
                             <i id="print-button" class="fa fa-print"></i>
+                        </a>
+                        <a href="https://github.com/TCCON/ggg-rs" title="Git repository" aria-label="Git repository">
+                            <i id="git-repository-button" class="fa fa-github"></i>
                         </a>
 
                     </div>
@@ -155,73 +159,46 @@
 
                 <div id="content" class="content">
                     <main>
-                        <h1 id="xgas-discovery"><a class="header" href="#xgas-discovery">Xgas discovery</a></h1>
-<p>Usually we do not want to specify every single Xgas to copy; instead, we want the writer to scan the private file to identify Xgases and copy everything that matches.
-This both saves a lot of tedious typing in the configuration and minimizes the possibilty of copy-paste errors.</p>
-<h2 id="rules"><a class="header" href="#rules">Rules</a></h2>
-<p>The first part of the discovery section is a list of rules for how to find Xgas variables.
-These come in two variants:</p>
-<ol>
-<li>Suffix rules: these look for variables that start with something starting with an Xgas-like pattern
-and ending in the given suffix. The full regex is <code>^x([a-z][a-z0-9]*)_\w+_{suffix}$</code>, where <code>{suffix}</code> is the provided suffix.
-Note that the suffix is passed through [<code>regex::escape</code>] to ensure that any special characters are escaped; it will only
-be treated as a literal.</li>
-<li>Regex rules: these allow you to specify a regular expression to match variables names. The regex <em>must</em> include a named
-capture group with the name "gas" that extracts the physical gas abbreviation (i.e., the <code>gas</code> value in an <code>Xgas</code> entry).
-This looks like <code>(?&lt;gas&gt;...)</code> where the <code>...</code> is the regular subexpression that matches that part of the string.</li>
-</ol>
-<p>By default, the configuration will add a single regex rule that matches the pattern <code>^x(?&lt;gas&gt;[a-z][a-z0-9]*)$</code>.
-You can disable this by setting <code>xgas_rules = false</code> in the <a href="/write_public_netcdf/defaults.html"><code>[defaults]</code></a> section of the config.
-This rule is designed to match basic Xgas variables, e.g., "xch4", "xn2o", etc.</p>
-<p>The rules also include default settings for the prior profile, prior column average, averaging kernel (and its slant Xgas bins), and the traceability scale.
-These can be specified the same way as described <a href="/write_public_netcdf/explicit_xgases.html#ancillary-variable-specifications">in the Xgases ancillary subsection</a>,
-and the defaults are the same as well.</p>
-<p>An example of a regular expression rule that uses the default ways to infer its ancillary variables is:</p>
-<pre><code class="language-toml">[[discovery.rule]]
-regex = '^column_average_(?&lt;gas&gt;\w+)$'
-</code></pre>
-<p>Two things to note are:</p>
-<ol>
-<li>The regular expression is inside single quotes; this is how TOML specifies literal strings and it the
-most convenient way to write regexes that include backslashes. (Otherwise TOML itself will intepret them
-as escape characters.)</li>
-<li>The regex includes <code>^</code> and <code>$</code> to anchor the start and end of the pattern. In most cases, you will probably
-want to do so as well to avoid matching arbitrary parts of variable names.</li>
-</ol>
-<p>An example of a suffix rule that also indicates that variables matching this rule should not include averaging kernels or the traceability scale is:</p>
-<pre><code class="language-toml">[[discovery.rule]]
-suffix = "mir"
-ak = { type = "omit" }
-traceability_scale = { type = "omit" }
-</code></pre>
-<p>Note that the suffix rule contains a "suffix" key, while the regular expression rule has a "regex" key - this is how they are distinguished.
-Also note that rules are checked in order, and a variable is added following the first rule that matches.
-This means that if a variable matches multiple rules, then its ancillary variables will be set up following the first rule that matched.</p>
-<h2 id="exclusions"><a class="header" href="#exclusions">Exclusions</a></h2>
-<p>The second part of the discovery section are lists of gases or variables to exclude.
-The first option is <code>excluded_xgas_variables</code>.
-If a variable's private file name matches one of the names in that list, it will not be copied even if it matches one of the rules.
-The other option is <code>excluded_gases</code>, which matches not the variable name, but the physical gas.
-The easiest way to explain this is to consider the standard TCCON configuration:</p>
-<pre><code class="language-toml">[discovery]
-excluded_xgas_variables = ["xo2"]
-excluded_gases = ["th2o", "fco2", "zco2"]
-</code></pre>
-<p><code>excluded_xgas_variables</code> specifically excludes the "xo2" variable; this would match the default regex rule meant to capture Xgases measured on the primary detector, but we don't want to include it because it is not useful for data users.
-However, O2 measured on a silicon detector may be useful, so we do not want to exclude all O2 variables.
-<code>excluded_gases</code> lists three gases that we want to exclude no matter what detector they are retrieved from.
-"fco2" and "zco2" are diagnostic windows (for channelling and zero-level offset, respectively) and so will be included once for each detector.
-"th2o" is temperature sensitive water, which is generally confusing for the average user, so we want to ensure that it is also excluded from every detector.</p>
+                        <h1 id="post-processing-programs"><a class="header" href="#post-processing-programs">Post processing programs</a></h1>
+<p>Post processing programs are used after completing GFIT runs on all windows.
+These programs perform a combination of collating and averaging data from the different
+windows and applying the necessary <em>post hoc</em> corrections to produce the best quality data.</p>
+<p>We are currently in a transitional period, where the post processing programs are still
+provided in a mix of languages.
+Some remain the original Fortran versions from GGG2020, others have been replaces with Rust
+versions, and the private netCDF writer remains written in Python.
+The intention is to transition away from the Python netCDF writer in GGG2020.2,
+but to retain a mix of Fortran and Rust programs at that time.
+Whether all post processing programs transition to Rust depends on whether there is a need
+for more flexibility in all programs.</p>
+<h2 id="em27sun-users"><a class="header" href="#em27sun-users">EM27/SUN users</a></h2>
+<p>Those who use GGG to process EM27/SUN data must be aware that EGI (the wrapper program to
+streamline processing of EM27/SUN data with GGG) is <em>also</em> in a transitional phase.
+The <a href="https://tccon-wiki.caltech.edu/Main/EGI">original EGI</a> does not use GGG-RS programs,
+and instead patches some of the existing GGG Fortran programs to work with EM27/SUN data,
+as well as works around some limitations of the Fortran post processing code by swapping
+out some of the configuration files on disk.
+This works, but is inconvenient when you need to process both TCCON and EM27/SUN data.</p>
+<p>A full rewrite of EGI, <a href="https://github.com/TCCON/egi-rs">EGI-RS</a> is in progress.
+This is intended to be easier to maintain and modular, allowing smaller parts of the
+GGG workflow to be run independently with EGI-RS automation as needed.
+EGI-RS <em>does</em> use the programs provided by GGG-RS, and in fact relies on several of them
+to simplify switching between TCCON and EM27/SUN configurations.
+Throughout this section, the EM27/SUN standard use sections will be referring to the EGI-RS
+use.
+Those still using the original EGI should be aware that while the <em>role</em> of each program
+in the EM27/SUN post processing is the same as its original Fortran predecessor, the
+specifics of how it is run may differ.</p>
 
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
-                            <a rel="prev" href="../write_public_netcdf/comp_vars.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                            <a rel="prev" href="setup/list_spectra.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                                 <i class="fa fa-angle-left"></i>
                             </a>
 
-                            <a rel="next prefetch" href="../write_public_netcdf/explicit_xgases.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                            <a rel="next prefetch" href="postproc/collate_tccon_results.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                                 <i class="fa fa-angle-right"></i>
                             </a>
 
@@ -231,11 +208,11 @@ However, O2 measured on a silicon detector may be useful, so we do not want to e
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
-                    <a rel="prev" href="../write_public_netcdf/comp_vars.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                    <a rel="prev" href="setup/list_spectra.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                         <i class="fa fa-angle-left"></i>
                     </a>
 
-                    <a rel="next prefetch" href="../write_public_netcdf/explicit_xgases.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                    <a rel="next prefetch" href="postproc/collate_tccon_results.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                         <i class="fa fa-angle-right"></i>
                     </a>
             </nav>
@@ -250,13 +227,13 @@ However, O2 measured on a silicon detector may be useful, so we do not want to e
         </script>
 
 
-        <script src="../elasticlunr.min.js"></script>
-        <script src="../mark.min.js"></script>
-        <script src="../searcher.js"></script>
+        <script src="elasticlunr.min.js"></script>
+        <script src="mark.min.js"></script>
+        <script src="searcher.js"></script>
 
-        <script src="../clipboard.min.js"></script>
-        <script src="../highlight.js"></script>
-        <script src="../book.js"></script>
+        <script src="clipboard.min.js"></script>
+        <script src="highlight.js"></script>
+        <script src="book.js"></script>
 
         <!-- Custom JS scripts -->
 

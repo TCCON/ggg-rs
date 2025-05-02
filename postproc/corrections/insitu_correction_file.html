@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>Overview - GGG-RS User Guide</title>
+        <title>Correction file format - GGG-RS User Guide</title>
 
 
         <!-- Custom HTML head -->
@@ -12,34 +12,34 @@
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <meta name="theme-color" content="#ffffff">
 
-        <link rel="icon" href="favicon.svg">
-        <link rel="shortcut icon" href="favicon.png">
-        <link rel="stylesheet" href="css/variables.css">
-        <link rel="stylesheet" href="css/general.css">
-        <link rel="stylesheet" href="css/chrome.css">
-        <link rel="stylesheet" href="css/print.css" media="print">
+        <link rel="icon" href="../../favicon.svg">
+        <link rel="shortcut icon" href="../../favicon.png">
+        <link rel="stylesheet" href="../../css/variables.css">
+        <link rel="stylesheet" href="../../css/general.css">
+        <link rel="stylesheet" href="../../css/chrome.css">
+        <link rel="stylesheet" href="../../css/print.css" media="print">
 
         <!-- Fonts -->
-        <link rel="stylesheet" href="FontAwesome/css/font-awesome.css">
-        <link rel="stylesheet" href="fonts/fonts.css">
+        <link rel="stylesheet" href="../../FontAwesome/css/font-awesome.css">
+        <link rel="stylesheet" href="../../fonts/fonts.css">
 
         <!-- Highlight.js Stylesheets -->
-        <link rel="stylesheet" id="highlight-css" href="highlight.css">
-        <link rel="stylesheet" id="tomorrow-night-css" href="tomorrow-night.css">
-        <link rel="stylesheet" id="ayu-highlight-css" href="ayu-highlight.css">
+        <link rel="stylesheet" id="highlight-css" href="../../highlight.css">
+        <link rel="stylesheet" id="tomorrow-night-css" href="../../tomorrow-night.css">
+        <link rel="stylesheet" id="ayu-highlight-css" href="../../ayu-highlight.css">
 
         <!-- Custom theme stylesheets -->
-        <link rel="stylesheet" href="./mdbook-admonish.css">
+        <link rel="stylesheet" href="../.././mdbook-admonish.css">
 
 
         <!-- Provide site root and default themes to javascript -->
         <script>
-            const path_to_root = "";
+            const path_to_root = "../../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc.js"></script>
+        <script src="../../toc.js"></script>
     </head>
     <body>
     <div id="body-container">
@@ -92,7 +92,7 @@
             <!-- populated by js -->
             <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
             <noscript>
-                <iframe class="sidebar-iframe-outer" src="toc.html"></iframe>
+                <iframe class="sidebar-iframe-outer" src="../../toc.html"></iframe>
             </noscript>
             <div id="sidebar-resize-handle" class="sidebar-resize-handle">
                 <div class="sidebar-resize-indicator"></div>
@@ -127,7 +127,7 @@
                     <h1 class="menu-title">GGG-RS User Guide</h1>
 
                     <div class="right-buttons">
-                        <a href="print.html" title="Print this book" aria-label="Print this book">
+                        <a href="../../print.html" title="Print this book" aria-label="Print this book">
                             <i id="print-button" class="fa fa-print"></i>
                         </a>
                         <a href="https://github.com/TCCON/ggg-rs" title="Git repository" aria-label="Git repository">
@@ -159,33 +159,83 @@
 
                 <div id="content" class="content">
                     <main>
-                        <h1 id="overview"><a class="header" href="#overview">Overview</a></h1>
-<p>GGG-RS is an extension to <a href="https://github.com/TCCON/GGG">the GGG retrieval</a> that provides updated version of several of the post-processing programs.
-The long term intention is to also make this a library of functions useful for working with GGG-related files.</p>
-<h2 id="installation"><a class="header" href="#installation">Installation</a></h2>
-<p>At present, installing GGG-RS requires that you be able to build it from source.
-This requires, at a minimum, a <a href="https://rustup.rs/">Rust toolchain</a> installed.
-If you wish to compile the programs that work with netCDF files, you will also need either</p>
+                        <h1 id="in-situ-correction-file-format"><a class="header" href="#in-situ-correction-file-format">In situ correction file format</a></h1>
+<p>For backwards compatibility, this file is in the typical GGG input file format
+of a line specifying the "shape" of the file, one or more header rows, then
+tabular data.
+The standard TCCON GGG2020 is show here as an example:</p>
+<pre><code class="language-text">19 4
+2017-02-16  GCT
+2015-08-11  DW
+2021-07-26  JLL
+This file contains airmass-independent correction factors (AICFs) determined
+offline by comparison against in situ data. CO2, wCO2, lCO2, CH4, and H2O use AICFs
+determined as the weighted mean ratio of TCCON to in situ Xgas values. N2O
+uses the ratio of TCCON to surface-derived in situ XN2O fit to a mid-tropospheric
+potential temperature of 310 K, ensuring that it is fixed to the same temperature
+as the ADCFs. CO, H2O, and Luft are not corrected.
+For CO2, wCO2, lCO2, CH4, H2O, and CO the AICF_Err (uncertainties) are 2-sigma standard
+deviations of bootstrapped mean ratios. For N2O, the error equals the fit vs. potential
+temperature multiplied by twice the standard deviation of potential temperatures
+experienced by the TCCON network.
+The WMO_Scale column gives the WMO scale from the in situ data that the scale
+factor ties to. There must be something in this column and must be quoted;
+use "N/A" for gases with no WMO scaling. NB: although CO has no WMO scale (because it
+is not scaled), the uncertainty was determined from the measurements on the WMO X2014A scale.
+ Gas     AICF  AICF_Err  WMO_Scale
+"xco2"   1.0101  0.0005  "WMO CO2 X2007"
+"xwco2"  1.0008  0.0005  "WMO CO2 X2007"
+"xlco2"  1.0014  0.0007  "WMO CO2 X2007"
+"xch4"   1.0031  0.0014  "WMO CH4 X2004"
+"xn2o"   0.9821  0.0098  "NOAA 2006A"
+"xco"    1.0000  0.0526  "N/A"
+"xh2o"   0.9883  0.0157  "ARM Radiosondes (Lamont+Darwin)"
+"xluft"  1.0000  0.0000  "N/A"
+</code></pre>
+<p>The components are as follows:</p>
 <ul>
-<li>one of the <code>micromamba</code>, <code>mamba</code>, or <code>conda</code> package managers, or</li>
-<li>the <code>cmake</code> build tool.</li>
+<li>The first line specifies the number of header lines and the number of data columns.
+This must be two integers separated by whitespace.
+The number of header lines includes this line and the column headers.</li>
+<li>The next <code>nhead-2</code> lines (line numbers 2 to 18 in this case) are free format; these are
+skipped by the program. You can see in the example that these are used to record the
+history of the file and notes about the content of the file.</li>
+<li>The last header line (line number 19 in this case) gives the column names; it must include
+the four columns shown here.</li>
 </ul>
-<p>These are necessary to install or build the netCDF and HDF5 C libraries.
-Detailed instructions and installation options are provided in the <a href="https://github.com/TCCON/ggg-rs">README</a>.</p>
-<h2 id="documentation"><a class="header" href="#documentation">Documentation</a></h2>
-<p>This book primarily focues on the command line programs provided by GGG-RS.
-As the library is made available, the APIs will be documented through <a href="https://docs.rs/">docs.rs</a> (for the Rust library) and <code>readthedocs.io</code> (for the Python library).</p>
-<p>Each command line program will provide help when given the <code>-h</code> or <code>--help</code> flags.
-That help should be your first resource to understand how the programs work, as it will be the most up-to-date.
-The chapters in this book go into more detail about advanced usage of the programs.
-If you find something in this book that is out of date or unclear, please <a href="https://github.com/TCCON/ggg-rs/issues">open an issue</a> or <a href="https://github.com/TCCON/ggg-rs/pulls">pull request</a> with the <code>documentation</code> tag.</p>
+<div id="admonition-info" class="admonition admonish-info" role="note" aria-labelledby="admonition-info-title">
+<div class="admonition-title">
+<div id="admonition-info-title">
+<p>Info</p>
+</div>
+<a class="admonition-anchor-link" href="#admonition-info"></a>
+</div>
+<div>
+<p>A common error is to add lines to the header without updating the number of header lines
+on the first line.
+If you get an error running <code>apply_tccon_insitu_correction</code> after editing the correction
+file's header, double check that you also updated the number of header lines!</p>
+</div>
+</div>
+<p>The data are as follows:</p>
+<ul>
+<li>"Gas" refers to the column in the <code>.vav.ada</code> file that the correction applies to
+(along with the associated error, i.e., "xco2" will apply to both the "xco2" and "xco2_error" columns).</li>
+<li>"AICF" is the scaling factor; the Xgas and error will be divided by this.</li>
+<li>"AICF_Err" is the uncertainty on the scaling factor.</li>
+<li>"WMO_Scale" is the metrological scale or other reference to which the scale factor ties the
+These must be quoted strings.</li>
+</ul>
 
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="../../postproc/apply_tccon_insitu_correction.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <i class="fa fa-angle-left"></i>
+                            </a>
 
-                            <a rel="next prefetch" href="setup_helpers.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                            <a rel="next prefetch" href="../../postproc/add_nc_flags.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                                 <i class="fa fa-angle-right"></i>
                             </a>
 
@@ -195,8 +245,11 @@ If you find something in this book that is out of date or unclear, please <a hre
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="../../postproc/apply_tccon_insitu_correction.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <i class="fa fa-angle-left"></i>
+                    </a>
 
-                    <a rel="next prefetch" href="setup_helpers.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                    <a rel="next prefetch" href="../../postproc/add_nc_flags.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                         <i class="fa fa-angle-right"></i>
                     </a>
             </nav>
@@ -211,13 +264,13 @@ If you find something in this book that is out of date or unclear, please <a hre
         </script>
 
 
-        <script src="elasticlunr.min.js"></script>
-        <script src="mark.min.js"></script>
-        <script src="searcher.js"></script>
+        <script src="../../elasticlunr.min.js"></script>
+        <script src="../../mark.min.js"></script>
+        <script src="../../searcher.js"></script>
 
-        <script src="clipboard.min.js"></script>
-        <script src="highlight.js"></script>
-        <script src="book.js"></script>
+        <script src="../../clipboard.min.js"></script>
+        <script src="../../highlight.js"></script>
+        <script src="../../book.js"></script>
 
         <!-- Custom JS scripts -->
 
