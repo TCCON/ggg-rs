@@ -483,8 +483,246 @@ file's header, double check that you also updated the number of header lines!</p
 These must be quoted strings.</li>
 </ul>
 <div style="break-before: page; page-break-before: always;"></div><h1 id="add_nc_flags"><a class="header" href="#add_nc_flags">add_nc_flags</a></h1>
-<div style="break-before: page; page-break-before: always;"></div><h1 id="write_public_netcdf"><a class="header" href="#write_public_netcdf">write_public_netcdf</a></h1>
 <h2 id="purpose-3"><a class="header" href="#purpose-3">Purpose</a></h2>
+<p><code>add_nc_flags</code> is an additional program that can be used to add additional flags to a private netCDF file.
+This is intended to <em>supplement</em> the default flagging done by <code>write_netcdf</code>, which reflects both the permitted
+value ranges defined in your site's <code>??_qc.dat</code> and <code>??_manual_flagging.dat</code> files (found under <code>$GGGPATH/tccon</code>).
+In particular, this is useful if you need to include more complex logic, such as only flagging based on a combination
+of variables.</p>
+<h2 id="examples-3"><a class="header" href="#examples-3">Examples</a></h2>
+<h3 id="quick-flagging"><a class="header" href="#quick-flagging">Quick flagging</a></h3>
+<p>The <code>quick</code> subcommand allows you to specify the filter criteria based on a single variable via the command line.
+This first example will flag any data where the residual in the O2 window is above 0.5, and will modify the existing
+netCDF file:</p>
+<pre><code class="language-bash">$GGGPATH/bin/add_nc_flags quick \
+  --in-place \
+  --filter-var o2_7885_rmsocl \
+  --greater-than 0.5 \
+  --nc-file PRIVATE_NC_FILE
+</code></pre>
+<p>Note that we have separated the command into multiple lines solely for readability; you can write this as a single line.</p>
+<p>If instead you did not want to modify the existing netCDF file, but instead create a copy, use the <code>--output</code> flag:</p>
+<pre><code class="language-bash">$GGGPATH/bin/add_nc_flags quick \
+  --output NEW_NC_FILE \
+  --filter-var o2_7885_rmsocl \
+  --greater-than 0.5 \
+  --nc-file PRIVATE_NC_FILE
+</code></pre>
+<p>This will not create <code>NEW_NC_FILE</code> if no data needed to be flagged.
+If you want to enforce that a new file is always created, add the <code>--always-copy</code> flag:</p>
+<pre><code class="language-bash">$GGGPATH/bin/add_nc_flags quick \
+  --output NEW_NC_FILE \
+  --always-copy \
+  --filter-var o2_7885_rmsocl \
+  --greater-than 0.5 \
+  --nc-file PRIVATE_NC_FILE
+</code></pre>
+<p>If you wanted to limit the flags to a specific time period, use <code>--time-less-than</code> and <code>--time-greater-than</code>.
+Note that the values must be given in UTC:</p>
+<pre><code class="language-bash">$GGGPATH/bin/add_nc_flags quick \
+  --output NEW_NC_FILE \
+  --filter-var o2_7885_rmsocl \
+  --greater-than 0.5 \
+  --time-greater-than 2025-04-01T12:00 \
+  --time-less-than 2025-05-01 \
+  --nc-file PRIVATE_NC_FILE
+</code></pre>
+<p>This will only apply flags data with a ZPD time greater than or equal to 12:00Z on 1 Apr 2025 and less than or equal to
+00:00Z on 1 May 2025.
+Note that in the less than argument we omit the hour and minute.</p>
+<p>There are many more options, see the command line help for a full list.</p>
+<h2 id="toml-based-flagging"><a class="header" href="#toml-based-flagging">TOML-based flagging</a></h2>
+<p>For more complicated flagging, you can define your flagging criteria in a <a href="https://toml.io/en/">TOML file</a>.
+You can create an example file with the <code>toml-template</code> subcommand:</p>
+<pre><code class="language-bash">$GGGPATH/bin/add_nc_flags toml-template example.toml
+</code></pre>
+<p>This will create <code>example.toml</code> in the current directory.</p>
+<p>Once you have defined your filters, you apply this file with the <code>toml</code> subcommand.
+As with the <code>quick</code> subcommand, flags can be applied to the existing file:</p>
+<pre><code class="language-bash">$GGGPATH/bin/add_nc_flags toml TOML_FILE --in-place --nc-file PRIVATE_NC_FILE
+</code></pre>
+<p>or to a copy of it:</p>
+<pre><code class="language-bash">$GGGPATH/bin/add_nc_flags toml TOML_FILE --output NEW_NC_FILE --nc-file PRIVATE_NC_FILE
+</code></pre>
+<p>For details on the TOML file settings, see the <a href="postproc//postproc/add_nc_flags_toml.html">following section</a>.</p>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="add_nc_flags-toml-filter-configuration"><a class="header" href="#add_nc_flags-toml-filter-configuration"><code>add_nc_flags</code> TOML filter configuration</a></h1>
+<h2 id="filters-and-groups"><a class="header" href="#filters-and-groups">Filters and groups</a></h2>
+<p>The TOML files used to define flags for <code>add_nc_flags</code> use the terms "group" and "filter" as follows:</p>
+<ul>
+<li>A "filter" defines an allowed range for a single variable.
+It may specify and upper or lower limit, an allowed range, or an excluded range.</li>
+<li>A "group" consists of one or more filters.</li>
+</ul>
+<p>An observation in the netCDF file will be flagged if any of the groups defined in the TOML file
+indicate that it should be.
+A group will indicate an observation should be flagged if all of the filters in that group indicate
+it should be flagged.</p>
+<p>The first example shows how you would define a TOML file that duplicates the filter we used
+in the <a href="postproc//postproc/add_nc_flags.html#quick-flagging">quick filter example</a>:</p>
+<pre><code class="language-toml">[[groups]]
+[[groups.filters]]
+filter_var = "o2_7885_rmsocl"
+greater_than = 0.5
+</code></pre>
+<p>This defines a single check: if value of the <code>o2_7885_rmsocl</code> variable in the netCDF file is
+<code>&gt;= 0.5</code>, that observation will be flagged.</p>
+<p>Now suppose that we wanted to flag observations only if <code>o2_7885_rmsocl &gt;= 0.5</code> <em>and</em> <code>o2_7885_cl &lt; 0.05</code>,
+perhaps to remove observations where our instrument was not tracking the sun well.
+To do this, we add a second filter to this group like so:</p>
+<pre><code class="language-toml">[[groups]]
+[[groups.filters]]
+filter_var = "o2_7885_rmsocl"
+greater_than = 0.5
+
+[[groups.filters]]
+filter_var = "o2_7885_cl"
+less_than = 0.05
+</code></pre>
+<p>Now, because these both come under the same <code>[[group]]</code> heading, observations will only be flagged if both conditions are true.</p>
+<p>What if we wanted to do an or, that is, filter if either one of two (or more) conditions are true?
+That requires multiple groups:</p>
+<pre><code class="language-toml">[[groups]]
+[[groups.filters]]
+filter_var = "o2_7885_rmsocl"
+greater_than = 0.5
+
+[[groups]]
+[[groups.filters]]
+filter_var = "o2_7885_sg"
+greater_than = 0.1
+</code></pre>
+<p>Because each filter comes after its own <code>[[group]]</code> header, they fall in separate groups.
+If either group has all its filters return true, then the observation will be flagged.
+In this case, that means that an observation with <code>o2_7885_rmsocl &gt;= 0.5</code> <em>or</em> <code>o2_7885_sg &lt;= 0.1</code>
+will be flagged.</p>
+<p>What if we wanted to flag an observation with an <code>o2_7885_sg</code> value too far from zero in either direction?
+We can do that with the <code>value_mode</code> key, like so:</p>
+<pre><code class="language-toml">[[groups]]
+[[groups.filters]]
+filter_var = "o2_7885_sg"
+greater_than = 0.1
+less_than = -0.1
+value_mode = "outside"
+</code></pre>
+<p>This will cause an observation to be flagged if <code>o2_7885_sg &lt;= -0.1</code> or <code>o2_7885_sg &gt;= +0.1</code>.
+If we do not specify <code>value_mode</code>, the default is "inside", which in this case would flag
+if <code>-0.1 &lt;= o2_7885_sg &lt;= +0.1</code>.</p>
+<h2 id="limiting-to-times"><a class="header" href="#limiting-to-times">Limiting to times</a></h2>
+<p>The TOML file allows you to specify that it should only apply to a specific time frame with the <code>[timespan]</code> section.
+This allows three keys: <code>time_less_than</code>, <code>time_greater_than</code>, and <code>time_mode</code>.
+For example, perhaps you wish to filter on continuum level only between two times when you know your instrument
+was not tracking the sun correctly.
+You could do so with:</p>
+<pre><code class="language-toml">[[groups]]
+[[groups.filters]]
+filter_var = "o2_7885_cl"
+less_than = 0.05
+
+[timespan]
+time_greater_than = "2025-01-01T00:00:00"
+time_less_than = "2025-05-01T00:00:00"
+</code></pre>
+<p>Note that the times must be in UTC and given in the full "yyyy-mm-ddTHH:MM:SS" format; unlike the <code>quick</code> command line
+option, you cannot truncate these to just "yyyy-mm-dd" or "yyyy-mm-ddTHH:MM".
+<code>time_mode</code>, similar to <code>value_mode</code> in the filters, allows you to only flag observations outside of the given time
+range, rather than inside it:</p>
+<pre><code class="language-toml">[[groups]]
+[[groups.filters]]
+filter_var = "o2_7885_cl"
+less_than = 0.05
+
+[timespan]
+time_greater_than = "2025-01-01T00:00:00"
+time_less_than = "2025-05-01T00:00:00"
+time_mode = "outside"
+</code></pre>
+<p>This will apply the filter to any data before 1 Jan 2025 and after 1 May 2025, whereas the previous example would
+apply to data between those two dates.</p>
+<h2 id="changing-the-flag"><a class="header" href="#changing-the-flag">Changing the flag</a></h2>
+<h3 id="flag-value"><a class="header" href="#flag-value">Flag value</a></h3>
+<p>By default, when <code>add_nc_flags</code> applies a flag, it does so by adding 9000 to the value of the <code>flag</code> variable for
+that observation.
+This preserves any of the standard flags from variables defined in the <code>??_qc.dat</code> file.
+By TCCON convention, a 9 in the thousands place of the flag represents a generic "other" manual flag.
+If you wish to use one of the other values to distinguish the nature of the problem, you can define a <code>[flags]</code> section:</p>
+<pre><code class="language-toml">[flags]
+flag = 8
+
+# The configuration must always include a [[groups]] entry with at least one filter.
+[[groups]]
+[[groups.filters]]
+filter_var = "o2_7885_cl"
+less_than = 0.05
+</code></pre>
+<p>This will add 8000 to the flag instead of 9000; i.e., it will put an 8 in the thousands place.</p>
+<div id="admonition-note" class="admonition admonish-note" role="note" aria-labelledby="admonition-note-title">
+<div class="admonition-title">
+<div id="admonition-note-title">
+<p>Note</p>
+</div>
+<a class="admonition-anchor-link" href="postproc/add_nc_flags_toml.html#admonition-note"></a>
+</div>
+<div>
+<p>The value of <code>flag</code> must be between 1 and 9, since it must fit into the thousands place.
+Some values have existing meanings. Currently these are defined in
+<a href="https://github.com/TCCON/py_tccon_netcdf/blob/main/write_tccon_netcdf/release_flag_definitions.json">a JSON file bundled with the private netCDF writer</a>.
+When the private netCDF writer is incorporated into GGG-RS, that definition file will be moved into this repository.</p>
+</div>
+</div>
+<h3 id="behavior-for-existing-flags"><a class="header" href="#behavior-for-existing-flags">Behavior for existing flags</a></h3>
+<p>We can also adjust how <code>add_nc_flags</code> behaves if there is already a value in the thousands place.
+By default, it will error.
+We can change this by setting the <code>existing_flags</code> key in the <code>[flags]</code> section.
+For example, to keep existing values in the thousands place of the flag (which would be set by either
+the time periods defined in your <code>$GGGPATH/tccon/??_manual_flagging.dat</code> or a previous run of <code>add_nc_flags</code>):</p>
+<pre><code class="language-toml">[flags]
+flag = 8
+existing_flags = "skip"
+
+# The configuration must always include a [[groups]] entry with at least one filter.
+[[groups]]
+[[groups.filters]]
+filter_var = "o2_7885_cl"
+less_than = 0.05
+</code></pre>
+<p>The possible (case insensitive) values for <code>existing_flags</code> are:</p>
+<ul>
+<li><code>"error"</code> (default) - error if any of the observations to be flagged already have a non-zero value in the flag's thousands place</li>
+<li><code>"skip"</code> - if an observation to be flagged already has a value in the flag's thousands place, leave the existing value.</li>
+<li><code>"skipeq"</code> - if the value in the thousands place is 0 is will be replaced, otherwise <code>add_nc_flags</code> will error unless the value
+matches what it would insert.</li>
+<li><code>"overwrite"</code> - replace any existing value in the flag's thousands place.</li>
+</ul>
+<h3 id="flag-type"><a class="header" href="#flag-type">Flag type</a></h3>
+<p>The default behavior, as mentioned <a href="postproc/add_nc_flags_toml.html#flag-value">above</a>, is to modify the thousands place of the flag for observations to be flagged.
+<code>add_nc_flags</code> can also edit the ten thousands place, which is used for release flags.
+To do so, set <code>flag_type</code> to <code>"release"</code> in the <code>[flags]</code> section:</p>
+<pre><code class="language-toml">[flags]
+flag = 8
+flag_type = "release"
+
+# The configuration must always include a [[groups]] entry with at least one filter.
+[[groups]]
+[[groups.filters]]
+filter_var = "o2_7885_cl"
+less_than = 0.05
+</code></pre>
+<div id="admonition-warning" class="admonition admonish-warning" role="note" aria-labelledby="admonition-warning-title">
+<div class="admonition-title">
+<div id="admonition-warning-title">
+<p>Warning</p>
+</div>
+<a class="admonition-anchor-link" href="postproc/add_nc_flags_toml.html#admonition-warning"></a>
+</div>
+<div>
+<p>Release flags are intended to be set by Caltech personnel based on input from the reviewers during data QA/QC.
+If you use <code>add_nc_flags</code> to set release flags in other circumstances, this can lead to significant confusion
+when trying to establish the provenance of certain flags.
+Please do not use <code>flag_type = "release"</code> unless you have received specific guidance to do so!</p>
+</div>
+</div>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="write_public_netcdf"><a class="header" href="#write_public_netcdf">write_public_netcdf</a></h1>
+<h2 id="purpose-4"><a class="header" href="#purpose-4">Purpose</a></h2>
 <p><code>write_public_netcdf</code> converts the private (a.k.a. engineering) netCDF files into smaller, more user-friendly, files distributed to most TCCON users.
 This includes:</p>
 <ul>
@@ -493,7 +731,7 @@ This includes:</p>
 <li>limiting the data in the file based on the desired data latency, and</li>
 <li>expanding the averaging kernels and prior profiles to be one-per-spectrum.</li>
 </ul>
-<h2 id="examples-3"><a class="header" href="#examples-3">Examples</a></h2>
+<h2 id="examples-4"><a class="header" href="#examples-4">Examples</a></h2>
 <p>The simplest use will convert the <code>PRIVATE_NC_FILE</code> into a public format file.
 This assumes that the <code>PRIVATE_NC_FILE</code> filename begins with the two-character site ID for your site.
 The public file will be in the same directory as the private file, and its name will reflect the site ID and the date range of the <code>flag == 0</code> data:</p>

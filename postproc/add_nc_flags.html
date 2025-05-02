@@ -160,6 +160,68 @@
                 <div id="content" class="content">
                     <main>
                         <h1 id="add_nc_flags"><a class="header" href="#add_nc_flags">add_nc_flags</a></h1>
+<h2 id="purpose"><a class="header" href="#purpose">Purpose</a></h2>
+<p><code>add_nc_flags</code> is an additional program that can be used to add additional flags to a private netCDF file.
+This is intended to <em>supplement</em> the default flagging done by <code>write_netcdf</code>, which reflects both the permitted
+value ranges defined in your site's <code>??_qc.dat</code> and <code>??_manual_flagging.dat</code> files (found under <code>$GGGPATH/tccon</code>).
+In particular, this is useful if you need to include more complex logic, such as only flagging based on a combination
+of variables.</p>
+<h2 id="examples"><a class="header" href="#examples">Examples</a></h2>
+<h3 id="quick-flagging"><a class="header" href="#quick-flagging">Quick flagging</a></h3>
+<p>The <code>quick</code> subcommand allows you to specify the filter criteria based on a single variable via the command line.
+This first example will flag any data where the residual in the O2 window is above 0.5, and will modify the existing
+netCDF file:</p>
+<pre><code class="language-bash">$GGGPATH/bin/add_nc_flags quick \
+  --in-place \
+  --filter-var o2_7885_rmsocl \
+  --greater-than 0.5 \
+  --nc-file PRIVATE_NC_FILE
+</code></pre>
+<p>Note that we have separated the command into multiple lines solely for readability; you can write this as a single line.</p>
+<p>If instead you did not want to modify the existing netCDF file, but instead create a copy, use the <code>--output</code> flag:</p>
+<pre><code class="language-bash">$GGGPATH/bin/add_nc_flags quick \
+  --output NEW_NC_FILE \
+  --filter-var o2_7885_rmsocl \
+  --greater-than 0.5 \
+  --nc-file PRIVATE_NC_FILE
+</code></pre>
+<p>This will not create <code>NEW_NC_FILE</code> if no data needed to be flagged.
+If you want to enforce that a new file is always created, add the <code>--always-copy</code> flag:</p>
+<pre><code class="language-bash">$GGGPATH/bin/add_nc_flags quick \
+  --output NEW_NC_FILE \
+  --always-copy \
+  --filter-var o2_7885_rmsocl \
+  --greater-than 0.5 \
+  --nc-file PRIVATE_NC_FILE
+</code></pre>
+<p>If you wanted to limit the flags to a specific time period, use <code>--time-less-than</code> and <code>--time-greater-than</code>.
+Note that the values must be given in UTC:</p>
+<pre><code class="language-bash">$GGGPATH/bin/add_nc_flags quick \
+  --output NEW_NC_FILE \
+  --filter-var o2_7885_rmsocl \
+  --greater-than 0.5 \
+  --time-greater-than 2025-04-01T12:00 \
+  --time-less-than 2025-05-01 \
+  --nc-file PRIVATE_NC_FILE
+</code></pre>
+<p>This will only apply flags data with a ZPD time greater than or equal to 12:00Z on 1 Apr 2025 and less than or equal to
+00:00Z on 1 May 2025.
+Note that in the less than argument we omit the hour and minute.</p>
+<p>There are many more options, see the command line help for a full list.</p>
+<h2 id="toml-based-flagging"><a class="header" href="#toml-based-flagging">TOML-based flagging</a></h2>
+<p>For more complicated flagging, you can define your flagging criteria in a <a href="https://toml.io/en/">TOML file</a>.
+You can create an example file with the <code>toml-template</code> subcommand:</p>
+<pre><code class="language-bash">$GGGPATH/bin/add_nc_flags toml-template example.toml
+</code></pre>
+<p>This will create <code>example.toml</code> in the current directory.</p>
+<p>Once you have defined your filters, you apply this file with the <code>toml</code> subcommand.
+As with the <code>quick</code> subcommand, flags can be applied to the existing file:</p>
+<pre><code class="language-bash">$GGGPATH/bin/add_nc_flags toml TOML_FILE --in-place --nc-file PRIVATE_NC_FILE
+</code></pre>
+<p>or to a copy of it:</p>
+<pre><code class="language-bash">$GGGPATH/bin/add_nc_flags toml TOML_FILE --output NEW_NC_FILE --nc-file PRIVATE_NC_FILE
+</code></pre>
+<p>For details on the TOML file settings, see the <a href="/postproc/add_nc_flags_toml.html">following section</a>.</p>
 
                     </main>
 
@@ -169,7 +231,7 @@
                                 <i class="fa fa-angle-left"></i>
                             </a>
 
-                            <a rel="next prefetch" href="../postproc/write_public_netcdf.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                            <a rel="next prefetch" href="../postproc/add_nc_flags_toml.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                                 <i class="fa fa-angle-right"></i>
                             </a>
 
@@ -183,7 +245,7 @@
                         <i class="fa fa-angle-left"></i>
                     </a>
 
-                    <a rel="next prefetch" href="../postproc/write_public_netcdf.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                    <a rel="next prefetch" href="../postproc/add_nc_flags_toml.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                         <i class="fa fa-angle-right"></i>
                     </a>
             </nav>
