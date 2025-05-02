@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>Setup helper programs - GGG-RS User Guide</title>
+        <title>Contributing - GGG-RS User Guide</title>
 
 
         <!-- Custom HTML head -->
@@ -159,17 +159,81 @@
 
                 <div id="content" class="content">
                     <main>
-                        <h1 id="setup-helper-programs"><a class="header" href="#setup-helper-programs">Setup helper programs</a></h1>
+                        <h1 id="contributing"><a class="header" href="#contributing">Contributing</a></h1>
+<p>The best documentation is the result of collaboration between users and developers with different perspectives.
+As developers, it is easy for us to assume users have certain background knowledge that, in reality, we only
+have because we are so immersed in this codebase.
+In general, if you see something that is unclear, missing, or out of date in this book, please
+<a href="https://github.com/TCCON/ggg-rs/issues">open an issue</a> or, even better, a <a href="https://github.com/TCCON/ggg-rs/pulls">pull request</a>
+on the GGG-RS repo, with the "documentation" tag.</p>
+<h2 id="contribution-criteria"><a class="header" href="#contribution-criteria">Contribution criteria</a></h2>
+<p>Requests to update the documentation will be evaluated on several criteria, primarily:</p>
+<ul>
+<li>accuracy (does the change correctly reflect the behavior of the program?),</li>
+<li>clarity (is the change easy to understand and as concise as possible?), and</li>
+<li>scope (does the change add information that should be included in that location, or is it better suited to another source?)</li>
+</ul>
+<p>When opening an issue, providing as much information as possible will help it be resolved quickly,
+as will responding promptly when asked for more input. Likewise, when opening a pull request, providing
+a clear description of what was changed and why will help us review it efficiently. If you are providing
+a pull request, please verify that the edits render correctly by following the instructions in <a href="#building-the-book">Building the book</a>,
+below.</p>
+<p>We reserve the right to turn down requests for changes if, in our opinion, they make the documentation worse,
+or if the requestor does not provide sufficient information to make the needed change clear.
+Well explained and respectful requests will usually be accepted.</p>
+<h2 id="common-types-of-questions"><a class="header" href="#common-types-of-questions">Common types of questions</a></h2>
+<p>Below are some common questions and details on what sort of information to provide when asking for an update to
+help us resolve the problem efficiently.</p>
+<h3 id="the-information-i-need-is-not-where-i-expected"><a class="header" href="#the-information-i-need-is-not-where-i-expected">The information I need is not where I expected</a></h3>
+<p>When opening an issue, be clear about what information you are trying to find, where you expected to find
+it in the documentation, and why you were looking there.
+Understanding how you expect the information to be organized helps us examine if there might be other ways
+we need to connect different parts of the documentation.
+Generally, the best fix for this problem is to identify where a link between parts of the documentation will
+help guide people to the correct page.
+Other solutions may be appropriate in more complicated cases.</p>
+<h3 id="a-program-is-not-included-in-the-book"><a class="header" href="#a-program-is-not-included-in-the-book">A program is not included in the book</a></h3>
+<p>First, please check that it is one of the GGG-RS programs.
+This means it will have a folder under the <code>src/bin</code> subdirectory of the <a href="https://github.com/TCCON/ggg-rs">repository</a>.
+The GGG-RS programs will coexist with regular GGG and EGI-RS programs in <code>$GGGPATH/bin/</code>, so just because a program
+exists there does not mean it will be documented here.</p>
+<p>If a program really is missing, then either open an issue or create a pull request that add it.
+If creating a pull request, please match the structure of the existing programs' documentation.</p>
+<h3 id="i-do-not-understand-what-the-documentation-is-trying-to-explain"><a class="header" href="#i-do-not-understand-what-the-documentation-is-trying-to-explain">I do not understand what the documentation is trying to explain</a></h3>
+<p>When you encounter something that is not clear, please first try to figure it out yourself by following any
+examples and testing things out.
+If that section of the documentation links to external resources (e.g., the <a href="https://toml.io/en/">TOML format</a>,
+please review those resources as well.</p>
+<p>If something truly is unclear, then open an issue and do your best to explain what you were trying to accomplish
+and what you found difficult to undestand.
+Explaining the overall task you were trying to accomplish, as well as the part of the documentation that you
+found unclear, will help us identify if this is an <a href="https://en.wikipedia.org/wiki/XY_problem">XY problem</a>, where
+the reason it was unclear is because there is a better solution to your task than the one you were trying to use.</p>
+<h2 id="building-the-book"><a class="header" href="#building-the-book">Building the book</a></h2>
+<p>If you want to edit this book, it lives in the <code>book</code> subdirectory of the <a href="https://github.com/TCCON/ggg-rs">GGG-RS repo</a>.
+The source code is in Markdown, and can be edited with any plain text editor (e.g., Notepad, TextEdit, vim, nano) or
+code editor (e.g., VSCode).
+It is built with <a href="https://github.com/rust-lang/mdBook">mdbook</a> with the additional
+<a href="https://github.com/tommilligan/mdbook-admonish">mdbook-admonish</a> preprocessor.</p>
+<p>To check that the book renders correctly when making edits:</p>
+<ul>
+<li>Install both <code>mdbook</code> and <code>mdbook-admonish</code> follow the instructions in their repositories.</li>
+<li>In the <code>book</code> subdirectory of GGG-RS repository (which you will have cloned to your computer), run <code>mdbook serve</code>.</li>
+<li>Copy the "localhost" link it prints and paste it into any web browser.</li>
+</ul>
+<p>You will see the rendered local copy of the book, and it will automatically update each time you make changes.</p>
+<p>Please do this before submitting any pull requests, as it will slow things down significantly if we have to iterate
+multiple times with you to ensure the book builds correctly.</p>
 
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
-                            <a rel="prev" href="contributing.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                            <a rel="prev" href="installation.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                                 <i class="fa fa-angle-left"></i>
                             </a>
 
-                            <a rel="next prefetch" href="setup/change_ggg_files.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                            <a rel="next prefetch" href="setup_helpers.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                                 <i class="fa fa-angle-right"></i>
                             </a>
 
@@ -179,11 +243,11 @@
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
-                    <a rel="prev" href="contributing.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                    <a rel="prev" href="installation.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                         <i class="fa fa-angle-left"></i>
                     </a>
 
-                    <a rel="next prefetch" href="setup/change_ggg_files.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                    <a rel="next prefetch" href="setup_helpers.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                         <i class="fa fa-angle-right"></i>
                     </a>
             </nav>

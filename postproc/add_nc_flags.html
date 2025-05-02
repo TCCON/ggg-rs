@@ -208,7 +208,7 @@ Note that the values must be given in UTC:</p>
 00:00Z on 1 May 2025.
 Note that in the less than argument we omit the hour and minute.</p>
 <p>There are many more options, see the command line help for a full list.</p>
-<h2 id="toml-based-flagging"><a class="header" href="#toml-based-flagging">TOML-based flagging</a></h2>
+<h3 id="toml-based-flagging"><a class="header" href="#toml-based-flagging">TOML-based flagging</a></h3>
 <p>For more complicated flagging, you can define your flagging criteria in a <a href="https://toml.io/en/">TOML file</a>.
 You can create an example file with the <code>toml-template</code> subcommand:</p>
 <pre><code class="language-bash">$GGGPATH/bin/add_nc_flags toml-template example.toml
@@ -222,6 +222,14 @@ As with the <code>quick</code> subcommand, flags can be applied to the existing 
 <pre><code class="language-bash">$GGGPATH/bin/add_nc_flags toml TOML_FILE --output NEW_NC_FILE --nc-file PRIVATE_NC_FILE
 </code></pre>
 <p>For details on the TOML file settings, see the <a href="/postproc/add_nc_flags_toml.html">following section</a>.</p>
+<h2 id="use-in-tccon-standard-processing"><a class="header" href="#use-in-tccon-standard-processing">Use in TCCON standard processing</a></h2>
+<p>This program is not used by default in TCCON post processing.
+(That is, it will not be included in the <code>post_processing.sh</code> script.)
+Users are welcome to use it separately to flag out data with known problems from the private netCDF files before uploading to Caltech.</p>
+<h2 id="use-in-em27sun-standard-processing"><a class="header" href="#use-in-em27sun-standard-processing">Use in EM27/SUN standard processing</a></h2>
+<p>EGI-RS will include a line in the <code>post_processing.sh</code> script to run this program on the private netCDF file.
+The intention is for users to add extra data checks to deal with EM27/SUN-specific issues that may affect the data.
+Additionally, EGI-RS may add certain required filters in the future as the use of GGG for EM27/SUN retrievals matures.</p>
 
                     </main>
 
