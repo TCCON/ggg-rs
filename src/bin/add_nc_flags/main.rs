@@ -1,4 +1,11 @@
-use std::{collections::HashMap, fmt::Display, io::{BufRead, Write}, path::{Path, PathBuf}, process::ExitCode, str::FromStr};
+use std::{
+    collections::HashMap,
+    fmt::Display,
+    io::{BufRead, Write},
+    path::{Path, PathBuf},
+    process::ExitCode,
+    str::FromStr,
+};
 
 use clap::{Args, Parser, Subcommand};
 use error_stack::ResultExt;
@@ -21,33 +28,42 @@ fn main_inner() -> error_stack::Result<(), CliError> {
             let no_filters_defined = quick_args.filtering.filter.no_filters();
             let output = quick_args.output.clone();
             let nc_file = quick_args.nc_file.clone();
-            let nchanged = driver(output,quick_args.into(), &nc_file)?;
+            let nchanged = driver(output, quick_args.into(), &nc_file)?;
             if nchanged == 0 && no_filters_defined {
                 println!("Note: nothing flagged because you gave neither the --less-than nor --greater-than argument.");
             }
-        },
+        }
         Commands::Json(json_args) => {
             let filter_set = json_args.load_filters()?;
             let no_filters_defined = filter_set.no_filters();
             let nchanged = driver(json_args.output, filter_set, &json_args.nc_file)?;
             if nchanged == 0 && no_filters_defined {
-                println!("Note: nothing flagged because no filters were defined in the given JSON file");
+                println!(
+                    "Note: nothing flagged because no filters were defined in the given JSON file"
+                );
             }
-        },
+        }
         Commands::JsonTemplate(template_args) => {
             FilterSet::write_template(&template_args.template_file)?;
-        },
+        }
     }
 
     Ok(())
 }
 
-fn driver(output: OutputCli, filters: FilterSet, nc_file: &Path) -> error_stack::Result<u64, CliError> {
+fn driver(
+    output: OutputCli,
+    filters: FilterSet,
+    nc_file: &Path,
+) -> error_stack::Result<u64, CliError> {
     // One check - if we are outputting to a new path, make sure that isn't a directory but
     // that its parent directory exists. This way we can give a clearer error message.
     if let Some(out_file) = &output.output {
         if out_file.is_dir() {
-            return Err(CliError::UserError("Path given to --output must not be a directory".to_string()).into());
+            return Err(CliError::UserError(
+                "Path given to --output must not be a directory".to_string(),
+            )
+            .into());
         }
 
         // The second check is necessary because e.g. "test.nc" has a parent of "" which doesn't exist,
@@ -63,26 +79,34 @@ fn driver(output: OutputCli, filters: FilterSet, nc_file: &Path) -> error_stack:
             // We really shouldn't get here (the is_dir check should catch these cases), but just in case
             return Err(CliError::UserError(format!("{} is not a valid path for --output (cannot be your root directory or a drive prefix)", out_file.display())).into());
         }
-
     }
-
 
     let data = load_flags_and_data(nc_file, &filters.filter_vars())?;
     let (new_flags, nchanged) = update_flags(data, &filters, &filters.flags)?;
 
     if nchanged == 0 {
         if output.in_place {
-            println!("No flags required update, file {} unchanged.", nc_file.display());
+            println!(
+                "No flags required update, file {} unchanged.",
+                nc_file.display()
+            );
         } else if output.always_copy {
             // Ok to unwrap args.output.output - Cli::parse ensures in_place or output is given
             let out_file = output.output.as_deref().unwrap();
             std::fs::copy(nc_file, out_file)
                 .change_context(CliError::IoError)
                 .attach_printable("Could not copy NC_FILE to the path given by --output")?;
-            println!("No flags required update, copied {} to {}", nc_file.display(), out_file.display());
+            println!(
+                "No flags required update, copied {} to {}",
+                nc_file.display(),
+                out_file.display()
+            );
         } else {
             // Ok to unwrap args.output.output - Cli::parse ensures in_place or output is given
-            println!("No flags required update, did not produce/overwrite output file {}", output.output.unwrap().display());
+            println!(
+                "No flags required update, did not produce/overwrite output file {}",
+                output.output.unwrap().display()
+            );
         }
         return Ok(nchanged);
     }
@@ -99,7 +123,9 @@ fn driver(output: OutputCli, filters: FilterSet, nc_file: &Path) -> error_stack:
     };
 
     let mut ds = netcdf::append(&output_file)
-        .attach_printable("Could not edit the original (if --in-place) or output (if --output) netCDF file")
+        .attach_printable(
+            "Could not edit the original (if --in-place) or output (if --output) netCDF file",
+        )
         .change_context(CliError::NcError)?;
     let mut flags = ds.variable_mut("flag")
         .ok_or_else(|| CliError::MissingReqVariable("flag"))
@@ -132,18 +158,22 @@ enum CliError {
     UserError(String),
 }
 
-fn load_flags_and_data<S: AsRef<str> + ToString>(nc_file: &Path, filter_varnames: &[S] ) -> error_stack::Result<TcconData, CliError> {
-    let ds = netcdf::open(nc_file)
-        .change_context(CliError::NcError)?;
+fn load_flags_and_data<S: AsRef<str> + ToString>(
+    nc_file: &Path,
+    filter_varnames: &[S],
+) -> error_stack::Result<TcconData, CliError> {
+    let ds = netcdf::open(nc_file).change_context(CliError::NcError)?;
 
-    let timestamps = ds.variable("time")
+    let timestamps = ds
+        .variable("time")
         .ok_or_else(|| CliError::MissingReqVariable("time"))?
         .get::<f64, _>(netcdf::Extents::All)
         .change_context(CliError::NcError)?
         .into_dimensionality::<ndarray::Ix1>()
         .change_context_lazy(|| CliError::WrongDimension("time".to_string(), 1))?;
 
-    let flags = ds.variable("flag")
+    let flags = ds
+        .variable("flag")
         .ok_or_else(|| CliError::MissingReqVariable("flag"))?
         .get::<i16, _>(netcdf::Extents::All)
         .change_context(CliError::NcError)?
@@ -162,10 +192,12 @@ fn load_flags_and_data<S: AsRef<str> + ToString>(nc_file: &Path, filter_varnames
         filter_vars.insert(varname.to_string(), data);
     }
 
-
-    Ok(TcconData { filter_vars, timestamps, flags })
+    Ok(TcconData {
+        filter_vars,
+        timestamps,
+        flags,
+    })
 }
-
 
 #[derive(Debug)]
 struct TcconData {
@@ -175,16 +207,32 @@ struct TcconData {
 }
 
 impl TcconData {
-    fn into_parts(self) -> (ndarray::Array1<f64>, ndarray::Array1<i16>, HashMap<String, ndarray::Array1<f32>>) {
+    fn into_parts(
+        self,
+    ) -> (
+        ndarray::Array1<f64>,
+        ndarray::Array1<i16>,
+        HashMap<String, ndarray::Array1<f32>>,
+    ) {
         (self.timestamps, self.flags, self.filter_vars)
     }
 }
 
-fn update_flags(data: TcconData, filtering: &FilterSet, flagging: &Flags) -> error_stack::Result<(ndarray::Array1<i16>, u64), CliError> {
+fn update_flags(
+    data: TcconData,
+    filtering: &FilterSet,
+    flagging: &Flags,
+) -> error_stack::Result<(ndarray::Array1<i16>, u64), CliError> {
     let timestamp_check = GreaterLess {
-        greater_than: filtering.timespan.time_greater_than.map(|dt| dt.and_utc().timestamp() as f64),
-        less_than: filtering.timespan.time_less_than.map(|dt| dt.and_utc().timestamp() as f64),
-        combination: filtering.timespan.time_mode
+        greater_than: filtering
+            .timespan
+            .time_greater_than
+            .map(|dt| dt.and_utc().timestamp() as f64),
+        less_than: filtering
+            .timespan
+            .time_less_than
+            .map(|dt| dt.and_utc().timestamp() as f64),
+        combination: filtering.timespan.time_mode,
     };
 
     for data_arr in data.filter_vars.values() {
@@ -217,17 +265,16 @@ fn update_flags(data: TcconData, filtering: &FilterSet, flagging: &Flags) -> err
         }
     }
 
-    
     Ok((data_flags, nchanged))
 }
 
 /// Add manual or release flags in a TCCON private netCDF file.
-/// 
+///
 /// This program allows you manually flag data in a TCCON private file
 /// based on the timestamp and value of a variable in the file. This
 /// is meant to allow you to flag data when a certain error metric not
 /// normally considered is too large or small.
-/// 
+///
 /// Although there are a large number of arguments to this program, only
 /// a few are required: --nc-file, --filter-var, one of --in-place or
 /// --output, and at least one of --less-than and/or --greater-than. Note
@@ -236,14 +283,14 @@ fn update_flags(data: TcconData, filtering: &FilterSet, flagging: &Flags) -> err
 #[derive(Debug, Parser)]
 struct Cli {
     #[clap(subcommand)]
-    command: Commands
+    command: Commands,
 }
 
 #[derive(Debug, Clone, Subcommand)]
 enum Commands {
     Quick(QuickCli),
     Json(JsonCli),
-    JsonTemplate(TemplateCli)
+    JsonTemplate(TemplateCli),
 }
 
 /// Flag a netCDF file on a single variable with arguments given via the command line
@@ -274,15 +321,15 @@ struct JsonCli {
 
     /// The path to the input netCDF file to add flags to
     #[clap(long)]
-    nc_file: PathBuf
+    nc_file: PathBuf,
 }
 
 impl JsonCli {
     fn load_filters(&self) -> error_stack::Result<FilterSet, CliError> {
-        let f = std::fs::File::open(&self.json_file)
-            .change_context_lazy(|| CliError::IoError)?;
+        let f = std::fs::File::open(&self.json_file).change_context_lazy(|| CliError::IoError)?;
         let rdr = std::io::BufReader::new(f);
-        let lines: Vec<String> = rdr.lines()
+        let lines: Vec<String> = rdr
+            .lines()
             .filter(|res| {
                 // Remove comment lines, keep other lines and errors
                 if let Ok(s) = res {
@@ -294,8 +341,8 @@ impl JsonCli {
             .try_collect()
             .change_context_lazy(|| CliError::IoError)?;
         let contents = lines.join("\n");
-        let filter_set: FilterSet = serde_json::from_str(&contents)
-            .change_context_lazy(|| CliError::IoError)?;
+        let filter_set: FilterSet =
+            serde_json::from_str(&contents).change_context_lazy(|| CliError::IoError)?;
         Ok(filter_set)
     }
 }
@@ -312,12 +359,13 @@ struct OutputCli {
     /// Modify the given netCDF file in place. Either this or --output must
     /// be given. Use --output if you prefer not to modify your original netCDF
     /// file.
-    #[clap(short='i', long, conflicts_with = "output", required = true)]  // conflicts_with take precedence over required, that's how we defined one of in_place and output is required
+    #[clap(short = 'i', long, conflicts_with = "output", required = true)]
+    // conflicts_with take precedence over required, that's how we defined one of in_place and output is required
     in_place: bool,
 
-    /// Path to write out the modified netCDF file. Either this or --in-place 
+    /// Path to write out the modified netCDF file. Either this or --in-place
     /// must be given. Note that if no flags are changed, the output file
-    #[clap(short='o', long, required = true)]
+    #[clap(short = 'o', long, required = true)]
     output: Option<PathBuf>,
 
     /// Set this flag so that the file specified by --output is always created,
@@ -329,10 +377,10 @@ struct OutputCli {
 #[derive(Debug, Clone, Args, Deserialize, Serialize)]
 struct Flags {
     /// Value to use when flagging data. This must be a value between 1 and 9,
-    /// it will be multiplied by 1000 and added to existing flags, i.e. this will 
+    /// it will be multiplied by 1000 and added to existing flags, i.e. this will
     /// be treated as a manual flag. See --existing-flags for how conflicts with
     /// existing manual flags are handled.
-    #[clap(short='f', long, default_value_t=9)]
+    #[clap(short = 'f', long, default_value_t = 9)]
     flag: u8,
 
     /// This controls what happens if you try to flag an observation that already
@@ -343,9 +391,9 @@ struct Flags {
     #[clap(short='e', long, default_value_t = ExistingFlag::default())]
     existing_flags: ExistingFlag,
 
-    /// Which flag type ("manual" or "release") to set in the file. This controls which 
+    /// Which flag type ("manual" or "release") to set in the file. This controls which
     /// place in the flag integer is set; for "manual" it is the 1000s place, for "release"
-    /// it is the 10000s place. IMPORTANT: most users should use the default of "manual". 
+    /// it is the 10000s place. IMPORTANT: most users should use the default of "manual".
     /// Release flags are intended ONLY for Caltech staff to use to flag data in response
     /// to QA/QC feedback.
     #[clap(long, default_value_t = FlagType::default())]
@@ -354,7 +402,11 @@ struct Flags {
 
 impl Default for Flags {
     fn default() -> Self {
-        Self { flag: 9, existing_flags: Default::default(), flag_type: Default::default() }
+        Self {
+            flag: 9,
+            existing_flags: Default::default(),
+            flag_type: Default::default(),
+        }
     }
 }
 
@@ -363,38 +415,38 @@ struct FilterCli {
     #[clap(flatten)]
     filter: Filter,
     #[clap(flatten)]
-    timespan: Timespan
+    timespan: Timespan,
 }
 
 #[derive(Debug, Clone, Args, Deserialize, Serialize)]
 struct Filter {
     /// For numeric variables, flag observations less than this value.
     /// Negative values are allowed.
-    #[clap(short='l', long, allow_negative_numbers=true)]
+    #[clap(short = 'l', long, allow_negative_numbers = true)]
     #[serde(default)]
     less_than: Option<f32>,
 
     /// For numeric variables, flag observations greater than this value.
     /// Negative values are allowed.
-    #[clap(short='g', long, allow_negative_numbers=true)]
+    #[clap(short = 'g', long, allow_negative_numbers = true)]
     #[serde(default)]
     greater_than: Option<f32>,
 
     /// If both --less-than and --greater-than are given, this determines
     /// whether the observation is flagged if VARIABLE has a value between
-    /// greater_than and less_than (i.e. greater_than <= v <= less_than) 
+    /// greater_than and less_than (i.e. greater_than <= v <= less_than)
     /// if the value is outside less_than and greater_than (i.e. v >= greater_than
     /// OR v <= less_than). Passing "in" or "inside" for this flag uses the first
     /// criterion, passing "out" or "outside" uses the second.
     /// If only one of --less-than  and --greater-than are given, then only the
-    /// respective comparison is used; i.e. --less-than 0 will add a flag 
+    /// respective comparison is used; i.e. --less-than 0 will add a flag
     /// to all measurements where the filter variable is <= 0.
     #[clap(long, default_value_t = Combination::default())]
     #[serde(default)]
     value_mode: Combination,
 
     /// This is a required argument, it is the name of the variable to filter on.
-    #[clap(short='x', long)]
+    #[clap(short = 'x', long)]
     filter_var: String,
 }
 
@@ -406,10 +458,13 @@ impl Filter {
             combination: self.value_mode,
         };
 
-        let value = data.get(&self.filter_var)
+        let value = data
+            .get(&self.filter_var)
             .expect("All filter variables should be loaded before filtering")
             .get(index)
-            .expect("All filter variables should have the same number of elements as the flag variable");
+            .expect(
+                "All filter variables should have the same number of elements as the flag variable",
+            );
         comp.do_flag(value)
     }
 
@@ -424,7 +479,7 @@ struct Timespan {
     /// --time-greater-than to specify that time period. See --time-and-or for how these
     /// two arguments are interpreted together. These two arguments are
     /// compared to the timestamps in the netCDF file, so should be given in UTC.
-    /// The datetimes may be given in the following formats: YYYY-MM-DD, 
+    /// The datetimes may be given in the following formats: YYYY-MM-DD,
     /// YYYY-MM-DD HH:MM, or YYYY-MM-DD HH:MM:SS. Note that the last two contain
     /// spaces, so must be quoted. Alternatively, you may use a T in place of the
     /// space; that is "2004-07-01 12:00" and "2004-07-01T12:00" are both valid.
@@ -446,7 +501,7 @@ struct Timespan {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 struct FilterAndGroup {
-    filters: Vec<Filter>
+    filters: Vec<Filter>,
 }
 
 impl FilterAndGroup {
@@ -470,35 +525,65 @@ struct FilterSet {
     #[serde(default)]
     timespan: Timespan,
     #[serde(default)]
-    flags: Flags
+    flags: Flags,
 }
 
 impl From<QuickCli> for FilterSet {
     fn from(value: QuickCli) -> Self {
-        Self { 
-            groups: vec![FilterAndGroup{ filters: vec![value.filtering.filter] }],
+        Self {
+            groups: vec![FilterAndGroup {
+                filters: vec![value.filtering.filter],
+            }],
             timespan: value.filtering.timespan,
-            flags: value.flagging
+            flags: value.flagging,
         }
     }
 }
 
 impl FilterSet {
     fn template() -> Self {
-        let cl_filter = Filter{ less_than: Some(0.05), greater_than: None, value_mode: Combination::Inside, filter_var: "o2_7885_cl".to_string() };
-        let rms_filter = Filter{ greater_than: Some(0.5), less_than: None, value_mode: Combination::Inside, filter_var: "o2_7885_rmsocl".to_string() };
-        let sg_filter = Filter{ less_than: Some(-0.1), greater_than: Some(0.1), value_mode: Combination::Outside, filter_var: "o2_7885_sg".to_string() };
+        let cl_filter = Filter {
+            less_than: Some(0.05),
+            greater_than: None,
+            value_mode: Combination::Inside,
+            filter_var: "o2_7885_cl".to_string(),
+        };
+        let rms_filter = Filter {
+            greater_than: Some(0.5),
+            less_than: None,
+            value_mode: Combination::Inside,
+            filter_var: "o2_7885_rmsocl".to_string(),
+        };
+        let sg_filter = Filter {
+            less_than: Some(-0.1),
+            greater_than: Some(0.1),
+            value_mode: Combination::Outside,
+            filter_var: "o2_7885_sg".to_string(),
+        };
 
-        let group1 = FilterAndGroup{ filters: vec![cl_filter, rms_filter ]};
-        let group2 = FilterAndGroup{ filters: vec![sg_filter] };
-        let timespan = Timespan{ 
-            time_less_than: None, 
-            time_greater_than: Some(chrono::NaiveDate::from_ymd_opt(2024, 1, 1).unwrap().and_hms_opt(0, 0, 0).unwrap()),
-            time_mode: Combination::Inside
+        let group1 = FilterAndGroup {
+            filters: vec![cl_filter, rms_filter],
+        };
+        let group2 = FilterAndGroup {
+            filters: vec![sg_filter],
+        };
+        let timespan = Timespan {
+            time_less_than: None,
+            time_greater_than: Some(
+                chrono::NaiveDate::from_ymd_opt(2024, 1, 1)
+                    .unwrap()
+                    .and_hms_opt(0, 0, 0)
+                    .unwrap(),
+            ),
+            time_mode: Combination::Inside,
         };
         let flags = Flags::default();
 
-        Self { groups: vec![group1, group2], timespan, flags }
+        Self {
+            groups: vec![group1, group2],
+            timespan,
+            flags,
+        }
     }
 
     fn write_template(path: &Path) -> error_stack::Result<(), CliError> {
@@ -519,8 +604,7 @@ impl FilterSet {
             "Note that error line numbers do not count comment lines."
         ];
         let template = Self::template();
-        let mut f = std::fs::File::create(path)
-            .change_context_lazy(|| CliError::IoError)?;
+        let mut f = std::fs::File::create(path).change_context_lazy(|| CliError::IoError)?;
         for line in comments {
             writeln!(&mut f, "// {line}").change_context_lazy(|| CliError::IoError)?;
         }
@@ -591,7 +675,6 @@ fn parse_cli_time_str(s: &str) -> Result<chrono::NaiveDateTime, String> {
 //     Ok(datetime)
 // }
 
-
 #[derive(Debug, Clone, Copy, Deserialize, Serialize)]
 enum ExistingFlag {
     Error,
@@ -609,7 +692,7 @@ impl FromStr for ExistingFlag {
             "skipeq" => Ok(Self::SkipEqual),
             "skip" => Ok(Self::Skip),
             "overwrite" => Ok(Self::Overwrite),
-            _ => Err(format!("'{s}' is not a valid existing flag variant"))
+            _ => Err(format!("'{s}' is not a valid existing flag variant")),
         }
     }
 }
@@ -634,7 +717,7 @@ impl Default for ExistingFlag {
 #[derive(Debug, Clone, Copy, Deserialize, Serialize)]
 enum Combination {
     Inside,
-    Outside
+    Outside,
 }
 
 impl Default for Combination {
@@ -657,8 +740,8 @@ impl FromStr for Combination {
             "or" => {
                 log::warn!("'or' is deprecated as a keyword to combine limits, use 'out' or 'outside' instead");
                 Ok(Self::Outside)
-            },
-            _ => Err(format!("'{s}' is not a valid combination variant"))
+            }
+            _ => Err(format!("'{s}' is not a valid combination variant")),
         }
     }
 }
@@ -674,12 +757,16 @@ impl Display for Combination {
 
 #[derive(Debug)]
 struct FlagReplaceError {
-    place: i16
+    place: i16,
 }
 
 impl Display for FlagReplaceError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "observation already has a flag in the {}s place", self.place)
+        write!(
+            f,
+            "observation already has a flag in the {}s place",
+            self.place
+        )
     }
 }
 
@@ -688,7 +775,7 @@ impl std::error::Error for FlagReplaceError {}
 #[derive(Debug, Clone, Copy, Deserialize, Serialize)]
 enum FlagType {
     Manual,
-    Release
+    Release,
 }
 
 impl Default for FlagType {
@@ -704,42 +791,51 @@ impl FromStr for FlagType {
         match s.to_ascii_lowercase().as_str() {
             "manual" => Ok(Self::Manual),
             "release" => Ok(Self::Release),
-            _ => Err(format!("'{s}' is not a valid flag type"))
+            _ => Err(format!("'{s}' is not a valid flag type")),
         }
     }
 }
 
 impl FlagType {
-    fn update_flag(&self, original_flag: i16, new_flag_place_value: u8, exists: ExistingFlag) -> Result<i16, FlagReplaceError> {
+    fn update_flag(
+        &self,
+        original_flag: i16,
+        new_flag_place_value: u8,
+        exists: ExistingFlag,
+    ) -> Result<i16, FlagReplaceError> {
         let place_value = self.value_in_place(original_flag);
-        let new_flag_place_value  = new_flag_place_value as i16 * self.flag_place();
+        let new_flag_place_value = new_flag_place_value as i16 * self.flag_place();
         match exists {
             ExistingFlag::Error => {
                 if place_value == 0 {
-                    return Ok(original_flag + new_flag_place_value)
+                    return Ok(original_flag + new_flag_place_value);
                 } else {
-                    return Err(FlagReplaceError { place: self.flag_place() })
+                    return Err(FlagReplaceError {
+                        place: self.flag_place(),
+                    });
                 }
-            },
+            }
             ExistingFlag::SkipEqual => {
                 if place_value == 0 {
-                    return Ok(original_flag + new_flag_place_value)
+                    return Ok(original_flag + new_flag_place_value);
                 } else if place_value == new_flag_place_value {
-                    return Ok(original_flag)
+                    return Ok(original_flag);
                 } else {
-                    return Err(FlagReplaceError { place: self.flag_place() })
+                    return Err(FlagReplaceError {
+                        place: self.flag_place(),
+                    });
                 }
-            },
+            }
             ExistingFlag::Skip => {
                 if place_value == 0 {
-                    return Ok(original_flag + new_flag_place_value)
+                    return Ok(original_flag + new_flag_place_value);
                 } else {
-                    return Ok(original_flag)
+                    return Ok(original_flag);
                 }
-            },
+            }
             ExistingFlag::Overwrite => {
                 return Ok(original_flag - place_value + new_flag_place_value)
-            },
+            }
         }
     }
 
@@ -770,11 +866,10 @@ impl Display for FlagType {
     }
 }
 
-
 struct GreaterLess<T: PartialOrd> {
     less_than: Option<T>,
     greater_than: Option<T>,
-    combination: Combination
+    combination: Combination,
 }
 
 impl<T: PartialOrd> GreaterLess<T> {
@@ -788,11 +883,9 @@ impl<T: PartialOrd> GreaterLess<T> {
             (None, None) => false,
             (None, Some(lim)) => value <= lim,
             (Some(lim), None) => value >= lim,
-            (Some(gt_lim), Some(lt_lim)) => {
-                match self.combination {
-                    Combination::Inside => value >= gt_lim && value <= lt_lim,
-                    Combination::Outside => value >= gt_lim || value <= lt_lim,
-                }
+            (Some(gt_lim), Some(lt_lim)) => match self.combination {
+                Combination::Inside => value >= gt_lim && value <= lt_lim,
+                Combination::Outside => value >= gt_lim || value <= lt_lim,
             },
         }
     }
