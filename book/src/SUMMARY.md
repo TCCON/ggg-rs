@@ -1,6 +1,7 @@
 # Summary
 
 - [Overview](./installation.md)
+- [Contributing](./contributing.md)
 - [Setup helper programs](./setup_helpers.md)
     - [`change_ggg_files`](./setup/change_ggg_files.md)
     - [`list_spectra`](./setup/list_spectra.md)

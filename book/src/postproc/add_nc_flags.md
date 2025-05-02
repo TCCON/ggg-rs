@@ -68,7 +68,7 @@ Note that in the less than argument we omit the hour and minute.
 
 There are many more options, see the command line help for a full list.
 
-## TOML-based flagging
+### TOML-based flagging
 
 For more complicated flagging, you can define your flagging criteria in a [TOML file](https://toml.io/en/).
 You can create an example file with the `toml-template` subcommand:
@@ -93,3 +93,15 @@ $GGGPATH/bin/add_nc_flags toml TOML_FILE --output NEW_NC_FILE --nc-file PRIVATE_
 ```
 
 For details on the TOML file settings, see the [following section](/postproc/add_nc_flags_toml.html).
+
+## Use in TCCON standard processing
+
+This program is not used by default in TCCON post processing.
+(That is, it will not be included in the `post_processing.sh` script.)
+Users are welcome to use it separately to flag out data with known problems from the private netCDF files before uploading to Caltech.
+
+## Use in EM27/SUN standard processing
+
+EGI-RS will include a line in the `post_processing.sh` script to run this program on the private netCDF file.
+The intention is for users to add extra data checks to deal with EM27/SUN-specific issues that may affect the data.
+Additionally, EGI-RS may add certain required filters in the future as the use of GGG for EM27/SUN retrievals matures.
