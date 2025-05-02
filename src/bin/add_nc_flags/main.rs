@@ -1,7 +1,7 @@
 use std::{
     collections::HashMap,
     fmt::Display,
-    io::{BufRead, Write},
+    io::{BufRead, Read, Write},
     path::{Path, PathBuf},
     process::ExitCode,
     str::FromStr,
@@ -11,6 +11,9 @@ use clap::{Args, Parser, Subcommand};
 use error_stack::ResultExt;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
+
+#[cfg(test)]
+mod tests;
 
 fn main() -> ExitCode {
     if let Err(e) = main_inner() {
@@ -33,17 +36,17 @@ fn main_inner() -> error_stack::Result<(), CliError> {
                 println!("Note: nothing flagged because you gave neither the --less-than nor --greater-than argument.");
             }
         }
-        Commands::Json(json_args) => {
-            let filter_set = json_args.load_filters()?;
+        Commands::Toml(toml_args) => {
+            let filter_set = toml_args.load_filters()?;
             let no_filters_defined = filter_set.no_filters();
-            let nchanged = driver(json_args.output, filter_set, &json_args.nc_file)?;
+            let nchanged = driver(toml_args.output, filter_set, &toml_args.nc_file)?;
             if nchanged == 0 && no_filters_defined {
                 println!(
                     "Note: nothing flagged because no filters were defined in the given JSON file"
                 );
             }
         }
-        Commands::JsonTemplate(template_args) => {
+        Commands::TomlTemplate(template_args) => {
             FilterSet::write_template(&template_args.template_file)?;
         }
     }
@@ -289,8 +292,8 @@ struct Cli {
 #[derive(Debug, Clone, Subcommand)]
 enum Commands {
     Quick(QuickCli),
-    Json(JsonCli),
-    JsonTemplate(TemplateCli),
+    Toml(TomlCli),
+    TomlTemplate(TemplateCli),
 }
 
 /// Flag a netCDF file on a single variable with arguments given via the command line
@@ -310,39 +313,27 @@ struct QuickCli {
     nc_file: PathBuf,
 }
 
-/// Flag a netCDF file on multiple variables defined in a JSON file.
+/// Flag a netCDF file based on a predefined set of filters in a TOML file
 #[derive(Debug, Args, Clone)]
-struct JsonCli {
+struct TomlCli {
     #[command(flatten)]
     output: OutputCli,
 
-    /// Path to a JSON file containing the filter settings.
-    json_file: PathBuf,
+    /// Path to a TOML file containing the filter settings.
+    toml_file: PathBuf,
 
     /// The path to the input netCDF file to add flags to
     #[clap(long)]
     nc_file: PathBuf,
 }
 
-impl JsonCli {
+impl TomlCli {
     fn load_filters(&self) -> error_stack::Result<FilterSet, CliError> {
-        let f = std::fs::File::open(&self.json_file).change_context_lazy(|| CliError::IoError)?;
-        let rdr = std::io::BufReader::new(f);
-        let lines: Vec<String> = rdr
-            .lines()
-            .filter(|res| {
-                // Remove comment lines, keep other lines and errors
-                if let Ok(s) = res {
-                    !s.trim_start().starts_with("//")
-                } else {
-                    true
-                }
-            })
-            .try_collect()
-            .change_context_lazy(|| CliError::IoError)?;
-        let contents = lines.join("\n");
-        let filter_set: FilterSet =
-            serde_json::from_str(&contents).change_context_lazy(|| CliError::IoError)?;
+        let mut f = std::fs::File::open(&self.toml_file).change_context(CliError::IoError)?;
+        let mut buf = String::new();
+        f.read_to_string(&mut buf)
+            .change_context(CliError::IoError)?;
+        let filter_set: FilterSet = toml::from_str(&buf).change_context(CliError::IoError)?;
         Ok(filter_set)
     }
 }
@@ -389,6 +380,7 @@ struct Flags {
     /// flag; "skip" will leave the current manual flag in place; "overwrite" will replace
     /// the current manual flag.
     #[clap(short='e', long, default_value_t = ExistingFlag::default())]
+    #[serde(default)]
     existing_flags: ExistingFlag,
 
     /// Which flag type ("manual" or "release") to set in the file. This controls which
@@ -397,6 +389,7 @@ struct Flags {
     /// Release flags are intended ONLY for Caltech staff to use to flag data in response
     /// to QA/QC feedback.
     #[clap(long, default_value_t = FlagType::default())]
+    #[serde(default)]
     flag_type: FlagType,
 }
 
@@ -484,10 +477,12 @@ struct Timespan {
     /// spaces, so must be quoted. Alternatively, you may use a T in place of the
     /// space; that is "2004-07-01 12:00" and "2004-07-01T12:00" are both valid.
     #[clap(long, visible_alias="time-lt", value_parser = parse_cli_time_str)]
+    #[serde(default)]
     time_less_than: Option<chrono::NaiveDateTime>,
 
     /// See --time-less-than and --time-mode.
     #[clap(long, visible_alias="time-gt", value_parser = parse_cli_time_str)]
+    #[serde(default)]
     time_greater_than: Option<chrono::NaiveDateTime>,
 
     /// If both --time-less-than and --time-greater-than are given, this controls how
@@ -496,6 +491,7 @@ struct Timespan {
     /// Set this to "outside" to instead flag if t >= time_greater_than OR t <= time_less_than,
     /// useful for flagging all points outside a given time period.
     #[clap(long, default_value_t = Combination::default())]
+    #[serde(default)]
     time_mode: Combination,
 }
 
@@ -588,7 +584,7 @@ impl FilterSet {
 
     fn write_template(path: &Path) -> error_stack::Result<(), CliError> {
         let comments = [
-            "This is an example filter JSON file.",
+            "This is an example filter TOML file.",
             "The top level field 'groups' is required, 'flags' and 'timespan' are not.",
             "Each entry in 'groups' represents one filter group, a value will be flagged",
             "if any of the filter groups returns true. A group returns true if all of the",
@@ -600,16 +596,14 @@ impl FilterSet {
             "All fields in 'flags' are optional.",
             "The meaning of fields in each individual filter, timespan, and flags mirrors the 'quick' CLI,",
             "see the quick CLI --help for details.",
-            "Lines beginning with // (like this) are comments, inline comments are not supported.",
-            "Note that error line numbers do not count comment lines."
         ];
         let template = Self::template();
-        let mut f = std::fs::File::create(path).change_context_lazy(|| CliError::IoError)?;
+        let mut f = std::fs::File::create(path).change_context(CliError::IoError)?;
         for line in comments {
-            writeln!(&mut f, "// {line}").change_context_lazy(|| CliError::IoError)?;
+            writeln!(&mut f, "# {line}").change_context(CliError::IoError)?;
         }
-        serde_json::to_writer_pretty(&mut f, &template)
-            .change_context_lazy(|| CliError::IoError)?;
+        let s = toml::to_string_pretty(&template).change_context(CliError::IoError)?;
+        write!(f, "{s}").change_context(CliError::IoError)?;
 
         Ok(())
     }
@@ -676,6 +670,7 @@ fn parse_cli_time_str(s: &str) -> Result<chrono::NaiveDateTime, String> {
 // }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize)]
+#[serde(try_from = "String")]
 enum ExistingFlag {
     Error,
     SkipEqual,
@@ -697,6 +692,14 @@ impl FromStr for ExistingFlag {
     }
 }
 
+impl TryFrom<String> for ExistingFlag {
+    type Error = String;
+
+    fn try_from(value: String) -> Result<Self, String> {
+        value.parse()
+    }
+}
+
 impl Display for ExistingFlag {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -715,6 +718,7 @@ impl Default for ExistingFlag {
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize)]
+#[serde(try_from = "String")]
 enum Combination {
     Inside,
     Outside,
@@ -746,11 +750,19 @@ impl FromStr for Combination {
     }
 }
 
+impl TryFrom<String> for Combination {
+    type Error = String;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        value.parse()
+    }
+}
+
 impl Display for Combination {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Combination::Inside => write!(f, "and"),
-            Combination::Outside => write!(f, "or"),
+            Combination::Inside => write!(f, "inside"),
+            Combination::Outside => write!(f, "outside"),
         }
     }
 }
@@ -773,6 +785,7 @@ impl Display for FlagReplaceError {
 impl std::error::Error for FlagReplaceError {}
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize)]
+#[serde(try_from = "String")]
 enum FlagType {
     Manual,
     Release,
@@ -793,6 +806,14 @@ impl FromStr for FlagType {
             "release" => Ok(Self::Release),
             _ => Err(format!("'{s}' is not a valid flag type")),
         }
+    }
+}
+
+impl TryFrom<String> for FlagType {
+    type Error = String;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        value.parse()
     }
 }
 

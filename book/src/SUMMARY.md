@@ -11,6 +11,7 @@
     - [`apply_tccon_insitu_correction`](./postproc/apply_tccon_insitu_correction.md)
         - [Correction file format](./postproc/corrections/insitu_correction_file.md)
     - [`add_nc_flags`](./postproc/add_nc_flags.md)
+        - [TOML file format](./postproc/add_nc_flags_toml.md)
     - [`write_public_netcdf`](./postproc/write_public_netcdf.md)
         - [Configuration](./postproc/write_public_netcdf/configuration.md)
             - [Auxiliary variables](./postproc/write_public_netcdf/aux_vars.md)
