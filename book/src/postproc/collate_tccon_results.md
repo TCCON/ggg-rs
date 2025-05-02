@@ -1,6 +1,6 @@
 # collate_tccon_results
 
-## Basic usage
+## Purpose
 
 `collate_tccon_results` combines output from the various `.col` files in a GGG run directory with ancillary data from the runlog and `.ray` file into a single file.
 It also computed retrieved quantities from the `.col` files if needed.

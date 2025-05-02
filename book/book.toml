@@ -6,6 +6,13 @@ src = "src"
 title = "GGG-RS User Guide"
 
 [output.html]
-default-theme = "rust"
 git-repository-url = "https://github.com/TCCON/ggg-rs"
 fold = { enable = true, level = 2 }
+additional-css = ["./mdbook-admonish.css"]
+
+[preprocessor]
+
+# https://github.com/tommilligan/mdbook-admonish?tab=readme-ov-file
+[preprocessor.admonish]
+command = "mdbook-admonish"
+assets_version = "3.0.3" # do not edit: managed by `mdbook-admonish install`

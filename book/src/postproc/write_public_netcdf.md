@@ -1,6 +1,6 @@
 # write_public_netcdf
 
-## Basic usage
+## Purpose
 
 `write_public_netcdf` converts the private (a.k.a. engineering) netCDF files into smaller, more user-friendly, files distributed to most TCCON users.
 This includes:
