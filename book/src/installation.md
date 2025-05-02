@@ -23,4 +23,4 @@ As the library is made available, the APIs will be documented through [docs.rs](
 Each command line program will provide help when given the `-h` or `--help` flags.
 That help should be your first resource to understand how the programs work, as it will be the most up-to-date.
 The chapters in this book go into more detail about advanced usage of the programs.
-If you find something in this book that is out of date or unclear, please [open an issue](https://github.com/TCCON/ggg-rs/issues) with the `documentation` tag.
+If you find something in this book that is out of date or unclear, please [open an issue](https://github.com/TCCON/ggg-rs/issues) or [pull request](https://github.com/TCCON/ggg-rs/pulls) with the `documentation` tag.

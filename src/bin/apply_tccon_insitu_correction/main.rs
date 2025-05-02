@@ -3,7 +3,11 @@ use std::{collections::HashMap, path::PathBuf, process::ExitCode};
 use clap::Parser;
 use error_stack::ResultExt;
 use fortformat::FortFormat;
-use ggg_rs::{readers::{postproc_files::open_and_iter_postproc_file, ProgramVersion}, tccon::input_config::{self, AicfRow}, writers::postproc_files::write_postproc_header};
+use ggg_rs::{
+    readers::{postproc_files::open_and_iter_postproc_file, ProgramVersion},
+    tccon::input_config::{self, AicfRow},
+    writers::postproc_files::write_postproc_header,
+};
 use indexmap::IndexMap;
 
 fn main() -> ExitCode {
@@ -20,15 +24,15 @@ fn main() -> ExitCode {
 struct InsituCorrCli {
     /// What file to read the in situ corrections from.
     correction_file: PathBuf,
-    
+
     /// Path the to post processing file containing column densities
-    /// to airmass correct and convert to column averages. In most
-    /// cases, this will be a `.vsw` or `.vav` file.
+    /// to airmass correct and convert to column averages. This should
+    /// be a `.vav.ada` file in standard use.
     upstream_file: PathBuf,
 
     /// Directory in which to save the output file. If omitted, the output
     /// file will be saved to the same directory as the upstream file.
-    #[clap(short='o', long)]
+    #[clap(short = 'o', long)]
     output_dir: Option<PathBuf>,
 }
 
@@ -37,9 +41,9 @@ enum CliError {
     #[error("Error reading {}", .0.display())]
     ReadError(PathBuf),
     #[error("Error reading line {line} of {}", .file.display())]
-    ReadErrorAtLine{file: PathBuf, line: usize},
+    ReadErrorAtLine { file: PathBuf, line: usize },
     #[error("Error writing output {}, {cause}", .path.display())]
-    WriteError{path: PathBuf, cause: String},
+    WriteError { path: PathBuf, cause: String },
     #[error("{0}")]
     Custom(String),
 }
@@ -51,18 +55,19 @@ impl CliError {
 }
 
 fn driver(clargs: InsituCorrCli) -> error_stack::Result<(), CliError> {
-    let mut new_name = clargs.upstream_file
+    let mut new_name = clargs
+        .upstream_file
         .file_name()
         .expect("upstream file should have a base name")
         .to_os_string();
     new_name.push(".aia");
 
-    let out_dir = clargs.output_dir
-        .as_deref()
-        .unwrap_or_else(|| {
-            clargs.upstream_file.parent()
+    let out_dir = clargs.output_dir.as_deref().unwrap_or_else(|| {
+        clargs
+            .upstream_file
+            .parent()
             .expect("upstream file should have a parent directory")
-        });
+    });
     let out_file = out_dir.join(new_name);
 
     // Read in the appropriate in situ correction file
@@ -72,15 +77,18 @@ fn driver(clargs: InsituCorrCli) -> error_stack::Result<(), CliError> {
     // Read in the header of the previous postproc file, add the in situ correction factors
     let (mut header, rows) = open_and_iter_postproc_file(&clargs.upstream_file)
         .change_context_lazy(|| CliError::ReadError(clargs.upstream_file.to_path_buf()))?;
-    add_aicf_header_lines(&mut header.extra_lines, &aicfs)
-        .change_context_lazy(|| CliError::WriteError {
+    add_aicf_header_lines(&mut header.extra_lines, &aicfs).change_context_lazy(|| {
+        CliError::WriteError {
             path: out_file.clone(),
-            cause: "writing the AICF values in the header failed.".to_string()
-        })?;
+            cause: "writing the AICF values in the header failed.".to_string(),
+        }
+    })?;
 
     // Go ahead and start writing to the output
-    let fw = std::fs::File::create(&out_file)
-        .change_context_lazy(|| CliError::WriteError { path: out_file.to_path_buf(), cause: "creating file failed".to_string() })?;
+    let fw = std::fs::File::create(&out_file).change_context_lazy(|| CliError::WriteError {
+        path: out_file.to_path_buf(),
+        cause: "creating file failed".to_string(),
+    })?;
     let mut fw = std::io::BufWriter::new(fw);
 
     let format_str = header.fformat_without_comment().fmt_string(1);
@@ -96,10 +104,12 @@ fn driver(clargs: InsituCorrCli) -> error_stack::Result<(), CliError> {
         &header.extra_lines,
         header.missing_value,
         &format_str,
-        &header.column_names
-    ).change_context_lazy(|| 
-        CliError::WriteError { path: out_file.clone(), cause: "error occurred while writing the file header".to_string() }
-    )?;
+        &header.column_names,
+    )
+    .change_context_lazy(|| CliError::WriteError {
+        path: out_file.clone(),
+        cause: "error occurred while writing the file header".to_string(),
+    })?;
 
     // Read each row, apply airmass corrections, and write out the Xgas values.
     let settings = fortformat::ser::SerSettings::default().align_left_str(true);
@@ -118,21 +128,31 @@ fn driver(clargs: InsituCorrCli) -> error_stack::Result<(), CliError> {
 
         row.retrieved = apply_correction(&row.retrieved, &aicfs, missing_value)?;
 
-        fortformat::ser::to_writer_custom(row, &writer_fformat, Some(&header.column_names), &settings, &mut fw)
-            .change_context_lazy(|| CliError::WriteError { 
-                path: out_file.clone(),
-                cause: format!("error serializing data line {}", irow+1)
-            })?;
+        fortformat::ser::to_writer_custom(
+            row,
+            &writer_fformat,
+            Some(&header.column_names),
+            &settings,
+            &mut fw,
+        )
+        .change_context_lazy(|| CliError::WriteError {
+            path: out_file.clone(),
+            cause: format!("error serializing data line {}", irow + 1),
+        })?;
     }
 
     Ok(())
 }
 
-fn add_aicf_header_lines(lines_out: &mut Vec<String>, aicfs: &IndexMap<String, AicfRow>) -> Result<(), fortformat::SError> {
+fn add_aicf_header_lines(
+    lines_out: &mut Vec<String>,
+    aicfs: &IndexMap<String, AicfRow>,
+) -> Result<(), fortformat::SError> {
     let nrow = aicfs.len();
-    lines_out.push(format!(" Airmass-Independent/In-Situ Correction Factors: {nrow} 4"));
-    let ff = FortFormat::parse("(a23,2f9.4,1x,a1,a,a1)")
-        .unwrap();
+    lines_out.push(format!(
+        " Airmass-Independent/In-Situ Correction Factors: {nrow} 4"
+    ));
+    let ff = FortFormat::parse("(a23,2f9.4,1x,a1,a,a1)").unwrap();
     let settings = fortformat::ser::SerSettings::default().align_left_str(true);
     for corr in aicfs.values() {
         let values = (
@@ -141,7 +161,7 @@ fn add_aicf_header_lines(lines_out: &mut Vec<String>, aicfs: &IndexMap<String, A
             corr.aicf_error,
             '"',
             &corr.wmo_scale,
-            '"'
+            '"',
         );
         let s = fortformat::ser::to_string_custom::<_, &str>(values, &ff, None, &settings)?;
         lines_out.push(s);
@@ -150,7 +170,11 @@ fn add_aicf_header_lines(lines_out: &mut Vec<String>, aicfs: &IndexMap<String, A
     Ok(())
 }
 
-fn apply_correction(row: &HashMap<String, f64>, aicfs: &IndexMap<String, AicfRow>, missing_value: f64) -> Result<HashMap<String, f64>, CliError> {
+fn apply_correction(
+    row: &HashMap<String, f64>,
+    aicfs: &IndexMap<String, AicfRow>,
+    missing_value: f64,
+) -> Result<HashMap<String, f64>, CliError> {
     let all_xgases = row.keys().filter(|k| !k.ends_with("_error"));
 
     let mut new_row = HashMap::new();
@@ -160,7 +184,7 @@ fn apply_correction(row: &HashMap<String, f64>, aicfs: &IndexMap<String, AicfRow
         let col_err_val = *row.get(&xgas_error).ok_or_else(|| {
             CliError::custom(format!("row does not contain the column '{xgas_error}' for the error value corresponding to '{xgas}'"))
         })?;
-        
+
         let cf = aicfs.get(xgas).map(|r| r.aicf).unwrap_or(1.0);
         if approx::abs_diff_eq!(col_val, missing_value) {
             new_row.insert(xgas.to_owned(), missing_value);
@@ -190,20 +214,29 @@ fn program_version() -> ProgramVersion {
 mod tests {
     use std::path::PathBuf;
 
-    use ggg_rs::test_utils::compare_output_text_files;
     use crate::{driver, InsituCorrCli};
+    use ggg_rs::test_utils::compare_output_text_files;
 
     #[test]
     fn test_insitu_correct_pa_benchmark() {
         let crate_root = env!("CARGO_MANIFEST_DIR");
-        let input_dir = PathBuf::from(crate_root).join("test-data").join("inputs").join("apply-tccon-insitu-correction");
-        let expected_dir = PathBuf::from(crate_root).join("test-data").join("expected").join("apply-tccon-insitu-correction");
-        let output_dir = PathBuf::from(crate_root).join("test-data").join("outputs").join("apply-tccon-insitu-correction");
+        let input_dir = PathBuf::from(crate_root)
+            .join("test-data")
+            .join("inputs")
+            .join("apply-tccon-insitu-correction");
+        let expected_dir = PathBuf::from(crate_root)
+            .join("test-data")
+            .join("expected")
+            .join("apply-tccon-insitu-correction");
+        let output_dir = PathBuf::from(crate_root)
+            .join("test-data")
+            .join("outputs")
+            .join("apply-tccon-insitu-correction");
 
         let clargs = InsituCorrCli {
             correction_file: input_dir.join("corrections_insitu_postavg.dat"),
             upstream_file: input_dir.join("pa_ggg_benchmark.vav.ada"),
-            output_dir: Some(output_dir.clone())
+            output_dir: Some(output_dir.clone()),
         };
 
         driver(clargs).expect("Running the airmass correction should not fail.");
@@ -211,3 +244,4 @@ mod tests {
         compare_output_text_files(&expected_dir, &output_dir, "pa_ggg_benchmark.vav.ada.aia");
     }
 }
+

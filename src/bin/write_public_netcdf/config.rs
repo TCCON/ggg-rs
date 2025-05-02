@@ -304,7 +304,7 @@ mod tests {
     #[test]
     fn test_book_examples() {
         let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        let book_subdir = crate_root.join("book/src/write_public_netcdf");
+        let book_subdir = crate_root.join("book/src/postproc/write_public_netcdf");
         let md_files = book_subdir
             .read_dir()
             .expect("should be able to get files from the book subdir")
