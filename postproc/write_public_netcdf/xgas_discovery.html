@@ -167,7 +167,7 @@ This both saves a lot of tedious typing in the configuration and minimizes the p
 These come in two variants:</p>
 <ol>
 <li>Suffix rules: these look for variables that start with something starting with an Xgas-like pattern
-and ending in the given suffix. The full regex is <code>^x([a-z][a-z0-9]*)_\w+_{suffix}$</code>, where <code>{suffix}</code> is the provided suffix.
+and ending in the given suffix. The full regex is <code>^x([a-z][a-z0-9]*)_{suffix}$</code>, where <code>{suffix}</code> is the provided suffix.
 Note that the suffix is passed through [<code>regex::escape</code>] to ensure that any special characters are escaped; it will only
 be treated as a literal.</li>
 <li>Regex rules: these allow you to specify a regular expression to match variables names. The regex <em>must</em> include a named

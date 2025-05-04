@@ -927,7 +927,7 @@ This both saves a lot of tedious typing in the configuration and minimizes the p
 These come in two variants:</p>
 <ol>
 <li>Suffix rules: these look for variables that start with something starting with an Xgas-like pattern
-and ending in the given suffix. The full regex is <code>^x([a-z][a-z0-9]*)_\w+_{suffix}$</code>, where <code>{suffix}</code> is the provided suffix.
+and ending in the given suffix. The full regex is <code>^x([a-z][a-z0-9]*)_{suffix}$</code>, where <code>{suffix}</code> is the provided suffix.
 Note that the suffix is passed through [<code>regex::escape</code>] to ensure that any special characters are escaped; it will only
 be treated as a literal.</li>
 <li>Regex rules: these allow you to specify a regular expression to match variables names. The regex <em>must</em> include a named
@@ -1084,7 +1084,91 @@ See the source code for <a href="https://github.com/TCCON/ggg-rs/blob/main/src/b
 You can override any of those without turning off the defaults; e.g., setting <code>h2o = "dihydrogen monoxide"</code> in this section will replace the default of "water".</p>
 <p>Of course, when <a href="postproc/write_public_netcdf//write_public_netcdf/explicit_xgases.html">explicitly defining an Xgas to copy</a>, you can write in the proper name as the <code>gas_long</code> value.
 The <code>[gas_long_names]</code> section is most useful for automatically discovered Xgases, but it can also be useful when defining multiple Xgas variables that refer to the same physical gas, as the <a href="https://github.com/TCCON/ggg-rs/blob/main/src/bin/write_public_netcdf/tccon_configs/standard.toml">standard TCCON configuration</a> does with CO2.</p>
-<div style="break-before: page; page-break-before: always;"></div><h1 id="defaults"><a class="header" href="#defaults">Defaults</a></h1>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="including-other-configurations"><a class="header" href="#including-other-configurations">Including other configurations</a></h1>
+<p>The public netCDF writer configuration can extend other configuration files.
+The intended use is to define a base configuration with a set of variables that should always be included,
+and extend that for different specialize use cases.
+The TCCON standard configurations use this to reuse the standard configuration (including all of the auxiliary variables,
+normal computer variables, and Xgas values from the InGaAs detector) in the extended configuration (which adds the
+InSb or Si Xgas values).</p>
+<p>To use another configuration file, use the <code>include</code> key:</p>
+<pre><code class="language-toml">include = ["base_config.toml"]
+</code></pre>
+<p>This is a list, so you can include multiple files:</p>
+<pre><code class="language-toml">include = ["base_config.toml", "extra_aux.toml"]
+</code></pre>
+<div id="admonition-info" class="admonition admonish-info" role="note" aria-labelledby="admonition-info-title">
+<div class="admonition-title">
+<div id="admonition-info-title">
+<p>Info</p>
+</div>
+<a class="admonition-anchor-link" href="postproc/write_public_netcdf/includes.html#admonition-info"></a>
+</div>
+<div>
+<p>Currently, when giving relative paths as the values for <code>include</code> as done here,
+they are interpreted as relative to the current working directory.
+However, you should not rely on that behavior - the intention is to adjust this
+so that relative paths are interpreted as relative to the configuration file
+in which they appear.
+If you have a global set of configuration files that use <code>include</code>, for now,
+it is best to use absolute paths in their respective <code>include</code> sections.</p>
+</div>
+</div>
+<h2 id="how-configurations-are-combined"><a class="header" href="#how-configurations-are-combined">How configurations are combined</a></h2>
+<p>Internally, <code>write_public_netcdf</code> uses the <code>figment</code> crate to combine the configurations.
+Specifically, it uses the <a href="https://docs.rs/figment/latest/figment/struct.Figment.html#conflict-resolution">"adjoin" conflict resolution strategy</a>.
+This means that lists (like the explicit Xgas definitions) from each configuration will be concatenated,
+and scalar values will be taken from the first configuration that defines them.
+(The order in which the configurations are parsed is defined <a href="postproc/write_public_netcdf/includes.html#order-of-inclusion">next</a>).</p>
+<h2 id="order-of-inclusion"><a class="header" href="#order-of-inclusion">Order of inclusion</a></h2>
+<p>The <code>include</code> key is recursive, so if <code>file1.toml</code> includes <code>file2.toml</code>, and
+<code>file2.toml</code> includes <code>file3.toml</code>, then <code>file1.toml</code> will include the combination
+of <code>file2.toml</code> and <code>file3.toml</code>.
+When files include more than one other file, the algorithm does a "depth-first" ordering.
+That is, if our top-level configuration has:</p>
+<pre><code class="language-toml"># top.toml
+include = ["middle1.toml", "middle2.toml"]
+</code></pre>
+<p><code>middle1.toml</code> has:</p>
+<pre><code class="language-toml"># middle1.toml
+include = ["bottom1a.toml", "bottom1b.toml"]
+</code></pre>
+<p>and <code>middle2.toml</code> has:</p>
+<pre><code class="language-toml"># middle2.toml
+include = ["bottom2a.toml", "bottom2b.toml"]
+</code></pre>
+<p>then the order in which the files are added to the configuration is:</p>
+<ul>
+<li><code>top.toml</code></li>
+<li><code>middle1.toml</code></li>
+<li><code>bottom1a.toml</code></li>
+<li><code>bottom1b.toml</code></li>
+<li><code>middle2.toml</code></li>
+<li><code>bottom2a.toml</code></li>
+<li><code>bottom2b.toml</code></li>
+</ul>
+<p>In other words, coupled with the <a href="postproc/write_public_netcdf/includes.html#how-configurations-are-combined">"adjoin" behavior used</a>,
+this ensures that the inclusion behavior is as you expect.
+Settings in <code>top.toml</code> take precedence, then <em>all</em> settings in <code>middle1.toml</code> (whether they
+are defined in <code>middle1.toml</code> itself or one of its included files), and then <code>middle2.toml</code>
+(and its included files) comes last.</p>
+<div id="admonition-warning" class="admonition admonish-warning" role="note" aria-labelledby="admonition-warning-title">
+<div class="admonition-title">
+<div id="admonition-warning-title">
+<p>Warning</p>
+</div>
+<a class="admonition-anchor-link" href="postproc/write_public_netcdf/includes.html#admonition-warning"></a>
+</div>
+<div>
+<p>Although you <em>can</em> create complex hierarchies of configurations as shown in this example,
+doing so is generally not a good idea.
+The more complicated you try to make the set of included files, the more likely you are
+to end up with unexpected results - duplicated variables, wrong attributes, etc.
+If you find yourself using more than one layer of inclusion, you may be better off
+simply creating one large configuration file with the necessary parts of the other
+files copied into it.</p>
+</div>
+</div><div style="break-before: page; page-break-before: always;"></div><h1 id="defaults"><a class="header" href="#defaults">Defaults</a></h1>
 <p>Unlike other sections, the <code>[defaults]</code> section does not define variables to copy; instead, it modifies how the other sections are filled in.
 If this section is omitted, then each of the other sections will add reasonable default values if omitted.
 The following boolean options are available to change that behavior:</p>
@@ -1095,6 +1179,19 @@ The following boolean options are available to change that behavior:</p>
 <li><code>xgas_rules</code>: setting this to <code>false</code> will prevent the standard list of patterns to match when looking for Xgas variables from being added to <code>[discovery.rules]</code>.</li>
 </ul>
 <div style="break-before: page; page-break-before: always;"></div><h1 id="debugging-tips"><a class="header" href="#debugging-tips">Debugging tips</a></h1>
+<h2 id="configuration-parsing-errors"><a class="header" href="#configuration-parsing-errors">Configuration parsing errors</a></h2>
+<p>If you are trying to use a custom configuration and the writer gives an error that it cannot "deserialize" the file,
+that means that there is either a TOML syntax error or another typo.
+To narrow down where the problem is, incrementally comment out parts of the configuration file and run the writer
+with the <code>--check-config-only</code> flag.
+When this can parse the configuration, it will print an internal representation of it to the screen.
+Thus, when it starts working, whatever section you commented out is the likely culprit.</p>
+<h2 id="unexpected-output-such-as-missing-or-duplicated-variables"><a class="header" href="#unexpected-output-such-as-missing-or-duplicated-variables">Unexpected output (such as missing or duplicated variables)</a></h2>
+<p>If you seem to be missing variables in the output, have the same variable try to be written twice,
+or other problems when using a custom configuration, first run the writer with the <code>--check-config-only</code>
+flag and carefully examine the printed parsed version of the configuration.
+This can help check if the configuration is being interpreted as you intended,
+especially when using the <a href="postproc/write_public_netcdf//postproc/write_public_netcdf/includes.html">include feature</a></p>
 <h2 id="checking-on-xgas-discovery"><a class="header" href="#checking-on-xgas-discovery">Checking on Xgas discovery</a></h2>
 <p>If variables are not being copied correctly, increase the verbosity of <code>write_public_netcdf</code> by adding <code>-v</code>
 or <code>-vv</code> to the command line. The first will activate debug output, which includes a lot of information about
