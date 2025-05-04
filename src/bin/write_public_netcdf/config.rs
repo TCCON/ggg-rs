@@ -113,13 +113,13 @@ pub(crate) struct Config {
 impl Config {
     /// Load a configuration from a string already in memory.
     pub(crate) fn from_toml_str(s: &str) -> Result<Self, ConfigError> {
-        let mut fig = Figment::new().admerge(figment::providers::Toml::string(s));
+        let mut fig = Figment::new().adjoin(figment::providers::Toml::string(s));
         let first_includes = Self::get_includes_from_config_str(&s)
             .map(|v| VecDeque::from(v))
             .map_err(|e| ConfigError::StringDeser(e))?;
         let all_includes = Self::collect_included_configs(first_includes)?;
         for incl in all_includes {
-            fig = fig.admerge(incl.into_provider());
+            fig = fig.adjoin(incl.into_provider());
         }
         let mut config: Config = fig.extract()?;
         config.finalize();
@@ -132,14 +132,14 @@ impl Config {
     /// and passing that string to [`Config::from_toml_str`], as this function will
     /// provide better error messages pointing to the top-level path if there is a problem.
     pub(crate) fn from_toml_file(p: PathBuf) -> Result<Self, ConfigError> {
-        let mut fig = Figment::new().admerge(figment::providers::Toml::file(&p));
+        let mut fig = Figment::new().adjoin(figment::providers::Toml::file(&p));
         let s = read_file(&p)?;
         let first_includes = Self::get_includes_from_config_str(&s)
             .map(|v| VecDeque::from(v))
             .map_err(|e| ConfigError::deser(p.display(), e))?;
         let all_includes = Self::collect_included_configs(first_includes)?;
         for incl in all_includes {
-            fig = fig.admerge(incl.into_provider());
+            fig = fig.adjoin(incl.into_provider());
         }
         let mut config: Config = fig.extract()?;
         config.finalize();
@@ -156,11 +156,7 @@ impl Config {
                 None => break,
             };
 
-            let s = match &next_source {
-                IncludeSource::Path(path) => Cow::Owned(read_file(path)?),
-                IncludeSource::Standard => Cow::Borrowed(STANDARD_TCCON_TOML),
-                IncludeSource::Extended => todo!(),
-            };
+            let s = next_source.as_cow_str()?;
 
             let includes = Self::get_includes_from_config_str(&s)
                 .map_err(|e| ConfigError::deser(&next_source, e))?;
@@ -176,6 +172,7 @@ impl Config {
     }
 
     fn get_includes_from_config_str(s: &str) -> Result<Vec<IncludeSource>, toml::de::Error> {
+        // TODO: make paths relative to the configuration they are taken from.
         let includes: IncludesConfig = toml::from_str(&s)?;
         let sources = includes
             .include
@@ -296,7 +293,15 @@ impl IncludeSource {
         match self {
             IncludeSource::Path(p) => figment::providers::Toml::file(p),
             IncludeSource::Standard => figment::providers::Toml::string(STANDARD_TCCON_TOML),
-            IncludeSource::Extended => todo!(),
+            IncludeSource::Extended => figment::providers::Toml::string(EXTENDED_TCCON_TOML),
+        }
+    }
+
+    fn as_cow_str<'a>(&'a self) -> Result<Cow<'a, str>, ConfigError> {
+        match self {
+            IncludeSource::Path(path) => Ok(Cow::Owned(read_file(path)?)),
+            IncludeSource::Standard => Ok(Cow::Borrowed(STANDARD_TCCON_TOML)),
+            IncludeSource::Extended => Ok(Cow::Borrowed(EXTENDED_TCCON_TOML)),
         }
     }
 }

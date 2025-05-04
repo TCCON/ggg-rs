@@ -20,6 +20,7 @@
             - [Xgas discovery](./postproc/write_public_netcdf/xgas_discovery.md)
             - [Explicitly specified Xgases](./postproc/write_public_netcdf/explicit_xgases.md)
             - [Gas proper names](./postproc/write_public_netcdf/gas_proper_names.md)
+            - [Includes](./postproc/write_public_netcdf/includes.md)
             - [Defaults](./postproc/write_public_netcdf/defaults.md)
             - [Debugging tips](./postproc/write_public_netcdf/debugging_tips.md)
 - [Other utility programs](./other_utils.md)
