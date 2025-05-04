@@ -1,8 +1,13 @@
 //! Interface for the configuration of which variables to copy
-use std::{collections::HashSet, io::Read, path::Path};
+use std::{
+    collections::{HashSet, VecDeque},
+    io::Read,
+    path::{Path, PathBuf},
+};
 
+use figment::{providers::Format, Figment};
 use indexmap::IndexMap;
-use serde::{de::Error, Deserialize};
+use serde::Deserialize;
 
 use crate::{
     constants::DEFAULT_GAS_LONG_NAMES,
@@ -12,6 +17,28 @@ use crate::{
 };
 
 pub(crate) static STANDARD_TCCON_TOML: &'static str = include_str!("tccon_configs/standard.toml");
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum ConfigError {
+    #[error(transparent)]
+    IncludeError(#[from] figment::Error),
+    #[error("Error reading file {}: {e}", p.display())]
+    IoError { p: PathBuf, e: std::io::Error },
+    #[error("Error deserializing string: {0}")]
+    StringDeser(toml::de::Error),
+    #[error("Error deserializing file {}: {e}", .p.display())]
+    Deserialization { p: PathBuf, e: toml::de::Error },
+}
+
+impl ConfigError {
+    fn io<P: Into<PathBuf>>(p: P, e: std::io::Error) -> Self {
+        Self::IoError { p: p.into(), e }
+    }
+
+    fn deser<P: Into<PathBuf>>(p: P, e: toml::de::Error) -> Self {
+        Self::Deserialization { p: p.into(), e }
+    }
+}
 
 /// Configuration for the public netCDF writer.
 ///
@@ -65,21 +92,76 @@ pub(crate) struct Config {
 }
 
 impl Config {
-    pub(crate) fn from_toml_str(s: &str) -> Result<Self, toml::de::Error> {
-        let mut config: Config = toml::from_str(s)?;
+    /// Load a configuration from a string already in memory.
+    pub(crate) fn from_toml_str(s: &str) -> Result<Self, ConfigError> {
+        let mut fig = Figment::new().admerge(figment::providers::Toml::string(s));
+        let first_includes = Self::get_includes_from_config_str(&s)
+            .map(|v| VecDeque::from(v))
+            .map_err(|e| ConfigError::StringDeser(e))?;
+        let all_includes = Self::collect_included_configs(first_includes)?;
+        for incl in all_includes {
+            fig = fig.admerge(figment::providers::Toml::file(&incl));
+        }
+        let mut config: Config = fig.extract()?;
         config.finalize();
         Ok(config)
     }
 
-    pub(crate) fn from_toml_file(p: &Path) -> Result<Self, toml::de::Error> {
-        let mut f = std::fs::File::open(p).map_err(|e| {
-            toml::de::Error::custom(format!("error opening TOML file {}: {e}", p.display()))
-        })?;
+    /// Load a configuration from a path to a TOML file.
+    ///
+    /// This function should be preferred over reading in a TOML file as a string
+    /// and passing that string to [`Config::from_toml_str`], as this function will
+    /// provide better error messages pointing to the top-level path if there is a problem.
+    pub(crate) fn from_toml_file(p: PathBuf) -> Result<Self, ConfigError> {
+        let mut fig = Figment::new().admerge(figment::providers::Toml::file(&p));
+        let s = Self::read_file(&p)?;
+        let first_includes = Self::get_includes_from_config_str(&s)
+            .map(|v| VecDeque::from(v))
+            .map_err(|e| ConfigError::deser(p, e))?;
+        let all_includes = Self::collect_included_configs(first_includes)?;
+        for incl in all_includes {
+            fig = fig.admerge(figment::providers::Toml::file(&incl));
+        }
+        let mut config: Config = fig.extract()?;
+        config.finalize();
+        Ok(config)
+    }
+
+    fn collect_included_configs(
+        mut to_check: VecDeque<PathBuf>,
+    ) -> Result<Vec<PathBuf>, ConfigError> {
+        let mut paths_out = vec![];
+        loop {
+            let next_file = match to_check.pop_front() {
+                Some(p) => p,
+                None => break,
+            };
+
+            let s = Self::read_file(&next_file)?;
+            let includes = Self::get_includes_from_config_str(&s)
+                .map_err(|e| ConfigError::deser(&next_file, e))?;
+            // We add the includes in reverse order so that they come off the
+            // front in the order that they were in the config. This also ensures
+            // that we do a depth-first recursion.
+            for incl in includes.into_iter().rev() {
+                to_check.push_front(incl);
+            }
+            paths_out.push(next_file);
+        }
+        Ok(paths_out)
+    }
+
+    fn get_includes_from_config_str(s: &str) -> Result<Vec<PathBuf>, toml::de::Error> {
+        let includes: IncludesConfig = toml::from_str(&s)?;
+        Ok(includes.include)
+    }
+
+    fn read_file(p: &Path) -> Result<String, ConfigError> {
+        let mut f = std::fs::File::open(p).map_err(|e| ConfigError::io(p, e))?;
         let mut buf = String::new();
-        f.read_to_string(&mut buf).map_err(|e| {
-            toml::de::Error::custom(format!("error reading TOML file {}: {e}", p.display()))
-        })?;
-        Self::from_toml_str(&buf)
+        f.read_to_string(&mut buf)
+            .map_err(|e| ConfigError::io(p, e))?;
+        Ok(buf)
     }
 
     fn finalize(&mut self) {
@@ -116,6 +198,12 @@ impl Default for Config {
         me.finalize();
         me
     }
+}
+
+#[derive(Debug, Deserialize)]
+struct IncludesConfig {
+    #[serde(default)]
+    include: Vec<PathBuf>,
 }
 
 #[derive(Debug, Default, Deserialize)]

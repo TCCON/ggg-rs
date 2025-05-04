@@ -5,7 +5,7 @@ use std::{
 
 use clap::Parser;
 use clap_verbosity_flag::{InfoLevel, Verbosity};
-use config::{Config, STANDARD_TCCON_TOML};
+use config::{Config, ConfigError, STANDARD_TCCON_TOML};
 use constants::TIME_DIM_NAME;
 use copying::{AuxVarCopy, ComputedVariable, CopySet, Subsetter, XgasCopy};
 use discovery::discover_xgas_vars;
@@ -49,8 +49,8 @@ fn main() -> ExitCode {
 }
 
 fn driver(clargs: Cli) -> error_stack::Result<(), CliError> {
-    let config = load_config(clargs.extended, clargs.config.as_deref())
-        .change_context(CliError::ReadingConfig)?;
+    let config =
+        load_config(clargs.extended, clargs.config).change_context(CliError::ReadingConfig)?;
 
     let private_ds =
         netcdf::open(&clargs.private_nc_file).change_context(CliError::OpeningPrivateFile)?;
@@ -123,7 +123,7 @@ enum CliError {
     Custom(&'static str),
 }
 
-fn load_config(extended: bool, custom_file: Option<&Path>) -> Result<Config, toml::de::Error> {
+fn load_config(extended: bool, custom_file: Option<PathBuf>) -> Result<Config, ConfigError> {
     match (extended, custom_file) {
         (true, None) => todo!(),
         (true, Some(_)) => panic!(

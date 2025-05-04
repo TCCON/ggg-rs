@@ -8,22 +8,23 @@ resolver = "2"
 
 [dependencies]
 approx = "0.5.1"
-chrono = {version = "0.4.40", features=["serde"]}
-clap = {version = "4", features = ["derive"]}
+chrono = { version = "0.4.40", features = ["serde"] }
+clap = { version = "4", features = ["derive"] }
 clap-verbosity-flag = "2.2.0"
 encoding = "0.2.33"
 itertools = "0.14.0"
 log = "0.4.27"
 log4rs = "1.2.0"
 error-stack = "0.5.0"
-fortformat = {version = "0.1.1", features = ["serde"]}
-indexmap = {version = "2.9", features = ["serde"] }
-ndarray = {version = "0.15", features = ["approx"]}
-netcdf = {version = "0.11.0", optional=true}
+figment = { version = "0.10.19", features = ["toml"] }
+fortformat = { version = "0.1.1", features = ["serde"] }
+indexmap = { version = "2.9", features = ["serde"] }
+ndarray = { version = "0.15", features = ["approx"] }
+netcdf = { version = "0.11.0", optional = true }
 num-traits = "0.2.16"
 pest = "2.8.0"
 pest_derive = "2.8.0"
-plotly = { version = "0.8.3", features = ["kaleido"], optional=true }
+plotly = { version = "0.8.3", features = ["kaleido"], optional = true }
 regex = "1.9.3"
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0.140"
@@ -37,7 +38,7 @@ ring = "0.17.14"
 hex = "0.4.3"
 rayon = "1.10.0"
 tracing = "0.1.41"
-tracing-subscriber = {version = "0.3.19", features = ["json"]}
+tracing-subscriber = { version = "0.3.19", features = ["json"] }
 indicatif = "0.17.11"
 interp = "2.0.2"
 
