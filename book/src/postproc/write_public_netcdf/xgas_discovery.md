@@ -9,7 +9,7 @@ The first part of the discovery section is a list of rules for how to find Xgas 
 These come in two variants:
 
 1. Suffix rules: these look for variables that start with something starting with an Xgas-like pattern
-   and ending in the given suffix. The full regex is `^x([a-z][a-z0-9]*)_\w+_{suffix}$`, where `{suffix}` is the provided suffix.
+   and ending in the given suffix. The full regex is `^x([a-z][a-z0-9]*)_{suffix}$`, where `{suffix}` is the provided suffix.
    Note that the suffix is passed through [`regex::escape`] to ensure that any special characters are escaped; it will only
    be treated as a literal.
 2. Regex rules: these allow you to specify a regular expression to match variables names. The regex _must_ include a named

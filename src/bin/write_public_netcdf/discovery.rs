@@ -109,8 +109,8 @@ impl XgasMatchMethod {
         //  - (?<base> ... ) is needed to capture the whole variable name except the suffix in case
         //    we have to do a substitution
         //  - x(?<gas>[a-z][a-z0-9]*) will match e.g. xco2, xch4, etc.
-        //  - the \w* allows for intervening parts, like for co2 (e.g., "_x2019")
-        let pattern = format!(r"^(?<base>x(?<gas>[a-z][a-z0-9]*)\w*)_{suffix}$");
+        //  - we do not allow for any interveneing parts to avoid confusion with intermediate variables.
+        let pattern = format!(r"^(?<base>x(?<gas>[a-z][a-z0-9]*))_{suffix}$");
         let re = Regex::from_str(&pattern).expect(
             "Xgas discovery suffix failed to compile into a regular expression (this is a bug)",
         );

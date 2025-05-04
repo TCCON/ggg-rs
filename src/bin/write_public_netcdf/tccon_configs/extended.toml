@@ -1,0 +1,11 @@
+include = ["TCCON_STANDARD"]
+
+[[discovery.rule]]
+suffix = "si"
+ak = { type = "opt_inferred_if_first" }
+traceability_scale = { type = "omit" }
+
+[[discovery.rule]]
+suffix = "insb"
+ak = { type = "opt_inferred_if_first" }
+traceability_scale = { type = "omit" }

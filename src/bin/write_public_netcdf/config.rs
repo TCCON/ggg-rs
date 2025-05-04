@@ -1,12 +1,17 @@
 //! Interface for the configuration of which variables to copy
 use std::{
+    borrow::Cow,
     collections::{HashSet, VecDeque},
+    convert::Infallible,
+    fmt::Display,
     io::Read,
     path::{Path, PathBuf},
+    str::FromStr,
 };
 
 use figment::{providers::Format, Figment};
 use indexmap::IndexMap;
+use itertools::Itertools;
 use serde::Deserialize;
 
 use crate::{
@@ -17,6 +22,7 @@ use crate::{
 };
 
 pub(crate) static STANDARD_TCCON_TOML: &'static str = include_str!("tccon_configs/standard.toml");
+pub(crate) static EXTENDED_TCCON_TOML: &'static str = include_str!("tccon_configs/extended.toml");
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum ConfigError {
@@ -26,8 +32,8 @@ pub(crate) enum ConfigError {
     IoError { p: PathBuf, e: std::io::Error },
     #[error("Error deserializing string: {0}")]
     StringDeser(toml::de::Error),
-    #[error("Error deserializing file {}: {e}", .p.display())]
-    Deserialization { p: PathBuf, e: toml::de::Error },
+    #[error("Error deserializing file {p}: {e}")]
+    Deserialization { p: String, e: toml::de::Error },
 }
 
 impl ConfigError {
@@ -35,8 +41,11 @@ impl ConfigError {
         Self::IoError { p: p.into(), e }
     }
 
-    fn deser<P: Into<PathBuf>>(p: P, e: toml::de::Error) -> Self {
-        Self::Deserialization { p: p.into(), e }
+    fn deser<P: Display>(p: P, e: toml::de::Error) -> Self {
+        Self::Deserialization {
+            p: format!("{p}"),
+            e,
+        }
     }
 }
 
@@ -89,6 +98,16 @@ pub(crate) struct Config {
     /// be incorrectly ignoring defaults on the inner config.
     #[serde(default)]
     defaults: DefaultsConfig,
+
+    /// Sources to merge with this configuration.
+    ///
+    /// # Developer note
+    /// This field is included to allow the deny_unknown_fields annotation.
+    /// In normal use, this field will not be referenced, as it must be parsed
+    /// before the configuration can be fully deserialized.
+    #[serde(default)]
+    #[allow(dead_code)]
+    include: Vec<String>,
 }
 
 impl Config {
@@ -100,7 +119,7 @@ impl Config {
             .map_err(|e| ConfigError::StringDeser(e))?;
         let all_includes = Self::collect_included_configs(first_includes)?;
         for incl in all_includes {
-            fig = fig.admerge(figment::providers::Toml::file(&incl));
+            fig = fig.admerge(incl.into_provider());
         }
         let mut config: Config = fig.extract()?;
         config.finalize();
@@ -114,13 +133,13 @@ impl Config {
     /// provide better error messages pointing to the top-level path if there is a problem.
     pub(crate) fn from_toml_file(p: PathBuf) -> Result<Self, ConfigError> {
         let mut fig = Figment::new().admerge(figment::providers::Toml::file(&p));
-        let s = Self::read_file(&p)?;
+        let s = read_file(&p)?;
         let first_includes = Self::get_includes_from_config_str(&s)
             .map(|v| VecDeque::from(v))
-            .map_err(|e| ConfigError::deser(p, e))?;
+            .map_err(|e| ConfigError::deser(p.display(), e))?;
         let all_includes = Self::collect_included_configs(first_includes)?;
         for incl in all_includes {
-            fig = fig.admerge(figment::providers::Toml::file(&incl));
+            fig = fig.admerge(incl.into_provider());
         }
         let mut config: Config = fig.extract()?;
         config.finalize();
@@ -128,40 +147,42 @@ impl Config {
     }
 
     fn collect_included_configs(
-        mut to_check: VecDeque<PathBuf>,
-    ) -> Result<Vec<PathBuf>, ConfigError> {
+        mut to_check: VecDeque<IncludeSource>,
+    ) -> Result<Vec<IncludeSource>, ConfigError> {
         let mut paths_out = vec![];
         loop {
-            let next_file = match to_check.pop_front() {
+            let next_source = match to_check.pop_front() {
                 Some(p) => p,
                 None => break,
             };
 
-            let s = Self::read_file(&next_file)?;
+            let s = match &next_source {
+                IncludeSource::Path(path) => Cow::Owned(read_file(path)?),
+                IncludeSource::Standard => Cow::Borrowed(STANDARD_TCCON_TOML),
+                IncludeSource::Extended => todo!(),
+            };
+
             let includes = Self::get_includes_from_config_str(&s)
-                .map_err(|e| ConfigError::deser(&next_file, e))?;
+                .map_err(|e| ConfigError::deser(&next_source, e))?;
             // We add the includes in reverse order so that they come off the
             // front in the order that they were in the config. This also ensures
             // that we do a depth-first recursion.
             for incl in includes.into_iter().rev() {
                 to_check.push_front(incl);
             }
-            paths_out.push(next_file);
+            paths_out.push(next_source);
         }
         Ok(paths_out)
     }
 
-    fn get_includes_from_config_str(s: &str) -> Result<Vec<PathBuf>, toml::de::Error> {
+    fn get_includes_from_config_str(s: &str) -> Result<Vec<IncludeSource>, toml::de::Error> {
         let includes: IncludesConfig = toml::from_str(&s)?;
-        Ok(includes.include)
-    }
-
-    fn read_file(p: &Path) -> Result<String, ConfigError> {
-        let mut f = std::fs::File::open(p).map_err(|e| ConfigError::io(p, e))?;
-        let mut buf = String::new();
-        f.read_to_string(&mut buf)
-            .map_err(|e| ConfigError::io(p, e))?;
-        Ok(buf)
+        let sources = includes
+            .include
+            .into_iter()
+            .map(|s| IncludeSource::from_str(&s).unwrap())
+            .collect_vec();
+        Ok(sources)
     }
 
     fn finalize(&mut self) {
@@ -194,6 +215,7 @@ impl Default for Config {
             xgas: Default::default(),
             discovery: Default::default(),
             defaults: Default::default(),
+            include: Default::default(),
         };
         me.finalize();
         me
@@ -203,7 +225,7 @@ impl Default for Config {
 #[derive(Debug, Deserialize)]
 struct IncludesConfig {
     #[serde(default)]
-    include: Vec<PathBuf>,
+    include: Vec<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -239,6 +261,52 @@ impl Default for DefaultsConfig {
             disable_all: false,
         }
     }
+}
+
+enum IncludeSource {
+    Path(PathBuf),
+    Standard,
+    Extended,
+}
+
+impl FromStr for IncludeSource {
+    type Err = Infallible;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "TCCON_STANDARD" => Ok(Self::Standard),
+            "TCCON_EXTENDED" => Ok(Self::Extended),
+            _ => Ok(Self::Path(PathBuf::from(s))),
+        }
+    }
+}
+
+impl Display for IncludeSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            IncludeSource::Path(p) => write!(f, "{}", p.display()),
+            IncludeSource::Standard => write!(f, "TCCON standard config"),
+            IncludeSource::Extended => write!(f, "TCCON extended config"),
+        }
+    }
+}
+
+impl IncludeSource {
+    fn into_provider(self) -> figment::providers::Data<figment::providers::Toml> {
+        match self {
+            IncludeSource::Path(p) => figment::providers::Toml::file(p),
+            IncludeSource::Standard => figment::providers::Toml::string(STANDARD_TCCON_TOML),
+            IncludeSource::Extended => todo!(),
+        }
+    }
+}
+
+fn read_file(p: &Path) -> Result<String, ConfigError> {
+    let mut f = std::fs::File::open(p).map_err(|e| ConfigError::io(p, e))?;
+    let mut buf = String::new();
+    f.read_to_string(&mut buf)
+        .map_err(|e| ConfigError::io(p, e))?;
+    Ok(buf)
 }
 
 /// Helper function for serde default attributes

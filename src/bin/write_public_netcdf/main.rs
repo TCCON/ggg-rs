@@ -5,7 +5,7 @@ use std::{
 
 use clap::Parser;
 use clap_verbosity_flag::{InfoLevel, Verbosity};
-use config::{Config, ConfigError, STANDARD_TCCON_TOML};
+use config::{Config, ConfigError, EXTENDED_TCCON_TOML, STANDARD_TCCON_TOML};
 use constants::TIME_DIM_NAME;
 use copying::{AuxVarCopy, ComputedVariable, CopySet, Subsetter, XgasCopy};
 use discovery::discover_xgas_vars;
@@ -31,6 +31,7 @@ mod template_strings;
 //      4c. Add rename option to Xgas discovery [x - tentative]
 //      4d. Make a subset of the ancillary variable specs allowed for Xgas discovery, and From<THAT> for the regular ancillary spec [x - tentative]
 //      4e. Use https://docs.rs/figment/latest/figment/ to handle merging configurations.
+//      4f. Make the inferred AK names include suffixes or however we choose to distinguish the mid-IR gases' AKs
 //   5. Data latency
 //   6. Global attributes
 
@@ -52,12 +53,19 @@ fn driver(clargs: Cli) -> error_stack::Result<(), CliError> {
     let config =
         load_config(clargs.extended, clargs.config).change_context(CliError::ReadingConfig)?;
 
-    let private_ds =
-        netcdf::open(&clargs.private_nc_file).change_context(CliError::OpeningPrivateFile)?;
+    if clargs.check_config_only {
+        println!("Loaded configuration:\n{config:#?}");
+        return Ok(());
+    }
+
+    let private_nc_file = clargs
+        .private_nc_file
+        .expect("If --check-config-only not given, a private netCDF file must be given");
+    let private_ds = netcdf::open(&private_nc_file).change_context(CliError::OpeningPrivateFile)?;
 
     // TODO: time subsetter needs to account for data latency
     let time_subsetter = make_time_subsetter(&private_ds)?;
-    let private_file_name = &clargs.private_nc_file;
+    let private_file_name = &private_nc_file;
     let public_file_name = if clargs.no_rename_by_dates {
         make_public_name_from_stem(private_file_name)?
     } else {
@@ -77,7 +85,8 @@ fn driver(clargs: Cli) -> error_stack::Result<(), CliError> {
 #[derive(Debug, clap::Parser)]
 struct Cli {
     /// The private netCDF file to copy.
-    private_nc_file: PathBuf,
+    #[clap(required_unless_present("check_config_only"))]
+    private_nc_file: Option<PathBuf>,
 
     /// Run using the default configuration for the extended
     /// TCCON public files, which include Xgas values from the
@@ -93,6 +102,12 @@ struct Cli {
     /// data retained after flagging and data latency.
     #[clap(long)]
     no_rename_by_dates: bool,
+
+    /// Will attempt to parse the selected configuration and print
+    /// a debugging representation to stdout, then stop without
+    /// creating a netCDF file.
+    #[clap(long)]
+    check_config_only: bool,
 
     // config_file: Option<PathBuf>,
     #[command(flatten)]
@@ -125,7 +140,7 @@ enum CliError {
 
 fn load_config(extended: bool, custom_file: Option<PathBuf>) -> Result<Config, ConfigError> {
     match (extended, custom_file) {
-        (true, None) => todo!(),
+        (true, None) => Config::from_toml_str(EXTENDED_TCCON_TOML),
         (true, Some(_)) => panic!(
             "invalid combination of arguments: --extended and --config cannot be used together"
         ),
