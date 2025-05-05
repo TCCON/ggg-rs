@@ -1,3 +1,4 @@
+use chrono::NaiveDate;
 use compute_helpers::add_geos_version_variable;
 use error_stack::ResultExt;
 use ggg_rs::{nc_utils::NcArray, units::dmf_long_name};
@@ -125,6 +126,22 @@ impl Subsetter {
             .filter_map(|(i, &f)| if f == 0 { Some(i) } else { None });
         let keep_inds = Vec::from_iter(it);
         Self { keep_inds }
+    }
+
+    pub(crate) fn add_cutoff_date(&mut self, nc_times: ArrayView1<f64>, end_date: NaiveDate) {
+        let end_datetime = end_date.and_hms_opt(0, 0, 0).unwrap();
+        let end_timestamp = end_datetime.and_utc().timestamp() as f64;
+        let had_data = !self.keep_inds.is_empty();
+
+        self.keep_inds.retain(|&i| {
+            let t = nc_times.get(i)
+                .expect(&format!("Tried to get index {i} of the netCDF times, but this was beyond the end of the times array."));
+            *t < end_timestamp
+        });
+
+        if self.keep_inds.is_empty() && had_data {
+            log::warn!("No data present after data end date, {end_date}. Reduce the data latency days or move the data latency date forward to have public data.");
+        }
     }
 
     pub(crate) fn len(&self) -> usize {

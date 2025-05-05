@@ -1,8 +1,15 @@
+use std::{io::Read, path::Path};
+
+use indexmap::IndexMap;
 use interp::interp_slice;
 use itertools::Itertools;
 use ndarray::{Array1, Array2, ArrayD, ArrayView1, ArrayView2};
-use netcdf::{types::{FloatType, IntType}, Extents};
+use netcdf::{
+    types::{FloatType, IntType},
+    Extents,
+};
 use num_traits::Zero;
+use serde::{de::Error, Deserialize};
 
 use crate::{units::dmf_conv_factor, utils::GggError};
 
@@ -25,7 +32,7 @@ pub enum NcArray {
 
 impl NcArray {
     /// Retrieve data from a netCDF variable and construct the appropriate variant.
-    /// 
+    ///
     /// # Panics
     /// Compound, opaque, enum, and variable length types are not supported, and
     /// may never be, due to their rarity.
@@ -33,61 +40,61 @@ impl NcArray {
         match var.vartype() {
             netcdf::types::NcVariableType::Compound(_) => {
                 unimplemented!("reading netCDF Compound types as a generic array")
-            },
+            }
             netcdf::types::NcVariableType::Opaque(_) => {
                 unimplemented!("reading netCDF Opaque types as a generic array")
-            },
+            }
             netcdf::types::NcVariableType::Enum(_) => {
                 unimplemented!("reading netCDF Enum types as a generic array")
-            },
+            }
             netcdf::types::NcVariableType::Vlen(_) => {
                 unimplemented!("reading netCDF variable length types as a generic array")
-            },
+            }
             netcdf::types::NcVariableType::String => todo!(),
             netcdf::types::NcVariableType::Int(IntType::I8) => {
                 let values = var.get::<i8, _>(Extents::All)?;
                 Ok(Self::I8(values))
-            },
+            }
             netcdf::types::NcVariableType::Int(IntType::I16) => {
                 let values = var.get::<i16, _>(Extents::All)?;
                 Ok(Self::I16(values))
-            },
+            }
             netcdf::types::NcVariableType::Int(IntType::I32) => {
                 let values = var.get::<i32, _>(Extents::All)?;
                 Ok(Self::I32(values))
-            },
+            }
             netcdf::types::NcVariableType::Int(IntType::I64) => {
                 let values = var.get::<i64, _>(Extents::All)?;
                 Ok(Self::I64(values))
-            },
+            }
             netcdf::types::NcVariableType::Int(IntType::U8) => {
                 let values = var.get::<u8, _>(Extents::All)?;
                 Ok(Self::U8(values))
-            },
+            }
             netcdf::types::NcVariableType::Int(IntType::U16) => {
                 let values = var.get::<u16, _>(Extents::All)?;
                 Ok(Self::U16(values))
-            },
+            }
             netcdf::types::NcVariableType::Int(IntType::U32) => {
                 let values = var.get::<u32, _>(Extents::All)?;
                 Ok(Self::U32(values))
-            },
+            }
             netcdf::types::NcVariableType::Int(IntType::U64) => {
                 let values = var.get::<u64, _>(Extents::All)?;
                 Ok(Self::U64(values))
-            },
+            }
             netcdf::types::NcVariableType::Float(FloatType::F32) => {
                 let values = var.get::<f32, _>(Extents::All)?;
                 Ok(Self::F32(values))
-            },
+            }
             netcdf::types::NcVariableType::Float(FloatType::F64) => {
                 let values = var.get::<f64, _>(Extents::All)?;
                 Ok(Self::F64(values))
-            },
+            }
             netcdf::types::NcVariableType::Char => {
                 let values = var.get::<u8, _>(Extents::All)?;
                 Ok(Self::Char(values))
-            },
+            }
         }
     }
 
@@ -95,63 +102,68 @@ impl NcArray {
     /// Since this writes data, if you need to set options on the variable
     /// that must be done pre-write (e.g., compression), you must match
     /// on this enum's variants and create the variable yourself (for now at least).
-    pub fn put_to<'g>(&self, grp: &'g mut netcdf::GroupMut, name: &str, dims: &[&str]) -> netcdf::Result<netcdf::VariableMut<'g>> {
+    pub fn put_to<'g>(
+        &self,
+        grp: &'g mut netcdf::GroupMut,
+        name: &str,
+        dims: &[&str],
+    ) -> netcdf::Result<netcdf::VariableMut<'g>> {
         match self {
             NcArray::I8(arr) => {
                 let mut var = grp.add_variable::<i8>(name, dims)?;
                 var.put(arr.view(), Extents::All)?;
                 Ok(var)
-            },
+            }
             NcArray::I16(arr) => {
                 let mut var = grp.add_variable::<i16>(name, dims)?;
                 var.put(arr.view(), Extents::All)?;
                 Ok(var)
-            },
+            }
             NcArray::I32(arr) => {
                 let mut var = grp.add_variable::<i32>(name, dims)?;
                 var.put(arr.view(), Extents::All)?;
                 Ok(var)
-            },
+            }
             NcArray::I64(arr) => {
                 let mut var = grp.add_variable::<i64>(name, dims)?;
                 var.put(arr.view(), Extents::All)?;
                 Ok(var)
-            },
+            }
             NcArray::U8(arr) => {
                 let mut var = grp.add_variable::<u8>(name, dims)?;
                 var.put(arr.view(), Extents::All)?;
                 Ok(var)
-            },
+            }
             NcArray::U16(arr) => {
                 let mut var = grp.add_variable::<u16>(name, dims)?;
                 var.put(arr.view(), Extents::All)?;
                 Ok(var)
-            },
+            }
             NcArray::U32(arr) => {
                 let mut var = grp.add_variable::<u32>(name, dims)?;
                 var.put(arr.view(), Extents::All)?;
                 Ok(var)
-            },
+            }
             NcArray::U64(arr) => {
                 let mut var = grp.add_variable::<u64>(name, dims)?;
                 var.put(arr.view(), Extents::All)?;
                 Ok(var)
-            },
+            }
             NcArray::F32(arr) => {
                 let mut var = grp.add_variable::<f32>(name, dims)?;
                 var.put(arr.view(), Extents::All)?;
                 Ok(var)
-            },
+            }
             NcArray::F64(arr) => {
                 let mut var = grp.add_variable::<f64>(name, dims)?;
                 var.put(arr.view(), Extents::All)?;
                 Ok(var)
-            },
+            }
             NcArray::Char(arr) => {
                 let mut var = grp.add_variable::<u8>(name, dims)?;
                 var.put(arr.view(), Extents::All)?;
                 Ok(var)
-            },
+            }
         }
     }
 }
@@ -171,7 +183,7 @@ pub fn expand_priors<T: Zero + Copy>(
         if index >= compact_priors.nrows() {
             return Err(GggError::custom(format!(
                 "Prior index {index} at position {itime} is out-of-bounds"
-            )))
+            )));
         }
         // .row() panics if the index is out of bounds, hence the check above
         let orig_prof = compact_priors.row(index);
@@ -198,19 +210,32 @@ pub fn expand_slant_xgas_binned_aks(
     let slant_xgas_bins = if xgas_units == bin_units {
         slant_xgas_bins
     } else {
-        let cf = dmf_conv_factor(bin_units, xgas_units)
-            .map_err(|e| GggError::custom(format!("Error converting AK slant Xgas bins to proper unit: {e}")))?;
+        let cf = dmf_conv_factor(bin_units, xgas_units).map_err(|e| {
+            GggError::custom(format!(
+                "Error converting AK slant Xgas bins to proper unit: {e}"
+            ))
+        })?;
         slant_xgas_bins * cf
     };
     let slant_xgas_bins = slant_xgas_bins.as_standard_layout();
 
     let (min_bin, max_bin) = match slant_xgas_bins.iter().minmax() {
-        itertools::MinMaxResult::NoElements => return Err(GggError::custom("slant_xgas_bins should not have zero elements")),
+        itertools::MinMaxResult::NoElements => {
+            return Err(GggError::custom(
+                "slant_xgas_bins should not have zero elements",
+            ))
+        }
         itertools::MinMaxResult::OneElement(&v) => (v, v),
         itertools::MinMaxResult::MinMax(&v1, &v2) => (v1, v2),
     };
 
-    let (slant_xgas_values, extrap_flags) = compute_quantized_slant_xgas(slant_xgas_values, min_extrap_slant, min_bin, max_bin, nsamples);
+    let (slant_xgas_values, extrap_flags) = compute_quantized_slant_xgas(
+        slant_xgas_values,
+        min_extrap_slant,
+        min_bin,
+        max_bin,
+        nsamples,
+    );
 
     // Assume that the AKs have altitude as the first dimension.
     let nlev = aks.dim().0;
@@ -221,23 +246,34 @@ pub fn expand_slant_xgas_binned_aks(
     let slant_xgas_bins_slice = slant_xgas_bins.as_slice()
         .expect("Should be able to take a slice of slant_xgas_bins, as we convert to standard layout at the start of the function");
     let slant_xgas_values_slice = slant_xgas_values.as_standard_layout();
-    let slant_xgas_values_slice = slant_xgas_values_slice.as_slice()
-        .expect("Should be able to take a slice of slant_xgas_value, as we convert to standard layout");
+    let slant_xgas_values_slice = slant_xgas_values_slice.as_slice().expect(
+        "Should be able to take a slice of slant_xgas_value, as we convert to standard layout",
+    );
     for i in 0..nlev {
         let ak_row_in = aks.row(i);
         let ak_row_in = ak_row_in.as_standard_layout();
-        let ak_row_in = ak_row_in.as_slice()
-            .expect("Should be able to convert an AK row to a slice, as we convert to standard layout");
-        let ak_interp = interp_slice(slant_xgas_bins_slice, ak_row_in, slant_xgas_values_slice, &interp::InterpMode::Extrapolate);
+        let ak_row_in = ak_row_in.as_slice().expect(
+            "Should be able to convert an AK row to a slice, as we convert to standard layout",
+        );
+        let ak_interp = interp_slice(
+            slant_xgas_bins_slice,
+            ak_row_in,
+            slant_xgas_values_slice,
+            &interp::InterpMode::Extrapolate,
+        );
         let ak_interp = Array1::from_vec(ak_interp);
         aks_out.column_mut(i).assign(&ak_interp);
     }
     Ok((aks_out, extrap_flags))
-
 }
 
-fn compute_quantized_slant_xgas(slant_xgas_values: ArrayView1<f32>, min_extrap_slant: f32, min_interp_slant: f32, max_interp_slant: f32, nsamples: Option<usize>)
--> (Array1<f32>, Array1<i8>) {
+fn compute_quantized_slant_xgas(
+    slant_xgas_values: ArrayView1<f32>,
+    min_extrap_slant: f32,
+    min_interp_slant: f32,
+    max_interp_slant: f32,
+    nsamples: Option<usize>,
+) -> (Array1<f32>, Array1<i8>) {
     let mut quant_slant = Array1::<f32>::zeros([slant_xgas_values.len()]);
     let mut extrap_flags = Array1::<i8>::zeros([slant_xgas_values.len()]);
 
@@ -269,7 +305,7 @@ fn compute_quantized_slant_xgas(slant_xgas_values: ArrayView1<f32>, min_extrap_s
             }
         }
     }
-    
+
     (quant_slant, extrap_flags)
 }
 
@@ -278,7 +314,42 @@ fn quantize(v: f32, minval: f32, maxval: f32, n: f32) -> f32 {
     let vn = (v - minval) / (maxval - minval);
     let vn = vn.clamp(0.0, 1.0);
     // Round to one of n values in [0, 1)
-    let vi = (vn * (n - 1.0)).round() / (n - 1.0); 
+    let vi = (vn * (n - 1.0)).round() / (n - 1.0);
     // Restore original magnitude
     vi * (maxval - minval) + minval
+}
+
+// ---------------- //
+// Metadata helpers //
+// ---------------- //
+
+#[derive(Debug, Deserialize)]
+pub struct NcSiteMetadata {
+    pub long_name: String,
+    pub release_lag: u32,
+    pub location: String,
+    pub contact: String,
+    pub data_revision: String,
+    pub data_doi: Option<String>,
+    pub data_reference: Option<String>,
+    pub site_reference: Option<String>,
+}
+
+pub fn read_nc_site_metadata(
+    site_info_file: &Path,
+) -> Result<IndexMap<String, NcSiteMetadata>, toml::de::Error> {
+    let mut f = std::fs::File::open(site_info_file).map_err(|e| {
+        toml::de::Error::custom(format!(
+            "Error opening metadata file, {}: {e}",
+            site_info_file.display()
+        ))
+    })?;
+    let mut buf = String::new();
+    f.read_to_string(&mut buf).map_err(|e| {
+        toml::de::Error::custom(format!(
+            "Error reading the contents of metadata file {}: {e}",
+            site_info_file.display()
+        ))
+    })?;
+    toml::from_str(&buf)
 }
