@@ -167,10 +167,10 @@ The TCCON standard configurations use this to reuse the standard configuration (
 normal computer variables, and Xgas values from the InGaAs detector) in the extended configuration (which adds the
 InSb or Si Xgas values).</p>
 <p>To use another configuration file, use the <code>include</code> key:</p>
-<pre><code class="language-toml">include = ["base_config.toml"]
+<pre><code class="language-toml #notest">include = ["base_config.toml"]
 </code></pre>
 <p>This is a list, so you can include multiple files:</p>
-<pre><code class="language-toml">include = ["base_config.toml", "extra_aux.toml"]
+<pre><code class="language-toml #notest">include = ["base_config.toml", "extra_aux.toml"]
 </code></pre>
 <div id="admonition-info" class="admonition admonish-info" role="note" aria-labelledby="admonition-info-title">
 <div class="admonition-title">
@@ -201,15 +201,15 @@ and scalar values will be taken from the first configuration that defines them.
 of <code>file2.toml</code> and <code>file3.toml</code>.
 When files include more than one other file, the algorithm does a "depth-first" ordering.
 That is, if our top-level configuration has:</p>
-<pre><code class="language-toml"># top.toml
+<pre><code class="language-toml #notest"># top.toml
 include = ["middle1.toml", "middle2.toml"]
 </code></pre>
 <p><code>middle1.toml</code> has:</p>
-<pre><code class="language-toml"># middle1.toml
+<pre><code class="language-toml #notest"># middle1.toml
 include = ["bottom1a.toml", "bottom1b.toml"]
 </code></pre>
 <p>and <code>middle2.toml</code> has:</p>
-<pre><code class="language-toml"># middle2.toml
+<pre><code class="language-toml #notest"># middle2.toml
 include = ["bottom2a.toml", "bottom2b.toml"]
 </code></pre>
 <p>then the order in which the files are added to the configuration is:</p>
@@ -248,7 +248,7 @@ files copied into it.</p>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
-                            <a rel="prev" href="../../postproc/write_public_netcdf/gas_proper_names.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                            <a rel="prev" href="../../postproc/write_public_netcdf/global_attributes.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                                 <i class="fa fa-angle-left"></i>
                             </a>
 
@@ -262,7 +262,7 @@ files copied into it.</p>
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
-                    <a rel="prev" href="../../postproc/write_public_netcdf/gas_proper_names.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                    <a rel="prev" href="../../postproc/write_public_netcdf/global_attributes.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                         <i class="fa fa-angle-left"></i>
                     </a>
 

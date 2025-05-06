@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>Other utility programs - GGG-RS User Guide</title>
+        <title>Site metadata file - GGG-RS User Guide</title>
 
 
         <!-- Custom HTML head -->
@@ -12,34 +12,34 @@
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <meta name="theme-color" content="#ffffff">
 
-        <link rel="icon" href="favicon.svg">
-        <link rel="shortcut icon" href="favicon.png">
-        <link rel="stylesheet" href="css/variables.css">
-        <link rel="stylesheet" href="css/general.css">
-        <link rel="stylesheet" href="css/chrome.css">
-        <link rel="stylesheet" href="css/print.css" media="print">
+        <link rel="icon" href="../../favicon.svg">
+        <link rel="shortcut icon" href="../../favicon.png">
+        <link rel="stylesheet" href="../../css/variables.css">
+        <link rel="stylesheet" href="../../css/general.css">
+        <link rel="stylesheet" href="../../css/chrome.css">
+        <link rel="stylesheet" href="../../css/print.css" media="print">
 
         <!-- Fonts -->
-        <link rel="stylesheet" href="FontAwesome/css/font-awesome.css">
-        <link rel="stylesheet" href="fonts/fonts.css">
+        <link rel="stylesheet" href="../../FontAwesome/css/font-awesome.css">
+        <link rel="stylesheet" href="../../fonts/fonts.css">
 
         <!-- Highlight.js Stylesheets -->
-        <link rel="stylesheet" id="highlight-css" href="highlight.css">
-        <link rel="stylesheet" id="tomorrow-night-css" href="tomorrow-night.css">
-        <link rel="stylesheet" id="ayu-highlight-css" href="ayu-highlight.css">
+        <link rel="stylesheet" id="highlight-css" href="../../highlight.css">
+        <link rel="stylesheet" id="tomorrow-night-css" href="../../tomorrow-night.css">
+        <link rel="stylesheet" id="ayu-highlight-css" href="../../ayu-highlight.css">
 
         <!-- Custom theme stylesheets -->
-        <link rel="stylesheet" href="./mdbook-admonish.css">
+        <link rel="stylesheet" href="../.././mdbook-admonish.css">
 
 
         <!-- Provide site root and default themes to javascript -->
         <script>
-            const path_to_root = "";
+            const path_to_root = "../../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc.js"></script>
+        <script src="../../toc.js"></script>
     </head>
     <body>
     <div id="body-container">
@@ -92,7 +92,7 @@
             <!-- populated by js -->
             <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
             <noscript>
-                <iframe class="sidebar-iframe-outer" src="toc.html"></iframe>
+                <iframe class="sidebar-iframe-outer" src="../../toc.html"></iframe>
             </noscript>
             <div id="sidebar-resize-handle" class="sidebar-resize-handle">
                 <div class="sidebar-resize-indicator"></div>
@@ -127,7 +127,7 @@
                     <h1 class="menu-title">GGG-RS User Guide</h1>
 
                     <div class="right-buttons">
-                        <a href="print.html" title="Print this book" aria-label="Print this book">
+                        <a href="../../print.html" title="Print this book" aria-label="Print this book">
                             <i id="print-button" class="fa fa-print"></i>
                         </a>
                         <a href="https://github.com/TCCON/ggg-rs" title="Git repository" aria-label="Git repository">
@@ -159,17 +159,63 @@
 
                 <div id="content" class="content">
                     <main>
-                        <h1 id="other-utility-programs"><a class="header" href="#other-utility-programs">Other utility programs</a></h1>
+                        <h1 id="site-metadata-file"><a class="header" href="#site-metadata-file">Site metadata file</a></h1>
+<p><code>write_public_netcdf</code> can take the data latency/release lag from a TOML file that specifies site metadata.
+There is an example for the standard TCCON sites <a href="https://github.com/TCCON/ggg-rs/blob/main/src/etc/site_info.toml">in the repo</a>.
+This file must have top-level keys that match site two-character IDs, each containing a number of metadata values.
+For example:</p>
+<pre><code class="language-toml #notest">[pa]
+long_name = "parkfalls01"
+release_lag = 120
+location = "Park Falls, Wisconsin, USA"
+contact = "Paul Wennberg &lt;wennberg@gps.caltech.edu&gt;"
+data_revision = "R1"
+data_doi = "10.14291/tccon.ggg2014.parkfalls01.R1"
+data_reference = "Wennberg, P. O., C. Roehl, D. Wunch, G. C. Toon, J.-F. Blavier, R. Washenfelder, G. Keppel-Aleks, N. Allen, J. Ayers. 2017. TCCON data from Park Falls, Wisconsin, USA, Release GGG2014R1. TCCON data archive, hosted by CaltechDATA, California Institute of Technology, Pasadena, CA, U.S.A. http://doi.org/10.14291/tccon.ggg2014.parkfalls01.R1"
+site_reference = "Washenfelder, R. A., G. C. Toon, J.-F. L. Blavier, Z. Yang, N. T. Allen, P. O. Wennberg, S. A. Vay, D. M. Matross, and B. C. Daube (2006), Carbon dioxide column abundances at the Wisconsin Tall Tower site, Journal of Geophysical Research, 111(D22), 1-11, doi:10.1029/2006JD007154. Available from: https://www.agu.org/pubs/crossref/2006/2006JD007154.shtml"
+
+[oc]
+long_name = "lamont01"
+release_lag = 120
+location = "Lamont, Oklahoma, USA"
+contact = "Paul Wennberg &lt;wennberg@gps.caltech.edu&gt;"
+data_revision = "R1"
+data_doi = "10.14291/tccon.ggg2014.lamont01.R1/1255070"
+data_reference = "Wennberg, P. O., D. Wunch, C. Roehl, J.-F. Blavier, G. C. Toon, N. Allen, P. Dowell, K. Teske, C. Martin, J. Martin. 2017. TCCON data from Lamont, Oklahoma, USA, Release GGG2014R1. TCCON data archive, hosted by CaltechDATA, California Institute of Technology, Pasadena, CA, U.S.A. https://doi.org/10.14291/tccon.ggg2014.lamont01.R1/1255070"
+site_reference = ""
+</code></pre>
+<p>Although the public netCDF writer only uses <code>release_lag</code>, each site <em>must</em> contain the following keys for this file to be valid:</p>
+<ul>
+<li><code>long_name</code>: the site's location readable name followed by a two-digit number indicating which instrument at that site this is.</li>
+<li><code>release_lag</code>: an integer &gt;= 0 specifying how many days after acquisition data should be kept private.
+TCCON sites are not permitted to set this &gt;366, as data delivery to the public archive within one year is a network requirement.</li>
+<li><code>location</code>: a description of the location where the instrument resides.
+This is usually "city, state/province/country", but can include things such as institution if desired.</li>
+<li><code>contact</code>: the name and email address, formatted as <code>NAME &lt;EMAIL&gt;</code> of the person users should contact with questions or concern about this site's data.</li>
+<li><code>data_revision</code>: an "R" followed by a number &gt;= 0 indicating which iteration of GGG2020 reprocessing this data represents.
+This should be incremented whenever previously public data was reprocessed to fix an error.</li>
+</ul>
+<p>The following keys may be provided, but are not required:</p>
+<ul>
+<li><code>data_doi</code>: A digital object identifier that points to the public data for this site.
+This should be included if possible; it is optional only so that public files can be created before the first time a DOI is minted.</li>
+<li><code>data_reference</code>: A reference to a persistent repository where the data can be downloaded.
+For TCCON sites, this will be CaltechData.
+For other instruments, this may vary for now.</li>
+<li><code>site_reference</code>: A reference to a publication describing the site location itself (as opposed to the data).</li>
+</ul>
+<p>TCCON sites can find the most up-to-date versions of their values for this metadata at https://tccondata.org/metadata/siteinfo/.
+Other users should do their best to ensure that the above conventions are followed.</p>
 
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
-                            <a rel="prev" href="postproc/write_public_netcdf/site_metadata.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                            <a rel="prev" href="../../postproc/write_public_netcdf/debugging_tips.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                                 <i class="fa fa-angle-left"></i>
                             </a>
 
-                            <a rel="next prefetch" href="other/bin2nc.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                            <a rel="next prefetch" href="../../other_utils.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                                 <i class="fa fa-angle-right"></i>
                             </a>
 
@@ -179,11 +225,11 @@
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
-                    <a rel="prev" href="postproc/write_public_netcdf/site_metadata.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                    <a rel="prev" href="../../postproc/write_public_netcdf/debugging_tips.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                         <i class="fa fa-angle-left"></i>
                     </a>
 
-                    <a rel="next prefetch" href="other/bin2nc.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                    <a rel="next prefetch" href="../../other_utils.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                         <i class="fa fa-angle-right"></i>
                     </a>
             </nav>
@@ -198,13 +244,13 @@
         </script>
 
 
-        <script src="elasticlunr.min.js"></script>
-        <script src="mark.min.js"></script>
-        <script src="searcher.js"></script>
+        <script src="../../elasticlunr.min.js"></script>
+        <script src="../../mark.min.js"></script>
+        <script src="../../searcher.js"></script>
 
-        <script src="clipboard.min.js"></script>
-        <script src="highlight.js"></script>
-        <script src="book.js"></script>
+        <script src="../../clipboard.min.js"></script>
+        <script src="../../highlight.js"></script>
+        <script src="../../book.js"></script>
 
         <!-- Custom JS scripts -->
 

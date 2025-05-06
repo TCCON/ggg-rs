@@ -166,9 +166,24 @@ This includes:</p>
 <ul>
 <li>limiting the variables to the most useful,</li>
 <li>removing <code>flag != 0</code> data,</li>
-<li>limiting the data in the file based on the desired data latency, and</li>
+<li>optionally limiting the data in the file based on the desired data latency, and</li>
 <li>expanding the averaging kernels and prior profiles to be one-per-spectrum.</li>
 </ul>
+<div id="admonition-warning" class="admonition admonish-warning" role="note" aria-labelledby="admonition-warning-title">
+<div class="admonition-title">
+<div id="admonition-warning-title">
+<p>Warning</p>
+</div>
+<a class="admonition-anchor-link" href="#admonition-warning"></a>
+</div>
+<div>
+<p>If you previously used the Python netCDF writer, you may be used to it defaulting to respecting a data latency (a.k.a. release lag)
+defined in a site information JSON file.
+This version of the netCDF writer defaults to no data latency; that is, it assumes that you want to include all data from the given
+private file in the new public file.
+See the examples below for how to apply a data latency to withhold the newest data from the public file.</p>
+</div>
+</div>
 <h2 id="examples"><a class="header" href="#examples">Examples</a></h2>
 <p>The simplest use will convert the <code>PRIVATE_NC_FILE</code> into a public format file.
 This assumes that the <code>PRIVATE_NC_FILE</code> filename begins with the two-character site ID for your site.
@@ -187,6 +202,14 @@ To use the extended TCCON configuration (which will include gases from the secon
 <pre><code class="language-bash">$GGGPATH/bin/write_public_netcdf --config CUSTOM_CONFIG.toml PRIVATE_NC_FILE
 </code></pre>
 <p>For information on the configuration file format, see <a href="/write_public_netcdf/configuration.html">its section of this book</a>.</p>
+<p>To withhold the newest data from the public file, you can use the <code>--data-latency-date</code> or <code>--data-latency-days</code> options
+to specify either a number of days in the past from today or a specific date after which to withhold data.</p>
+<pre><code class="language-bash">$GGGPATH/bin/write_public_netcdf --data-latency-date 2025-01-01 PRIVATE_NC_FILE
+$GGGPATH/bin/write_public_netcdf --data-latency-days 120 PRIVATE_NC_FILE
+</code></pre>
+<p>The first one will withhold data with a ZPD time after midnight UTC on 1 Jan 2025 from the public file.
+The second will withhold data with a ZPD time after midnight UTC 120 days ago from the public file:
+if run on 1 May 2025 (UTC), this would also have 1 Jan 2025 as the cutoff date.</p>
 <h2 id="use-in-tccon-standard-processing"><a class="header" href="#use-in-tccon-standard-processing">Use in TCCON standard processing</a></h2>
 <p>Individual TCCON sites <strong>should not need to use this program</strong> under normal circumstances.
 This program will be run at Caltech on the concatenated and quality controlled private netCDF files, and the resulting public netCDF files will be made available through <a href="https://tccondata.org">tccondata.org</a>.
