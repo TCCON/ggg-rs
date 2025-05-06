@@ -59,6 +59,25 @@ pub(super) fn get_string_attr(
     })
 }
 
+pub(super) fn get_root_string_attr(
+    file: &netcdf::File,
+    attr: &str,
+) -> error_stack::Result<String, CopyError> {
+    let res: Result<String, _> = file
+        .attribute(attr)
+        .ok_or_else(|| CopyError::missing_req_attr("/", attr))?
+        .value()
+        .change_context_lazy(|| {
+            CopyError::context(format!("could not read root attribute '{attr}'",))
+        })?
+        .try_into();
+    res.change_context_lazy(|| {
+        CopyError::context(format!(
+            "could not convert root attribute '{attr}' into a string"
+        ))
+    })
+}
+
 pub(super) fn find_subset_dim(var: &netcdf::Variable, dimname: &str) -> Option<usize> {
     var.dimensions()
         .iter()

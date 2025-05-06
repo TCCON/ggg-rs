@@ -8,7 +8,7 @@ use clap::Parser;
 use clap_verbosity_flag::{InfoLevel, Verbosity};
 use config::{Config, ConfigError, EXTENDED_TCCON_TOML, STANDARD_TCCON_TOML};
 use constants::TIME_DIM_NAME;
-use copying::{AuxVarCopy, ComputedVariable, CopySet, Subsetter, XgasCopy};
+use copying::{copy_attributes, AuxVarCopy, ComputedVariable, CopySet, Subsetter, XgasCopy};
 use discovery::discover_xgas_vars;
 use error_stack::ResultExt;
 use ggg_rs::{logging::init_logging, nc_utils, utils::nctime_to_datetime};
@@ -82,6 +82,7 @@ fn driver(clargs: Cli) -> error_stack::Result<(), CliError> {
     add_aux_vars(&config, &private_ds, &mut public_ds, &time_subsetter)?;
     add_computed_vars(&config, &private_ds, &mut public_ds, &time_subsetter)?;
     add_xgas_vars(&config, &private_ds, &mut public_ds, &time_subsetter)?;
+    add_global_attributes(&config, &private_ds, &mut public_ds)?;
     Ok(())
 }
 
@@ -231,6 +232,8 @@ enum CliError {
     WritingXgas,
     #[error("An error occurred while writing the computed variables to the public file")]
     WritingComputed,
+    #[error("An error occurred while writing the global attributes to the public file")]
+    WritingGlobalAttrs,
     #[error("{0}")]
     Custom(String),
 }
@@ -432,5 +435,15 @@ fn add_computed_vars(
             .change_context(CliError::WritingComputed)?;
     }
 
+    Ok(())
+}
+
+fn add_global_attributes(
+    config: &Config,
+    private_ds: &netcdf::File,
+    public_ds: &mut netcdf::FileMut,
+) -> error_stack::Result<(), CliError> {
+    let attrs = config.global_attributes.make_attr_list();
+    copy_attributes(private_ds, public_ds, &attrs).change_context(CliError::WritingGlobalAttrs)?;
     Ok(())
 }

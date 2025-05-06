@@ -11,11 +11,13 @@ use serde::{Deserialize, Deserializer};
 
 use crate::{
     config::default_attr_remove,
-    constants::{PRIOR_INDEX_VARNAME, TIME_DIM_NAME},
+    constants::{PRIOR_INDEX_VARNAME, PROGRAM_NAME, TIME_DIM_NAME},
     discovery::{AncillaryDiscoveryMethod, XgasMatchRule},
 };
 use copy_helpers::{copy_variable_general, copy_variable_new_data, copy_vmr_variable_from_dset};
-use copy_utils::{add_needed_dims, add_needed_new_dims, find_subset_dim, get_string_attr};
+use copy_utils::{
+    add_needed_dims, add_needed_new_dims, find_subset_dim, get_root_string_attr, get_string_attr,
+};
 use xgas_helpers::{
     convert_dmf_array, expand_prior_profiles_from_file, expand_slant_xgas_binned_aks_from_file,
     get_traceability_scale, write_extrapolation_flags,
@@ -937,6 +939,86 @@ impl CopySet for ComputedVariable {
             }
         }
     }
+}
+
+pub(crate) fn copy_attributes(
+    private_file: &netcdf::File,
+    public_file: &mut netcdf::FileMut,
+    attributes: &[CopyGlobalAttr],
+) -> error_stack::Result<(), CopyError> {
+    add_history_attr(private_file, public_file)?;
+    for attr in attributes {
+        attr.copy(private_file, public_file)?;
+    }
+    Ok(())
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub(crate) enum CopyGlobalAttr {
+    MustCopy { name: String },
+    CopyIfPresent { name: String },
+}
+
+impl CopyGlobalAttr {
+    fn copy(
+        &self,
+        private_file: &netcdf::File,
+        public_file: &mut netcdf::FileMut,
+    ) -> error_stack::Result<(), CopyError> {
+        let (attr_name, must_copy) = match self {
+            CopyGlobalAttr::MustCopy { name } => (name, true),
+            CopyGlobalAttr::CopyIfPresent { name } => (name, false),
+        };
+
+        let opt_attr = private_file.attribute(&attr_name);
+        if let Some(attr) = opt_attr {
+            let value = attr.value().change_context_lazy(|| {
+                CopyError::context(format!("reading global attribute {attr_name}"))
+            })?;
+
+            public_file
+                .add_attribute(&attr_name, value)
+                .change_context_lazy(|| {
+                    CopyError::context(format!("writing global attribute {attr_name}"))
+                })?;
+        } else if must_copy {
+            return Err(CopyError::missing_req_attr("/", attr_name).into());
+        }
+
+        Ok(())
+    }
+}
+
+fn add_history_attr(
+    private_file: &netcdf::File,
+    public_file: &mut netcdf::FileMut,
+) -> error_stack::Result<(), CopyError> {
+    let mut history = if private_file.attribute("history").is_none() {
+        "".to_string()
+    } else {
+        let mut s = get_root_string_attr(private_file, "history")?;
+        s.push('\n');
+        s
+    };
+
+    let priv_name = private_file
+        .path()
+        .change_context_lazy(|| CopyError::context("getting path to the private file"))?;
+    let priv_name = priv_name
+        .file_name()
+        .ok_or_else(|| CopyError::custom("Could not get file base name of the private file"))?
+        .to_string_lossy();
+    let program_version = env!("CARGO_PKG_VERSION");
+    let now = chrono::Utc::now();
+    history.push_str(&format!(
+        "{}: generated public file from private/engineering file {priv_name} with {PROGRAM_NAME} from GGG-RS v{program_version}",
+        now.format("%Y-%m-%d %H:%M:%S %Z")
+    ));
+    public_file
+        .add_attribute("history", history)
+        .change_context_lazy(|| CopyError::context("writing global attribute 'history'"))?;
+    Ok(())
 }
 
 // ---------------- //

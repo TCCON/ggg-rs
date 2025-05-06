@@ -66,3 +66,28 @@ traceability_scale = { type = "opt_inferred_if_first" }
 [discovery]
 excluded_gases = ["th2o", "fco2", "zco2"]
 excluded_xgas_variables = ["xo2"]
+
+[global_attributes]
+must_copy = [
+    "source",
+    "description",
+    "file_creation",
+    "title",
+    "data_use_policy",
+    "auxiliary_data_description",
+    "more_information",
+    "tccon_reference",
+    "contact",
+    "data_revision",
+    "file_format_information",
+    "algorithm_version",
+    "file_format_version",
+]
+copy_if_present = [
+    "long_name",
+    "location",
+    "data_doi",
+    "site_reference",
+    "data_reference",
+    "short_location",
+]

@@ -16,7 +16,7 @@ use serde::Deserialize;
 
 use crate::{
     constants::DEFAULT_GAS_LONG_NAMES,
-    copying::XgasAncillary,
+    copying::{CopyGlobalAttr, XgasAncillary},
     discovery::{AncillaryDiscoveryMethod, XgasMatchMethod, XgasMatchRule},
     AuxVarCopy, ComputedVariable, XgasCopy,
 };
@@ -83,6 +83,9 @@ pub(crate) struct Config {
 
     #[serde(default)]
     pub(crate) discovery: XgasDiscoveryConfig,
+
+    #[serde(default)]
+    pub(crate) global_attributes: AttributeConfig,
 
     /// Toggles for whether to add default values to each section.
     ///
@@ -211,6 +214,7 @@ impl Default for Config {
             gas_long_names: Default::default(),
             xgas: Default::default(),
             discovery: Default::default(),
+            global_attributes: Default::default(),
             defaults: Default::default(),
             include: Default::default(),
         };
@@ -234,6 +238,29 @@ pub(crate) struct XgasDiscoveryConfig {
     pub(crate) excluded_xgas_variables: Vec<String>,
     #[serde(default)]
     pub(crate) excluded_gases: Vec<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub(crate) struct AttributeConfig {
+    must_copy: Vec<String>,
+    copy_if_present: Vec<String>,
+}
+
+impl AttributeConfig {
+    pub(crate) fn make_attr_list(&self) -> Vec<CopyGlobalAttr> {
+        let mut attrs = vec![];
+        for name in self.must_copy.iter() {
+            attrs.push(CopyGlobalAttr::MustCopy {
+                name: name.to_string(),
+            });
+        }
+        for name in self.copy_if_present.iter() {
+            attrs.push(CopyGlobalAttr::CopyIfPresent {
+                name: name.to_string(),
+            });
+        }
+        attrs
+    }
 }
 
 #[derive(Debug, Deserialize, serde::Serialize)]

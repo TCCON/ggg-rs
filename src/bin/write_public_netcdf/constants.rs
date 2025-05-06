@@ -1,3 +1,4 @@
+pub(crate) static PROGRAM_NAME: &'static str = "write_public_netcdf";
 pub(crate) static TIME_DIM_NAME: &'static str = "time";
 pub(crate) static PRIOR_INDEX_VARNAME: &'static str = "prior_index";
 pub(crate) static DEFAULT_GAS_LONG_NAMES: &'static [(&'static str, &'static str)] = &[
