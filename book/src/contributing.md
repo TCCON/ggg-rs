@@ -54,11 +54,11 @@ If creating a pull request, please match the structure of the existing programs'
 
 When you encounter something that is not clear, please first try to figure it out yourself by following any
 examples and testing things out.
-If that section of the documentation links to external resources (e.g., the [TOML format](https://toml.io/en/),
+If that section of the documentation links to external resources (e.g., the [TOML format](https://toml.io/en/)),
 please review those resources as well.
 
 If something truly is unclear, then open an issue and do your best to explain what you were trying to accomplish
-and what you found difficult to undestand. 
+and what you found difficult to understand. 
 Explaining the overall task you were trying to accomplish, as well as the part of the documentation that you
 found unclear, will help us identify if this is an [XY problem](https://en.wikipedia.org/wiki/XY_problem), where
 the reason it was unclear is because there is a better solution to your task than the one you were trying to use.
