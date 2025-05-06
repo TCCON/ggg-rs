@@ -1,4 +1,7 @@
-use std::{fmt::Display, path::{Path, PathBuf}};
+use std::{
+    fmt::Display,
+    path::{Path, PathBuf},
+};
 
 #[derive(Debug, thiserror::Error)]
 pub enum NameError {
@@ -36,7 +39,9 @@ fn get_spectrum_names<P: AsRef<Path>>(paths: &[P]) -> Result<Vec<SortingSpec>, N
     let mut names = vec![];
 
     for path in paths {
-        let this_name = path.as_ref().file_name()
+        let this_name = path
+            .as_ref()
+            .file_name()
             .ok_or_else(|| NameError::NoBaseName(path.as_ref().to_path_buf()))?
             .to_str()
             .ok_or_else(|| NameError::NonUnicodeName(path.as_ref().to_path_buf()))?;
@@ -55,13 +60,19 @@ struct SortingSpec<'s> {
 
 impl<'s> SortingSpec<'s> {
     fn new(spectrum_name: &'s str) -> Result<Self, NameError> {
-        let (i, detector) = spectrum_name.char_indices().nth(15)
+        let (i, detector) = spectrum_name
+            .char_indices()
+            .nth(15)
             .ok_or_else(|| NameError::TooShort(spectrum_name.to_string()))?;
         // The detector should be an ASCII character, so we assume it is one byte in the string
         let head = &spectrum_name[..i];
-        let tail = &spectrum_name[i+1..];
+        let tail = &spectrum_name[i + 1..];
 
-        Ok(Self { head, detector, tail })
+        Ok(Self {
+            head,
+            detector,
+            tail,
+        })
     }
 }
 
@@ -73,16 +84,16 @@ impl<'s> Display for SortingSpec<'s> {
 
 impl<'s> PartialOrd for SortingSpec<'s> {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        match self.head.partial_cmp(&other.head) {
+        match self.head.partial_cmp(other.head) {
             Some(core::cmp::Ordering::Equal) => {}
             ord => return ord,
         }
 
-        match self.tail.partial_cmp(&other.tail) {
+        match self.tail.partial_cmp(other.tail) {
             Some(core::cmp::Ordering::Equal) => {}
             ord => return ord,
         }
-        
+
         self.detector.partial_cmp(&other.detector)
     }
 }
@@ -91,16 +102,16 @@ impl<'s> Ord for SortingSpec<'s> {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         // Because we're most often dealing with spectra from the same site, which
         // will have the same head, we can do a small optimization by comparing the
-        // tail first (which will be the run number). 
+        // tail first (which will be the run number).
 
         match self.tail.cmp(&other.tail) {
-            core::cmp::Ordering::Equal => {},
-            ord => return ord
+            core::cmp::Ordering::Equal => {}
+            ord => return ord,
         }
 
         match self.head.cmp(&other.head) {
-            core::cmp::Ordering::Equal => {},
-            ord => return ord
+            core::cmp::Ordering::Equal => {}
+            ord => return ord,
         }
 
         self.detector.cmp(&other.detector)

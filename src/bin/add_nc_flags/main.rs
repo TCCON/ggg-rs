@@ -1,7 +1,7 @@
 use std::{
     collections::HashMap,
     fmt::Display,
-    io::{BufRead, Read, Write},
+    io::{Read, Write},
     path::{Path, PathBuf},
     process::ExitCode,
     str::FromStr,
@@ -9,7 +9,6 @@ use std::{
 
 use clap::{Args, Parser, Subcommand};
 use error_stack::ResultExt;
-use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 
 #[cfg(test)]
