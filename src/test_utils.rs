@@ -86,7 +86,7 @@ where
             };
 
             if let Some(line) = opt_line {
-                if line.starts_with(&self.fence_start) {
+                if line.starts_with(&self.fence_start) && !line.contains("#notest") {
                     return Some(self.get_block(self.line_num));
                 }
             } else {

@@ -7,9 +7,16 @@ This includes:
 
 - limiting the variables to the most useful,
 - removing `flag != 0` data, 
-- limiting the data in the file based on the desired data latency, and
+- optionally limiting the data in the file based on the desired data latency, and
 - expanding the averaging kernels and prior profiles to be one-per-spectrum.
 
+```admonish warning
+If you previously used the Python netCDF writer, you may be used to it defaulting to respecting a data latency (a.k.a. release lag)
+defined in a site information JSON file.
+This version of the netCDF writer defaults to no data latency; that is, it assumes that you want to include all data from the given
+private file in the new public file.
+See the examples below for how to apply a data latency to withhold the newest data from the public file.
+```
 
 ## Examples
 
@@ -44,6 +51,18 @@ $GGGPATH/bin/write_public_netcdf --config CUSTOM_CONFIG.toml PRIVATE_NC_FILE
 ```
 
 For information on the configuration file format, see [its section of this book](/write_public_netcdf/configuration.html).
+
+To withhold the newest data from the public file, you can use the `--data-latency-date` or `--data-latency-days` options
+to specify either a number of days in the past from today or a specific date after which to withhold data.
+
+```bash
+$GGGPATH/bin/write_public_netcdf --data-latency-date 2025-01-01 PRIVATE_NC_FILE
+$GGGPATH/bin/write_public_netcdf --data-latency-days 120 PRIVATE_NC_FILE
+```
+
+The first one will withhold data with a ZPD time after midnight UTC on 1 Jan 2025 from the public file.
+The second will withhold data with a ZPD time after midnight UTC 120 days ago from the public file:
+if run on 1 May 2025 (UTC), this would also have 1 Jan 2025 as the cutoff date.
 
 ## Use in TCCON standard processing
 

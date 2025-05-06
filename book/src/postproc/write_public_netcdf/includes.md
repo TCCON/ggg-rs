@@ -9,13 +9,13 @@ InSb or Si Xgas values).
 
 To use another configuration file, use the `include` key:
 
-```toml
+```toml #notest
 include = ["base_config.toml"]
 ```
 
 This is a list, so you can include multiple files:
 
-```toml
+```toml #notest
 include = ["base_config.toml", "extra_aux.toml"]
 ```
 
@@ -45,21 +45,21 @@ of `file2.toml` and `file3.toml`.
 When files include more than one other file, the algorithm does a "depth-first" ordering.
 That is, if our top-level configuration has:
 
-```toml
+```toml #notest
 # top.toml
 include = ["middle1.toml", "middle2.toml"]
 ```
 
 `middle1.toml` has:
 
-```toml
+```toml #notest
 # middle1.toml
 include = ["bottom1a.toml", "bottom1b.toml"]
 ```
 
 and `middle2.toml` has:
 
-```toml
+```toml #notest
 # middle2.toml
 include = ["bottom2a.toml", "bottom2b.toml"]
 ```
