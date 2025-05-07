@@ -94,6 +94,10 @@ required-features = ["netcdf", "inprogress"]
 name = "write_public_netcdf"
 required-features = ["netcdf"]
 
+[[bin]]
+name = "create_ak_table"
+required-features = ["netcdf"]
+
 #[[bin]]
 #name = "plot_opus_spectra"
 #required-features = ["plotting"]
