@@ -1,4 +1,4 @@
-use std::{io::BufRead, path::{Path, PathBuf}};
+use std::{io::BufRead, path::Path};
 
 use error_stack::ResultExt;
 use itertools::Itertools;
@@ -15,12 +15,20 @@ pub(crate) enum ReadError {
     #[error("An averaging kernel table for {0} already exists in the output file")]
     ExistingAk(String),
     #[error("An error occurred while {0}")]
-    Context(String)
+    Context(String),
 }
 
 impl ReadError {
     fn context<C: ToString>(ctx: C) -> Self {
         Self::Context(ctx.to_string())
+    }
+
+    pub(crate) fn existing_ak_gas(&self) -> Option<&str> {
+        if let Self::ExistingAk(gas) = self {
+            Some(gas)
+        } else {
+            None
+        }
     }
 }
 
@@ -32,36 +40,74 @@ pub(crate) struct AkInfo {
     pub(crate) airmass: f64,
     pub(crate) z: f64,
     pub(crate) ak: f64,
-    pub(crate) p: f64
+    pub(crate) p: f64,
 }
 
 pub(crate) fn read_akall_file(path: &Path) -> error_stack::Result<Vec<AkInfo>, ReadError> {
-    let mut f = FileBuf::open(path)
-        .change_context_lazy(|| ReadError::context(format!("opening AK .all file, {}", path.display())))?;
-    let nhead = get_nhead(&mut f)
-        .change_context_lazy(|| ReadError::context(format!("getting the number of header lines in AK .all file, {}", path.display())))?;
+    let mut f = FileBuf::open(path).change_context_lazy(|| {
+        ReadError::context(format!("opening AK .all file, {}", path.display()))
+    })?;
+    let nhead = get_nhead(&mut f).change_context_lazy(|| {
+        ReadError::context(format!(
+            "getting the number of header lines in AK .all file, {}",
+            path.display()
+        ))
+    })?;
 
     // We're on the second line of the file, and we want to get to the last line to read the column names.
-    for _ in 1..nhead-1 {
-        f.read_header_line().change_context_lazy(|| ReadError::context(format!("reading header of AK .all file, {}", path.display())))?;
+    for _ in 1..nhead - 1 {
+        f.read_header_line().change_context_lazy(|| {
+            ReadError::context(format!(
+                "reading header of AK .all file, {}",
+                path.display()
+            ))
+        })?;
     }
-    let col_name_line = f.read_header_line().change_context_lazy(|| ReadError::context(format!("reading header of AK .all file, {}", path.display())))?;
+    let col_name_line = f.read_header_line().change_context_lazy(|| {
+        ReadError::context(format!(
+            "reading header of AK .all file, {}",
+            path.display()
+        ))
+    })?;
     let col_names = col_name_line.trim().split_whitespace().collect_vec();
     let mut aks = vec![];
     let mut iline = nhead;
     for line in f.lines() {
         iline += 1;
-        let line = line.change_context_lazy(|| ReadError::context(format!("reading line {iline} of AK .all file, {}", path.display())))?;
-        let this_ak_row: AkInfo = fortformat::from_str_with_fields(&line, &fortformat::FortFormat::ListDirected, &col_names)
-            .change_context_lazy(|| ReadError::context(format!("deserializing line {iline} of AK .all file, {}", path.display())))?;
+        let line = line.change_context_lazy(|| {
+            ReadError::context(format!(
+                "reading line {iline} of AK .all file, {}",
+                path.display()
+            ))
+        })?;
+        let mut this_ak_row: AkInfo = fortformat::from_str_with_fields(
+            &line,
+            &fortformat::FortFormat::ListDirected,
+            &col_names,
+        )
+        .change_context_lazy(|| {
+            ReadError::context(format!(
+                "deserializing line {iline} of AK .all file, {}",
+                path.display()
+            ))
+        })?;
+
+        // Converting atm to hPa
+        this_ak_row.p *= 1013.25;
         aks.push(this_ak_row);
     }
     Ok(aks)
 }
 
 pub(crate) fn gas_name_from_path(path: &Path) -> error_stack::Result<String, ReadError> {
-    let base_name = path.file_name()
-        .ok_or_else(|| ReadError::FileName(format!("Could not get the base name of input file, {}", path.display())))?
+    let base_name = path
+        .file_name()
+        .ok_or_else(|| {
+            ReadError::FileName(format!(
+                "Could not get the base name of input file, {}",
+                path.display()
+            ))
+        })?
         .to_string_lossy();
 
     // Assume that it is named something like "k0_GAS_...". We don't actually care about the k0 part,
@@ -71,7 +117,10 @@ pub(crate) fn gas_name_from_path(path: &Path) -> error_stack::Result<String, Rea
     Ok(gas.to_string())
 }
 
-pub(crate) fn check_existing_gases<P: AsRef<Path>>(ds: &netcdf::File, ak_all_files: &[P]) -> error_stack::Result<(), ReadError> {
+pub(crate) fn check_existing_gases<P: AsRef<Path>>(
+    ds: &netcdf::File,
+    ak_all_files: &[P],
+) -> error_stack::Result<(), ReadError> {
     for p in ak_all_files {
         let gas = gas_name_from_path(p.as_ref())?;
         let ak_varname = naming::ak_varname(&gas);
