@@ -66,7 +66,7 @@ struct Cli {
     ak_output_pattern: Option<String>,
 
     /// The maximum number of averaging kernel files to allow GGG to write.
-    #[clap(long, visible_alias = "ak_limit")]
+    #[clap(long, visible_alias = "ak-limit")]
     ak_output_limit: Option<u64>,
 
     /// Set this flag to create the spectral fit and averaging kernel output

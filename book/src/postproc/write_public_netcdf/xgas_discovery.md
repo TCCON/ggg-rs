@@ -70,6 +70,23 @@ These can be specified the same way as described [in the Xgases ancillary subsec
 and the defaults are the same as well.
 However only the `inferred` and `omit` types may be used, as `specified` does not make sense when a rule may apply to more than one Xgas.
 
+The following list gives the TOML `key` for that field and what variable it relates to.
+
+- `xgas_error`: the error value for the Xgas values,
+- `prior_profile` the a priori profile,
+- `prior_xgas`: the a priori Xgas value,
+- `ak`: averaging kernel,
+- `slant_bin`: the related slant Xgas bins for expanding the AKs, and
+- `traceability_scale`: the metrological measurement scale to which the Xgas data are tied.
+
+The defaults for each related variable if not specified are:
+
+- `xgas_error`, `slant_bin`, and `traceability_scale`: "inferred",
+- `prior_profile`, `prior_xgas`, and `ak`: "inferred_if_first".
+
+Note that `slant_bin` is only needed if AKs are copied, so it behaves as if set to "inferred_if_first".
+How each of these variable names are inferred if needed is described in the [Xgas section](/postproc/write_public_netcdf/explicit_xgases.html#ancillary-variable-name-inference).
+
 ## Exclusions
 
 The second part of the discovery section are lists of gases or variables to exclude.

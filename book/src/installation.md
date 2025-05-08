@@ -9,6 +9,7 @@ At present, installing GGG-RS requires that you be able to build it from source.
 This requires, at a minimum, a [Rust toolchain](https://rustup.rs/) installed.
 If you wish to compile the programs that work with netCDF files, you will also need either
 
+- the HDF5 and netCDF4 C libraries installed on your system, or
 - one of the `micromamba`, `mamba`, or `conda` package managers, or
 - the `cmake` build tool.
 
