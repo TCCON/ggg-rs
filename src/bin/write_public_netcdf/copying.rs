@@ -362,6 +362,12 @@ pub(crate) struct XgasCopy {
     /// have the same priors, for example.
     gas: String,
 
+    /// Determines whether it is an error if this Xgas is missing from the
+    /// file. The default (`false`) means that it is an error if missing,
+    /// while `true` means that it is allowed for this gas to be missing.
+    #[serde(default)]
+    optional: bool,
+
     /// The proper name of the gas, e.g. "carbon dioxide" for CO2. This will
     /// be used in netCDF attributes. It is acceptable to insert the abbreviation
     /// as a fallback, though this is not preferred.
@@ -424,6 +430,7 @@ impl XgasCopy {
             xgas_public: None,
             gas: gas.to_string(),
             gas_long: gas_long.to_string(),
+            optional: false,
             xgas_error: XgasAncillary::Inferred,
             prior_profile: XgasAncillary::InferredIfFirst,
             prior_xgas: XgasAncillary::InferredIfFirst,
@@ -469,6 +476,7 @@ impl XgasCopy {
             xgas_public: xgas_public.map(|name| name.to_string()),
             gas: gas.to_string(),
             gas_long: gas_long.to_string(),
+            optional: false, // if we discovered this Xgas, it must be present
             xgas_error,
             prior_profile,
             prior_xgas,
@@ -607,9 +615,15 @@ impl CopySet for XgasCopy {
         // prior profile and prior Xgas are in the same units. Also go ahead and get+subset
         // the Xgas value, as we'll need that for the AKs.
 
-        let xgas_var = private_file
-            .variable(&self.xgas)
-            .ok_or_else(|| CopyError::MissingReqVar(self.xgas.clone()))?;
+        let xgas_var = if let Some(var) = private_file.variable(&self.xgas) {
+            var
+        } else if self.optional {
+            log::info!("Optional Xgas '{}' not found, skipping", self.xgas);
+            return Ok(());
+        } else {
+            return Err(CopyError::MissingReqVar(self.xgas.clone()).into());
+        };
+
         let gas_units = get_string_attr(&xgas_var, "units").change_context_lazy(|| {
             CopyError::context(format!("getting the {} units", self.xgas))
         })?;

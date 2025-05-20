@@ -1,5 +1,19 @@
 include = ["TCCON_STANDARD"]
 
+[[xgas]]
+xgas = "xao2_si"
+gas = "o2"
+ak = { type = "omit" }
+traceability_scale = { type = "omit" }
+optional = true
+
+[[xgas]]
+xgas = "xbo2_si"
+gas = "o2"
+ak = { type = "omit" }
+traceability_scale = { type = "omit" }
+optional = true
+
 [[discovery.rule]]
 suffix = "si"
 ak = { type = "opt_inferred_if_first" }

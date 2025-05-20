@@ -11,4 +11,5 @@ pub(crate) static DEFAULT_GAS_LONG_NAMES: &'static [(&'static str, &'static str)
     ("hf", "hydrofluoric acid"),
     ("hcl", "hydrochloric acid"),
     ("o3", "ozone"),
+    ("o2", "oxygen"),
 ];
