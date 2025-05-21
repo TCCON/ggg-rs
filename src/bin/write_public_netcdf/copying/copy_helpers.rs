@@ -67,7 +67,14 @@ pub(super) fn copy_vmr_variable_from_dset<
 
     let data = convert_dmf_array(data, &var_unit, target_unit)
            .change_context_lazy(|| CopyError::context(format!("getting conversion factor for {private_varname} to scale to the primary Xgas variable unit")))?;
-    attr_overrides.insert("units".to_string(), target_unit.into());
+    if attr_overrides
+        .insert("units".to_string(), target_unit.into())
+        .is_some()
+    {
+        log::warn!(
+            "The 'units' attribute cannot be overridden for public variable {public_varname}"
+        )
+    }
 
     let mut public_var =
         copy_var_pre_write_helper::<T>(public_file, &private_var, public_varname, None)?;

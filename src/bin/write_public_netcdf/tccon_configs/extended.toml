@@ -1,25 +1,82 @@
 include = ["TCCON_STANDARD"]
 
-[[xgas]]
-xgas = "xao2_si"
-gas = "o2"
-ak = { type = "omit" }
-traceability_scale = { type = "omit" }
-optional = true
+################################
+## Silicon detector variables ##
+################################
 
-[[xgas]]
-xgas = "xbo2_si"
-gas = "o2"
-ak = { type = "omit" }
-traceability_scale = { type = "omit" }
-optional = true
+# We include the silicon A- and B- band O2 _columns_ rather than
+# column _averages_ because we expect these to be more useful.
+# Typically O2 columns are used to infer the surface pressure,
+# which relates to the total column.
+[[aux]]
+private_name = "column_ao2_si"
+public_name = "column_ao2_visible"
+long_name = "oxygen column density"
+attr_to_remove = ["precision"]
+required = false
+[aux.attr_overrides]
+description = "column density of oxygen retrieved from the A-band"
+note = "Use the o2_mean_mole_fraction variable to convert to a column of dry air if needed, e.g., for calculation of surface pressure."
+usage = "This is a non-standard TCCON data product, please consult the site PI and/or TCCON algorithm team if you plan to use it in your work."
+ancillary_variables = "o2_mean_mole_fraction"
+
+[[aux]]
+private_name = "column_bo2_si"
+public_name = "column_bo2_visible"
+long_name = "oxygen column density"
+attr_to_remove = ["precision"]
+required = false
+[aux.attr_overrides]
+description = "column density of oxygen retrieved from the B-band"
+note = "Use the o2_mean_mole_fraction variable to convert to a column of dry air if needed, e.g., for calculation of surface pressure."
+usage = "This is a non-standard TCCON data product, please consult the site PI and/or TCCON algorithm team if you plan to use it in your work."
+ancillary_variables = "o2_mean_mole_fraction"
 
 [[discovery.rule]]
 suffix = "si"
 ak = { type = "opt_inferred_if_first" }
 traceability_scale = { type = "omit" }
 
+#############################
+## InSb detector variables ##
+#############################
+
 [[discovery.rule]]
 suffix = "insb"
+new_suffix = "mid_ir"
+xgas_attr_overrides = { usage = "This is a non-standard TCCON data product, please consult the site PI and/or TCCON algorithm team if you plan to use it in your work." }
 ak = { type = "opt_inferred_if_first" }
 traceability_scale = { type = "omit" }
+
+[[xgas]]
+xgas = "xtco2_insb"
+xgas_public = "xtco2_mid_ir"
+gas = "co2"
+prior_xgas = { type = "specified_if_first", private_name = "prior_xtco2_insb", public_name = "prior_xco2" }
+ak = { type = "omit" }
+traceability_scale = { type = "omit" }
+required = false
+[xgas.xgas_attr_overrides]
+description = "0.2095*column_co2/column_o2, with CO2 retrieved in a temperature-sensitive band"
+usage = "This is a non-standard TCCON data product, please consult the site PI and/or TCCON algorithm team if you plan to use it in your work."
+
+[[xgas]]
+xgas = "xtch4_insb"
+xgas_public = "xtch4_mid_ir"
+gas = "ch4"
+prior_xgas = { type = "specified_if_first", private_name = "prior_xtch4_insb", public_name = "prior_xch4" }
+ak = { type = "omit" }
+traceability_scale = { type = "omit" }
+required = false
+[xgas.xgas_attr_overrides]
+description = "0.2095*column_ch4/column_o2, with CH4 retrieved in a temperature-sensitive band"
+usage = "This is a non-standard TCCON data product, please consult the site PI and/or TCCON algorithm team if you plan to use it in your work."
+
+####################
+## Other settings ##
+####################
+
+[discovery]
+# If we ever add other variables retrieved on the Si detectors, we want to include
+# them, but the O2 column averages are less useful than their column densities.
+excluded_xgas_variables = ["xao2_si", "xbo2_si"]

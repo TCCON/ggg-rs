@@ -17,11 +17,17 @@ Each Xgas has the following options:
 - `gas_long` (optional): the full name of the gas instead of its abbreviation, e.g. "carbon dioxide" for CO2. If not given,
   then the configuration will try to find the `gas` value in its [`[gas_long_names]`](/write_public_netcdf/gas_proper_names.html) section and use that,
   falling back on the `gas` value if the gas is not defined in the gas long names section.
+- `xgas_attr_overrides` (optional): a table of attribute values that can override existing attribute values on the private Xgas variable.
+- `xgas_error_attr_overrides` (optional): a table of attribute values that can override existing attribute values on the private Xgas error variable.
 - `prior_profile` (optional): how to copy the a priori profile.
+- `prior_profile_attr_overrides` (optional): a table of attribute values that can override existing attribute values on the private prior profile variable.
 - `prior_xgas` (optional): how to copy the a priori column average.
+- `prior_xgas_attr_overrides` (optional): a table of attribute values that can override existing attribute values on the private prior Xgas variable.
 - `ak` (optional): how to copy the averaging kernels.
+- `ak_attr_overrides` (optional): a table of attribute values that can override existing attribute values on the private AK variable.
 - `slant_bin` (optional): how to find the slant Xgas bin variable needed to expand the AKs.
 - `traceability_scale` (optional): how to find the variable containing the WMO or analogous scale for this data.
+- `required` (optional): this is `true` by default; set it to `false` if you want to copy this Xgas if present but it is not an error if it is missing.
 
 `prior_profile`, `prior_xgas`, `ak`, `slant_bin`, and `traceability_scale` can all be defined following the syntax in the [ancillary variable specifications](#ancillary-variable-specifications).
 Note that `slant_bin` is a special case in that it will only be used if the AKs are to be copied, but cannot be omitted in that case.
@@ -66,6 +72,26 @@ These would not be discovered by the [default rule](/write_public_netcdf/xgas_di
 Further, the mapping to their prior and AK variables is unique: all the CO2 Xgas variables can share the prior profiles and column averages, and each "flavor" of CO2 (regular, wCO2, or lCO2) can use the same AKs whether it is on the X2007 or X2019 scale.
 Thus, we not only define that these variables need copied, but that we want to rename the prior variables to just "prior_co2" and "prior_xco2" and only copy these the first time we find them.
 We also ensure that the AKs and slant bins point to the correct variables.
+
+If we wanted to set the `note` attribute of `xluft`, we could do that like so:
+
+```toml
+[[xgas]]
+xgas = "xluft"
+gas = "luft"
+gas_long = "dry air"
+prior_profile = { type = "omit" }
+prior_xgas = { type = "omit" }
+ak = { type = "omit" }
+xgas_attr_overrides = { note = "This is a diagnostic quantity" }
+```
+
+```admonish note
+Not all attributes can be overridden, some are set internally by the netCDF writer to ensure consistency.
+If an attribute is not getting the value you expect, first check the logging output from the netCDF writer
+for a warning that a particular attribute cannot be set.
+```
+
 
 ## Ancillary variable specifications
 

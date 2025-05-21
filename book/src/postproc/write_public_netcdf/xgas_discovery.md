@@ -52,6 +52,21 @@ Note that the suffix rule contains a "suffix" key, while the regular expression 
 Also note that rules are checked in order, and a variable is added following the first rule that matches.
 This means that if a variable matches multiple rules, then its ancillary variables will be set up following the first rule that matched.
 
+## Attributes
+
+Discovery rules can specify the fields `xgas_attr_overrides`, `xgas_error_attr_overrides`, `prior_profile_attr_overrides`,
+`prior_xgas_attr_overrides`, and `ak_attr_overrides` to set attributes on their respective variables.
+These should be used for attributes that will be the same for _all_ of the variables of that type created by this rule.
+For example, to add a cautionary note about experimental data to our previous mid-IR discovery rule:
+
+```toml
+[[discovery.rule]]
+suffix = "mir"
+xgas_attr_overrides = { note = "Experimental data, use with caution!" }
+ak = { type = "omit" }
+traceability_scale = { type = "omit" }
+```
+
 ## Exclusions
 
 The second part of the discovery section are lists of gases or variables to exclude.

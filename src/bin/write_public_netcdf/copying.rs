@@ -357,16 +357,19 @@ pub(crate) struct XgasCopy {
     #[serde(default)]
     xgas_public: Option<String>,
 
+    #[serde(default, deserialize_with = "de_attribute_overrides")]
+    xgas_attr_overrides: IndexMap<String, AttributeValue>,
+
     /// The abbreviation of the physical gas, e.g., both `wco2` and `lco2`
     /// should set this to "co2". This can be used to identify variables that
     /// have the same priors, for example.
     gas: String,
 
     /// Determines whether it is an error if this Xgas is missing from the
-    /// file. The default (`false`) means that it is an error if missing,
-    /// while `true` means that it is allowed for this gas to be missing.
-    #[serde(default)]
-    optional: bool,
+    /// file. The default (`true`) means that it is an error if missing,
+    /// while `false` means that it is allowed for this gas to be missing.
+    #[serde(default = "crate::config::default_true")]
+    pub(crate) required: bool,
 
     /// The proper name of the gas, e.g. "carbon dioxide" for CO2. This will
     /// be used in netCDF attributes. It is acceptable to insert the abbreviation
@@ -377,17 +380,29 @@ pub(crate) struct XgasCopy {
     #[serde(default = "crate::config::default_ancillary_infer")]
     xgas_error: XgasAncillary,
 
+    #[serde(default, deserialize_with = "de_attribute_overrides")]
+    xgas_error_attr_overrides: IndexMap<String, AttributeValue>,
+
     /// How/whether to copy the a priori profiles.
     #[serde(default = "crate::config::default_ancillary_infer_first")]
     prior_profile: XgasAncillary,
+
+    #[serde(default, deserialize_with = "de_attribute_overrides")]
+    prior_profile_attr_overrides: IndexMap<String, AttributeValue>,
 
     /// How/whether to copy the a prior column average.
     #[serde(default = "crate::config::default_ancillary_infer_first")]
     prior_xgas: XgasAncillary,
 
+    #[serde(default, deserialize_with = "de_attribute_overrides")]
+    prior_xgas_attr_overrides: IndexMap<String, AttributeValue>,
+
     /// How/whether to copy the averaging kernels.
     #[serde(default = "crate::config::default_ancillary_infer_first")]
     ak: XgasAncillary,
+
+    #[serde(default, deserialize_with = "de_attribute_overrides")]
+    ak_attr_overrides: IndexMap<String, AttributeValue>,
 
     /// Where to find the slant Xgas bins that correspond to the AKs.
     /// This is a special case, and will only be accessed if the AKs are
@@ -428,13 +443,18 @@ impl XgasCopy {
         Self {
             xgas: xgas.to_string(),
             xgas_public: None,
+            xgas_attr_overrides: IndexMap::new(),
             gas: gas.to_string(),
             gas_long: gas_long.to_string(),
-            optional: false,
+            required: true,
             xgas_error: XgasAncillary::Inferred,
+            xgas_error_attr_overrides: IndexMap::new(),
             prior_profile: XgasAncillary::InferredIfFirst,
+            prior_profile_attr_overrides: IndexMap::new(),
             prior_xgas: XgasAncillary::InferredIfFirst,
+            prior_xgas_attr_overrides: IndexMap::new(),
             ak: XgasAncillary::InferredIfFirst,
+            ak_attr_overrides: IndexMap::new(),
             slant_bin: XgasAncillary::Inferred,
             traceability_scale: XgasAncillary::Inferred,
         }
@@ -474,13 +494,18 @@ impl XgasCopy {
         Self {
             xgas: xgas.to_string(),
             xgas_public: xgas_public.map(|name| name.to_string()),
+            xgas_attr_overrides: rule.xgas_attr_overrides.clone(),
             gas: gas.to_string(),
             gas_long: gas_long.to_string(),
-            optional: false, // if we discovered this Xgas, it must be present
+            required: true, // if we discovered this Xgas, it must be present
             xgas_error,
+            xgas_error_attr_overrides: rule.xgas_error_attr_overrides.clone(),
             prior_profile,
+            prior_profile_attr_overrides: rule.prior_profile_attr_overrides.clone(),
             prior_xgas,
+            prior_xgas_attr_overrides: rule.prior_xgas_attr_overrides.clone(),
             ak,
+            ak_attr_overrides: rule.ak_attr_overrides.clone(),
             slant_bin,
             traceability_scale,
         }
@@ -617,11 +642,11 @@ impl CopySet for XgasCopy {
 
         let xgas_var = if let Some(var) = private_file.variable(&self.xgas) {
             var
-        } else if self.optional {
+        } else if self.required {
+            return Err(CopyError::MissingReqVar(self.xgas.clone()).into());
+        } else {
             log::info!("Optional Xgas '{}' not found, skipping", self.xgas);
             return Ok(());
-        } else {
-            return Err(CopyError::MissingReqVar(self.xgas.clone()).into());
         };
 
         let gas_units = get_string_attr(&xgas_var, "units").change_context_lazy(|| {
@@ -639,7 +664,7 @@ impl CopySet for XgasCopy {
 
         let long_units = dmf_long_name(&gas_units).unwrap_or(&gas_units);
         let attr_to_remove = default_attr_remove();
-        let mut attr_overrides = IndexMap::new();
+        let mut attr_overrides = self.xgas_attr_overrides.clone();
         self.maybe_add_traceability_scale_attr(private_file, public_file, &mut attr_overrides)?;
 
         // Now copy the Xgas itself
@@ -667,7 +692,7 @@ impl CopySet for XgasCopy {
                 &public_error_name,
                 time_subsetter,
                 &format!("column average {} mole fraction error", self.gas_long),
-                IndexMap::new(),
+                self.xgas_error_attr_overrides.clone(),
                 &attr_to_remove,
                 &gas_units,
             )?;
@@ -678,6 +703,15 @@ impl CopySet for XgasCopy {
             .prior_xgas
             .get_var_names_opt(private_file, public_file, || self.infer_prior_xgas_names());
         if let Some((private_prxgas_name, public_prxgas_name)) = prxgas_names_opt {
+            let mut attr_overrides = self.prior_xgas_attr_overrides.clone();
+            attr_overrides.insert(
+                "description".to_string(),
+                format!(
+                    "Column-average mole fraction calculated from the PRIOR profile of {}",
+                    self.gas_full_name()
+                )
+                .into(),
+            );
             copy_vmr_variable_from_dset::<f32, _>(
                 private_file,
                 public_file,
@@ -685,7 +719,7 @@ impl CopySet for XgasCopy {
                 &public_prxgas_name,
                 time_subsetter,
                 &format!("a priori {} column average", self.gas_long),
-                IndexMap::new(),
+                attr_overrides,
                 &attr_to_remove,
                 &gas_units,
             )?;
@@ -711,17 +745,29 @@ impl CopySet for XgasCopy {
                 .get(1)
                 .ok_or_else(|| CopyError::custom(format!("Expected '{private_prior_name}' to have altitude as the second dimension, but it has fewer than 2 dimensions")))?
                 .name();
-            let attr_overrides = IndexMap::from_iter([
-                ("units".to_string(), gas_units.into()),
-                (
+
+            let mut attr_overrides = self.prior_profile_attr_overrides.clone();
+            // Give the user a warning that units and long units will be ignored: .insert() returns Some(_) if
+            // there was already a value for that key.
+            if attr_overrides
+                .insert("units".to_string(), gas_units.into())
+                .is_some()
+            {
+                log::warn!("The 'units' attribute cannot be overridden for public variable {public_prior_name}")
+            }
+            if attr_overrides
+                .insert(
                     "long_units".to_string(),
                     format!("{long_units} (wet mole fraction)").into(),
-                ),
-                (
-                    "description".to_string(),
-                    format!("a priori profile of {}", self.gas_long).into(),
-                ),
-            ]);
+                )
+                .is_some()
+            {
+                log::warn!("The 'long_units' attribute cannot be overidden for public variable {public_prior_name}")
+            }
+            // description is allowed to be overridden
+            attr_overrides
+                .entry("description".to_string())
+                .or_insert_with(|| format!("a priori profile of {}", self.gas_long).into());
 
             copy_variable_new_data(
                 public_file,
@@ -760,6 +806,17 @@ impl CopySet for XgasCopy {
                 .ok_or_else(|| CopyError::custom(format!("Expected AK variable '{private_ak_name}' to have altitude as the first dimension, but had no dimensions")))?
                 .name();
 
+            let mut attr_overrides = self.ak_attr_overrides.clone();
+            if attr_overrides
+                .insert(
+                    "ancillary_variables".to_string(),
+                    extrap_flag_varname.as_str().into(),
+                )
+                .is_some()
+            {
+                log::warn!("The 'ancillary_variables' attribute cannot be overridden for public variable {public_ak_name}")
+            }
+
             copy_variable_new_data(
                 public_file,
                 &ak_var,
@@ -767,10 +824,7 @@ impl CopySet for XgasCopy {
                 expanded_aks.into_dyn().view(),
                 vec![TIME_DIM_NAME.to_string(), level_dim_name],
                 &format!("{} averaging kernel", self.gas_long),
-                &IndexMap::from_iter([(
-                    "ancillary_variables".to_string(),
-                    extrap_flag_varname.as_str().into(),
-                )]),
+                &attr_overrides,
                 &attr_to_remove,
             )?;
 
@@ -1039,7 +1093,7 @@ fn add_history_attr(
 // HELPER FUNCTIONS //
 // ---------------- //
 
-fn de_attribute_overrides<'de, D>(
+pub(crate) fn de_attribute_overrides<'de, D>(
     deserializer: D,
 ) -> Result<IndexMap<String, AttributeValue>, D::Error>
 where

@@ -2,9 +2,11 @@ use std::{collections::HashSet, fmt::Display, hash::RandomState, str::FromStr};
 
 use indexmap::IndexMap;
 use itertools::Itertools;
+use netcdf::AttributeValue;
 use regex::Regex;
 use serde::Deserialize;
 
+use crate::copying::de_attribute_overrides;
 use crate::XgasCopy;
 
 #[derive(Debug, thiserror::Error)]
@@ -168,6 +170,7 @@ impl XgasMatchMethod {
         if let Some(new_suf) = new_suffix {
             let pattern = format!("${{base}}_{}", regex::escape(new_suf));
             let xgas_public = re.replace_all(xgas, &pattern).to_string();
+            log::debug!("Given new suffix '{new_suf}', variable {xgas} becomes {xgas_public}");
             Some(xgas_public)
         } else {
             None
@@ -225,14 +228,24 @@ pub enum AncillaryDiscoveryMethod {
 pub(crate) struct XgasMatchRule {
     #[serde(flatten)]
     pattern: XgasMatchMethod,
+    #[serde(default, deserialize_with = "de_attribute_overrides")]
+    pub(crate) xgas_attr_overrides: IndexMap<String, AttributeValue>,
     #[serde(default)]
     pub(crate) xgas_error: Option<AncillaryDiscoveryMethod>,
+    #[serde(default, deserialize_with = "de_attribute_overrides")]
+    pub(crate) xgas_error_attr_overrides: IndexMap<String, AttributeValue>,
     #[serde(default)]
     pub(crate) prior_profile: Option<AncillaryDiscoveryMethod>,
+    #[serde(default, deserialize_with = "de_attribute_overrides")]
+    pub(crate) prior_profile_attr_overrides: IndexMap<String, AttributeValue>,
     #[serde(default)]
     pub(crate) prior_xgas: Option<AncillaryDiscoveryMethod>,
+    #[serde(default, deserialize_with = "de_attribute_overrides")]
+    pub(crate) prior_xgas_attr_overrides: IndexMap<String, AttributeValue>,
     #[serde(default)]
     pub(crate) ak: Option<AncillaryDiscoveryMethod>,
+    #[serde(default, deserialize_with = "de_attribute_overrides")]
+    pub(crate) ak_attr_overrides: IndexMap<String, AttributeValue>,
     #[serde(default)]
     pub(crate) slant_bin: Option<AncillaryDiscoveryMethod>,
     #[serde(default)]
@@ -243,10 +256,15 @@ impl XgasMatchRule {
     pub(crate) fn new(pattern: XgasMatchMethod) -> Self {
         Self {
             pattern,
+            xgas_attr_overrides: IndexMap::new(),
             xgas_error: None,
+            xgas_error_attr_overrides: IndexMap::new(),
             prior_profile: None,
+            prior_profile_attr_overrides: IndexMap::new(),
             prior_xgas: None,
+            prior_xgas_attr_overrides: IndexMap::new(),
             ak: None,
+            ak_attr_overrides: IndexMap::new(),
             slant_bin: None,
             traceability_scale: None,
         }
@@ -367,6 +385,8 @@ fn should_add_xgas_var<'a, 'r, G: AsRef<str>, V: AsRef<str>>(
 
 #[cfg(test)]
 mod tests {
+    use indexmap::IndexMap;
+
     use crate::discovery::{AncillaryDiscoveryMethod, XgasMatchMethod};
 
     use super::XgasMatchRule;
@@ -411,10 +431,15 @@ mod tests {
             toml::from_str(toml_str).expect("deserialization should not fail");
         let expected = XgasMatchRule {
             pattern: XgasMatchMethod::suffix_from_string("mir".to_string(), None),
+            xgas_attr_overrides: IndexMap::new(),
             xgas_error: None,
+            xgas_error_attr_overrides: IndexMap::new(),
             prior_profile: None,
+            prior_profile_attr_overrides: IndexMap::new(),
             prior_xgas: None,
+            prior_xgas_attr_overrides: IndexMap::new(),
             ak: Some(AncillaryDiscoveryMethod::Omit),
+            ak_attr_overrides: IndexMap::new(),
             slant_bin: None,
             traceability_scale: Some(AncillaryDiscoveryMethod::Omit),
         };
