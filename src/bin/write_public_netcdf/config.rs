@@ -87,6 +87,13 @@ pub(crate) struct Config {
     #[serde(default)]
     pub(crate) global_attributes: AttributeConfig,
 
+    /// If given, this will be included before "public"
+    /// in the output file extension, e.g. setting this
+    /// to "extended." will result in the output file being
+    /// named `STEM.extended.public...`
+    #[serde(default)]
+    pub(crate) extra_extension: Option<String>,
+
     /// Toggles for whether to add default values to each section.
     ///
     /// # Developer note
@@ -215,6 +222,7 @@ impl Default for Config {
             xgas: Default::default(),
             discovery: Default::default(),
             global_attributes: Default::default(),
+            extra_extension: Default::default(),
             defaults: Default::default(),
             include: Default::default(),
         };

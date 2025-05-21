@@ -1,4 +1,5 @@
 include = ["TCCON_STANDARD"]
+extra_extension = "extended."
 
 ################################
 ## Silicon detector variables ##

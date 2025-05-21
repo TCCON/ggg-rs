@@ -70,9 +70,13 @@ fn driver(clargs: Cli) -> error_stack::Result<(), CliError> {
     let time_subsetter = make_time_subsetter(&private_ds, opt_end_date)?;
     let private_file_name = &private_nc_file;
     let public_file_name = if clargs.no_rename_by_dates {
-        make_public_name_from_stem(private_file_name)?
+        make_public_name_from_stem(private_file_name, config.extra_extension.as_deref())?
     } else {
-        make_public_name_from_dates(private_file_name, &time_subsetter)?
+        make_public_name_from_dates(
+            private_file_name,
+            &time_subsetter,
+            config.extra_extension.as_deref(),
+        )?
     };
     log::info!("Will write to {}", public_file_name.display());
     let mut public_ds =
@@ -286,6 +290,7 @@ fn make_time_subsetter(
 fn make_public_name_from_dates(
     private_filename: &Path,
     time_subsetter: &Subsetter,
+    extra_extension: Option<&str>,
 ) -> error_stack::Result<PathBuf, CliError> {
     // Load the times, subset them, and find the first and last times.
     // Yeah, this is painfully long for what should be simple...
@@ -335,9 +340,12 @@ fn make_public_name_from_dates(
         .to_string_lossy();
 
     let site_id: String = private_base_name.chars().take(2).collect();
+    let new_ext = extra_extension
+        .map(|ex| format!("{ex}public"))
+        .unwrap_or_else(|| "public".to_string());
     let public_ext = private_base_name
         .split_once('.')
-        .map(|(_, ext)| ext.replace("private", "public"))
+        .map(|(_, ext)| ext.replace("private", &new_ext))
         .unwrap_or_else(|| "public.nc".to_string());
     let parent_dir = private_filename
         .parent()
@@ -352,17 +360,26 @@ fn make_public_name_from_dates(
     Ok(parent_dir.join(public_filename))
 }
 
-fn make_public_name_from_stem(private_filename: &Path) -> error_stack::Result<PathBuf, CliError> {
+fn make_public_name_from_stem(
+    private_filename: &Path,
+    extra_extension: Option<&str>,
+) -> error_stack::Result<PathBuf, CliError> {
     let base_name = private_filename
         .file_name()
         .ok_or_else(|| CliError::custom("private file name does not have a basename!"))?
         .to_string_lossy();
 
+    let new_ext = if let Some(extra) = extra_extension {
+        format!("{extra}public")
+    } else {
+        "public".to_string()
+    };
+
     let public_filename = if let Some((stem, ext)) = base_name.split_once('.') {
-        let public_ext = ext.replace("private", "public");
+        let public_ext = ext.replace("private", &new_ext);
         format!("{stem}.{public_ext}")
     } else {
-        format!("{base_name}.public.nc")
+        format!("{base_name}.{new_ext}.nc")
     };
 
     let parent_dir = private_filename
