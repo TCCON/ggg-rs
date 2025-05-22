@@ -3,7 +3,7 @@ use std::{io::Read, path::Path};
 use indexmap::IndexMap;
 use interp::interp_slice;
 use itertools::Itertools;
-use ndarray::{Array1, Array2, ArrayD, ArrayView1, ArrayView2};
+use ndarray::{Array1, Array2, ArrayD, ArrayView1, ArrayView2, ArrayViewD};
 use netcdf::{
     types::{FloatType, IntType},
     Extents,
@@ -173,21 +173,25 @@ impl NcArray {
 // ----------------------------------------- //
 
 pub fn expand_priors<T: Zero + Copy>(
-    compact_priors: ArrayView2<T>,
+    compact_priors: ArrayViewD<T>,
     prior_index: ArrayView1<usize>,
-) -> Result<Array2<T>, GggError> {
+) -> Result<ArrayD<T>, GggError> {
     let ntimes = prior_index.len();
-    let nlev = compact_priors.dim().1;
-    let mut expanded_priors = Array2::<T>::zeros([ntimes, nlev]);
+    let n_compact_rows = compact_priors.shape()[0];
+    let mut new_shape = vec![ntimes];
+    new_shape.extend_from_slice(&compact_priors.shape()[1..]);
+    let mut expanded_priors = ArrayD::<T>::zeros(new_shape);
     for (itime, &index) in prior_index.iter().enumerate() {
-        if index >= compact_priors.nrows() {
+        if index >= n_compact_rows {
             return Err(GggError::custom(format!(
                 "Prior index {index} at position {itime} is out-of-bounds"
             )));
         }
         // .row() panics if the index is out of bounds, hence the check above
-        let orig_prof = compact_priors.row(index);
-        expanded_priors.row_mut(itime).assign(&orig_prof);
+        let orig_prof = compact_priors.index_axis(ndarray::Axis(0), index);
+        expanded_priors
+            .index_axis_mut(ndarray::Axis(0), itime)
+            .assign(&orig_prof);
     }
     Ok(expanded_priors)
 }

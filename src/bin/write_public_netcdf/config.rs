@@ -16,7 +16,7 @@ use serde::Deserialize;
 
 use crate::{
     constants::DEFAULT_GAS_LONG_NAMES,
-    copying::{CopyGlobalAttr, XgasAncillary},
+    copying::{CopyGlobalAttr, PriorProfCopy, XgasAncillary},
     discovery::{AncillaryDiscoveryMethod, XgasMatchMethod, XgasMatchRule},
     AuxVarCopy, ComputedVariable, XgasCopy,
 };
@@ -72,6 +72,9 @@ pub(crate) struct Config {
 
     #[serde(default)]
     pub(crate) computed: Vec<ComputedVariable>,
+
+    #[serde(default)]
+    pub(crate) extra_priors: Vec<PriorProfCopy>,
 
     /// A mapping of gas abbreviations (e.g., "co2") to their proper names
     /// (e.g., "carbon dioxide").
@@ -218,6 +221,7 @@ impl Default for Config {
         let mut me = Self {
             aux: Default::default(),
             computed: Default::default(),
+            extra_priors: Default::default(),
             gas_long_names: Default::default(),
             xgas: Default::default(),
             discovery: Default::default(),

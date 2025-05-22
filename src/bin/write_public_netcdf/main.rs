@@ -85,6 +85,7 @@ fn driver(clargs: Cli) -> error_stack::Result<(), CliError> {
     add_time_dim(&mut public_ds, &time_subsetter)?;
     add_aux_vars(&config, &private_ds, &mut public_ds, &time_subsetter)?;
     add_computed_vars(&config, &private_ds, &mut public_ds, &time_subsetter)?;
+    add_extra_priors(&config, &private_ds, &mut public_ds, &time_subsetter)?;
     add_xgas_vars(&config, &private_ds, &mut public_ds, &time_subsetter)?;
     add_global_attributes(&config, &private_ds, &mut public_ds)?;
     Ok(())
@@ -232,6 +233,10 @@ enum CliError {
     WritingDim,
     #[error("An error occurred while writing the auxiliary variables to the public file")]
     WritingAux,
+    #[error(
+        "An error occurred while writing the extra prior profile variables to the public file"
+    )]
+    WritingExtraPriors,
     #[error("An error occurred while writing the Xgas and related variables to the public file")]
     WritingXgas,
     #[error("An error occurred while writing the computed variables to the public file")]
@@ -410,6 +415,19 @@ fn add_aux_vars(
             .change_context(CliError::WritingAux)?;
     }
 
+    Ok(())
+}
+
+fn add_extra_priors(
+    config: &Config,
+    private_ds: &netcdf::File,
+    public_ds: &mut netcdf::FileMut,
+    time_subsetter: &Subsetter,
+) -> error_stack::Result<(), CliError> {
+    for var in config.extra_priors.iter() {
+        var.copy(private_ds, public_ds, time_subsetter)
+            .change_context(CliError::WritingExtraPriors)?;
+    }
     Ok(())
 }
 

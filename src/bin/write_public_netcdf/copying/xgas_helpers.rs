@@ -86,9 +86,9 @@ pub(super) fn expand_prior_profiles_from_file(
     private_file: &netcdf::File,
     prior_varname: &str,
     prior_index_varname: &str,
-    target_unit: &str,
+    target_unit: Option<&str>,
     time_subsetter: &Subsetter,
-) -> error_stack::Result<Array2<f32>, CopyError> {
+) -> error_stack::Result<ArrayD<f32>, CopyError> {
     // Get the compact prior profiles and convert them to the target units
     let prior_var = private_file
         .variable(prior_varname)
@@ -99,12 +99,15 @@ pub(super) fn expand_prior_profiles_from_file(
         ))
     })?;
     let prior_unit = get_string_attr(&prior_var, "units")?;
-    let prior_data =
-        convert_dmf_array(prior_data, &prior_unit, target_unit).change_context_lazy(|| {
+    let prior_data = if let Some(unit) = target_unit {
+        convert_dmf_array(prior_data, &prior_unit, unit).change_context_lazy(|| {
             CopyError::context(format!(
                 "converting prior profile variable '{prior_varname}' units"
             ))
-        })?;
+        })?
+    } else {
+        prior_data
+    };
 
     // Get the prior index. Read it as a u32 so that the later conversion to usize is less likely to fail
     // (e.g., on 32-bit systems).
@@ -126,12 +129,7 @@ pub(super) fn expand_prior_profiles_from_file(
         prior_index
     };
 
-    // Convert the arrays to the correct dimensionality and expand
-    let prior_data = prior_data
-        .into_dimensionality::<Ix2>()
-        .change_context_lazy(|| {
-            CopyError::context(format!("converting prior profile '{prior_varname}' to 2D"))
-        })?;
+    // Expand the array
     let prior_index = prior_index
         .into_dimensionality::<Ix1>()
         .change_context_lazy(|| {

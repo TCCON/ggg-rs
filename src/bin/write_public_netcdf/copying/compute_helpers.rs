@@ -5,7 +5,7 @@ use std::i8;
 use error_stack::ResultExt;
 use ggg_rs::nc_utils;
 use itertools::Itertools;
-use ndarray::{Array1, Ix1, Ix2};
+use ndarray::{Array1, Ix1};
 use netcdf::Extents;
 
 use crate::{
@@ -164,9 +164,6 @@ fn get_geos_version_strings(
         .ok_or_else(|| CopyError::MissingReqVar(varname.clone()))?;
     let chars = var.get::<NcChar, _>(Extents::All).change_context_lazy(|| {
         CopyError::context(format!("getting data from variable '{varname}'"))
-    })?;
-    let chars = chars.into_dimensionality::<Ix2>().change_context_lazy(|| {
-        CopyError::context(format!("converting '{varname}' into a 2D array"))
     })?;
 
     let prior_index_var = private_file

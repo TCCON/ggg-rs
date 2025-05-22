@@ -1,6 +1,43 @@
 [[computed]]
 type = "prior_source"
 
+[[extra_priors]]
+private_name = "prior_time"
+long_name = "time of a priori data"
+
+[[extra_priors]]
+private_name = "prior_density"
+long_name = "a priori number density of air"
+
+[[extra_priors]]
+private_name = "prior_effective_latitude"
+long_name = "a priori effective latitude"
+
+[[extra_priors]]
+private_name = "prior_equivalent_latitude"
+long_name = "a priori equivalent latitude"
+attr_overrides = { description = "equivalent latitude derived from potential voriticity on potential temperature levels" }
+
+[[extra_priors]]
+private_name = "prior_gravity"
+long_name = "a priori gravitational acceleration"
+
+[[extra_priors]]
+private_name = "prior_mid_tropospheric_potential_temperature"
+long_name = "a priori mid-tropospheric potential temperature"
+
+[[extra_priors]]
+private_name = "prior_pressure"
+long_name = "a priori atmospheric pressure"
+
+[[extra_priors]]
+private_name = "prior_temperature"
+long_name = "a priori atmospheric temperature"
+
+[[extra_priors]]
+private_name = "prior_tropopause_altitude"
+long_name = "a priori tropopause altitude"
+
 [[xgas]]
 xgas = "xluft"
 gas = "luft"

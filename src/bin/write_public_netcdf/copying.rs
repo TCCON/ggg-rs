@@ -347,6 +347,151 @@ impl CopySet for AuxVarCopy {
     }
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct PriorProfCopy {
+    /// The variable from the private file to copy.
+    pub(crate) private_name: String,
+
+    /// The name to give the variable in the output file. If `None`, the
+    /// variable will have the same name as in the private file.
+    #[serde(default)]
+    pub(crate) public_name: Option<String>,
+
+    /// Value to use for the long name attribute.
+    pub(crate) long_name: String,
+
+    /// Desired unit for VMR profiles. Should be `None` for other
+    /// types of profiles, as those conversions are not yet implemented.
+    #[serde(default)]
+    pub(crate) target_vmr_unit: Option<String>,
+
+    /// Additional attributes to add, or values to replace private file
+    /// attributes.
+    #[serde(default, deserialize_with = "de_attribute_overrides")]
+    pub(crate) attr_overrides: IndexMap<String, netcdf::AttributeValue>,
+
+    /// A list of private attributes to remove.
+    #[serde(default = "crate::config::default_attr_remove")]
+    pub(crate) attr_to_remove: Vec<String>,
+
+    /// Whether this variable is required or can be skipped if
+    /// not present in the source file
+    #[serde(default = "crate::config::default_true")]
+    pub(crate) required: bool,
+}
+
+impl PriorProfCopy {
+    pub(crate) fn new<P: ToString, L: ToString>(
+        private_name: P,
+        long_name: L,
+        required: bool,
+    ) -> Self {
+        Self {
+            private_name: private_name.to_string(),
+            public_name: None,
+            long_name: long_name.to_string(),
+            target_vmr_unit: None,
+            attr_overrides: IndexMap::new(),
+            attr_to_remove: crate::config::default_attr_remove(),
+            required,
+        }
+    }
+
+    pub(crate) fn with_public_name<P: ToString>(mut self, public_name: P) -> Self {
+        self.public_name = Some(public_name.to_string());
+        self
+    }
+
+    pub(crate) fn set_attr_overrides(
+        mut self,
+        overrides: IndexMap<String, AttributeValue>,
+    ) -> Self {
+        self.attr_overrides = overrides;
+        self
+    }
+
+    pub(crate) fn with_vmr_units<U: ToString>(mut self, units: U) -> Self {
+        self.target_vmr_unit = Some(units.to_string());
+        self
+    }
+}
+
+impl CopySet for PriorProfCopy {
+    fn copy(
+        &self,
+        private_file: &netcdf::File,
+        public_file: &mut netcdf::FileMut,
+        time_subsetter: &Subsetter,
+    ) -> error_stack::Result<(), CopyError> {
+        let public_name = self.public_name.as_deref().unwrap_or(&self.private_name);
+
+        let prior_var = if let Some(var) = private_file.variable(&self.private_name) {
+            var
+        } else if self.required {
+            return Err(CopyError::MissingReqVar(self.private_name.clone()).into());
+        } else {
+            log::info!(
+                "Not copying {} as it is not present in the private file",
+                self.private_name
+            );
+            return Ok(());
+        };
+
+        let prior_data = expand_prior_profiles_from_file(
+            private_file,
+            &self.private_name,
+            PRIOR_INDEX_VARNAME,
+            self.target_vmr_unit.as_deref(),
+            time_subsetter,
+        )?;
+
+        let mut new_dims = prior_var
+            .dimensions()
+            .iter()
+            .map(|d| d.name())
+            .collect_vec();
+        new_dims[0] = TIME_DIM_NAME.to_string();
+
+        let mut attr_overrides = self.attr_overrides.clone();
+        // Give the user a warning that units and long units will be ignored: .insert() returns Some(_) if
+        // there was already a value for that key.
+        if let Some(gas_units) = self.target_vmr_unit.as_deref() {
+            if attr_overrides
+                .insert("units".to_string(), gas_units.into())
+                .is_some()
+            {
+                log::warn!(
+                    "The 'units' attribute cannot be overridden for public variable {public_name} because it must match the target VMR units"
+                )
+            }
+
+            let long_units = dmf_long_name(&gas_units).unwrap_or(&gas_units);
+            if attr_overrides
+                .insert(
+                    "long_units".to_string(),
+                    format!("{long_units} (wet mole fraction)").into(),
+                )
+                .is_some()
+            {
+                log::warn!("The 'long_units' attribute cannot be overidden for public variable {public_name} because it must match the target VMR units")
+            }
+        }
+
+        copy_variable_new_data(
+            public_file,
+            &prior_var,
+            &public_name,
+            prior_data.view(),
+            new_dims,
+            &self.long_name,
+            &attr_overrides,
+            &self.attr_to_remove,
+        )?;
+        Ok(())
+    }
+}
+
 #[derive(Debug, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct XgasCopy {
@@ -662,7 +807,6 @@ impl CopySet for XgasCopy {
             &gas_units
         };
 
-        let long_units = dmf_long_name(&gas_units).unwrap_or(&gas_units);
         let attr_to_remove = default_attr_remove();
         let mut attr_overrides = self.xgas_attr_overrides.clone();
         self.maybe_add_traceability_scale_attr(private_file, public_file, &mut attr_overrides)?;
@@ -731,54 +875,20 @@ impl CopySet for XgasCopy {
             .prior_profile
             .get_var_names_opt(private_file, &public_file, || self.infer_prior_prof_names());
         if let Some((private_prior_name, public_prior_name)) = opt {
-            let prior_var = private_file
-                .variable(&private_prior_name)
-                .ok_or_else(|| CopyError::MissingReqVar(private_prior_name.clone()))?;
-            let prior_data = expand_prior_profiles_from_file(
-                private_file,
-                &private_prior_name,
-                PRIOR_INDEX_VARNAME,
-                &gas_units,
-                time_subsetter,
-            )?;
-            let level_dim_name = prior_var.dimensions()
-                .get(1)
-                .ok_or_else(|| CopyError::custom(format!("Expected '{private_prior_name}' to have altitude as the second dimension, but it has fewer than 2 dimensions")))?
-                .name();
-
+            let long_name = format!("a priori {} profile", self.gas_long);
             let mut attr_overrides = self.prior_profile_attr_overrides.clone();
-            // Give the user a warning that units and long units will be ignored: .insert() returns Some(_) if
-            // there was already a value for that key.
-            if attr_overrides
-                .insert("units".to_string(), gas_units.into())
-                .is_some()
-            {
-                log::warn!("The 'units' attribute cannot be overridden for public variable {public_prior_name}")
-            }
-            if attr_overrides
-                .insert(
-                    "long_units".to_string(),
-                    format!("{long_units} (wet mole fraction)").into(),
-                )
-                .is_some()
-            {
-                log::warn!("The 'long_units' attribute cannot be overidden for public variable {public_prior_name}")
-            }
-            // description is allowed to be overridden
+            // description is allowed to be overridden. units and long_units are not, but those are handled in the
+            // prior profile variable type.
             attr_overrides
                 .entry("description".to_string())
                 .or_insert_with(|| format!("a priori profile of {}", self.gas_long).into());
 
-            copy_variable_new_data(
-                public_file,
-                &prior_var,
-                &public_prior_name,
-                prior_data.into_dyn().view(),
-                vec![TIME_DIM_NAME.to_string(), level_dim_name],
-                &format!("a priori {} profile", self.gas_long),
-                &attr_overrides,
-                &attr_to_remove,
-            )?;
+            let prior_copier = PriorProfCopy::new(private_prior_name, long_name, true)
+                .with_public_name(public_prior_name)
+                .with_vmr_units(gas_units)
+                .set_attr_overrides(attr_overrides);
+
+            prior_copier.copy(private_file, public_file, time_subsetter)?;
         }
 
         // Likewise for the AKs
