@@ -12,7 +12,7 @@ use serde::{Deserialize, Deserializer};
 use crate::{
     config::default_attr_remove,
     constants::{PRIOR_INDEX_VARNAME, PROGRAM_NAME, TIME_DIM_NAME},
-    discovery::{AncillaryDiscoveryMethod, XgasMatchRule},
+    discovery::{AncillaryDiscoveryMethod, Rename, XgasMatchRule},
 };
 use copy_helpers::{copy_variable_general, copy_variable_new_data, copy_vmr_variable_from_dset};
 use copy_utils::{
@@ -592,16 +592,16 @@ impl XgasCopy {
             gas: gas.to_string(),
             gas_long: gas_long.to_string(),
             required: true,
-            xgas_error: XgasAncillary::Inferred,
+            xgas_error: XgasAncillary::Inferred(XgasAncInferOptions::new_required(None)),
             xgas_error_attr_overrides: IndexMap::new(),
-            prior_profile: XgasAncillary::InferredIfFirst,
+            prior_profile: XgasAncillary::Inferred(XgasAncInferOptions::new_if_first(None)),
             prior_profile_attr_overrides: IndexMap::new(),
-            prior_xgas: XgasAncillary::InferredIfFirst,
+            prior_xgas: XgasAncillary::Inferred(XgasAncInferOptions::new_if_first(None)),
             prior_xgas_attr_overrides: IndexMap::new(),
-            ak: XgasAncillary::InferredIfFirst,
+            ak: XgasAncillary::Inferred(XgasAncInferOptions::new_if_first(None)),
             ak_attr_overrides: IndexMap::new(),
-            slant_bin: XgasAncillary::Inferred,
-            traceability_scale: XgasAncillary::Inferred,
+            slant_bin: XgasAncillary::Inferred(XgasAncInferOptions::new_required(None)),
+            traceability_scale: XgasAncillary::Inferred(XgasAncInferOptions::new_required(None)),
         }
     }
 
@@ -616,18 +616,15 @@ impl XgasCopy {
             .xgas_error
             .map(|x| x.into())
             .unwrap_or(XgasAncillary::Inferred);
-        let prior_profile = rule
-            .prior_profile
-            .map(|x| x.into())
-            .unwrap_or(XgasAncillary::InferredIfFirst);
-        let prior_xgas = rule
-            .prior_xgas
-            .map(|x| x.into())
-            .unwrap_or(XgasAncillary::InferredIfFirst);
-        let ak = rule
-            .ak
-            .map(|x| x.into())
-            .unwrap_or(XgasAncillary::InferredIfFirst);
+        let prior_profile = rule.prior_profile.map(|x| x.into()).unwrap_or_else(|| {
+            XgasAncillary::Inferred(XgasAncInferOptions::new_if_first(rule.clone_rename()))
+        });
+        let prior_xgas = rule.prior_xgas.map(|x| x.into()).unwrap_or_else(|| {
+            XgasAncillary::Inferred(XgasAncInferOptions::new_if_first(rule.clone_rename()))
+        });
+        let ak = rule.ak.map(|x| x.into()).unwrap_or_else(|| {
+            XgasAncillary::Inferred(XgasAncInferOptions::new_if_first(rule.clone_rename()))
+        });
         let slant_bin = rule
             .slant_bin
             .map(|x| x.into())
@@ -734,14 +731,13 @@ impl XgasCopy {
 
     fn slant_bin_name(&self) -> String {
         match self.slant_bin {
-            XgasAncillary::Inferred => self.infer_slant_xgas_bin_name(),
-            XgasAncillary::InferredIfFirst => self.infer_slant_xgas_bin_name(),
-            XgasAncillary::OptInferredIfFirst => self.infer_slant_xgas_bin_name(),
+            // In the future, it might make sense to have the slant bin names follow
+            // the renaming rule. But since we don't have mid-IR AKs yet, it's too
+            // soon to figure that out. (Plus expanding the AKs should move into the
+            // private writer by then.)
+            XgasAncillary::Inferred(_) => self.infer_slant_xgas_bin_name(),
             XgasAncillary::Specified {
-                ref private_name,
-                public_name: _,
-            } => private_name.to_string(),
-            XgasAncillary::SpecifiedIfFirst {
+                only_if_first: _,
                 ref private_name,
                 public_name: _,
             } => private_name.to_string(),
@@ -1014,25 +1010,20 @@ impl CopySet for XgasCopy {
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum XgasAncillary {
     /// Infer which private variable to copy from the Xgas variable name
-    Inferred,
-    /// Infer which private variable to copy from the Xgas variable name,
-    /// but do not copy if that variable has already been copied to the
-    /// public file.
-    InferredIfFirst,
-    /// Infer which private variable to copy from the Xgas variable name,
-    /// but do not copy if that variable has already been copied OR it does
-    /// not exist in the private file.
-    OptInferredIfFirst,
+    Inferred(XgasAncInferOptions),
+
     /// Copy the specified private variable (the `XgasCopy` instance will assign the correct public name)
     Specified {
+        #[serde(default)]
+        only_if_first: bool,
         private_name: String,
         public_name: Option<String>,
     },
     /// Assume that another Xgas will provide the necessary variable
-    SpecifiedIfFirst {
-        private_name: String,
-        public_name: Option<String>,
-    },
+    // SpecifiedIfFirst {
+    //     private_name: String,
+    //     public_name: Option<String>,
+    // },
     /// Do not create this ancillary variable
     Omit,
 }
@@ -1059,17 +1050,17 @@ impl XgasAncillary {
         F: FnOnce() -> (String, String),
     {
         match self {
-            XgasAncillary::Inferred => infer_names_fxn(),
-            XgasAncillary::InferredIfFirst => infer_names_fxn(),
-            XgasAncillary::OptInferredIfFirst => infer_names_fxn(),
-            XgasAncillary::Specified {
-                private_name,
-                public_name,
-            } => {
-                let public_name = public_name.as_deref().unwrap_or(&private_name).to_owned();
-                (private_name.to_owned(), public_name)
+            XgasAncillary::Inferred(opts) => {
+                let (private_name, public_name) = infer_names_fxn();
+                let public_name = if let Some(renamer) = &opts.rename {
+                    renamer.rename(&public_name).to_string()
+                } else {
+                    public_name
+                };
+                (private_name, public_name)
             }
-            XgasAncillary::SpecifiedIfFirst {
+            XgasAncillary::Specified {
+                only_if_first: _,
                 private_name,
                 public_name,
             } => {
@@ -1114,45 +1105,82 @@ impl XgasAncillary {
         F: Fn() -> (String, String),
     {
         match self {
-            XgasAncillary::Inferred => true,
-            XgasAncillary::InferredIfFirst => {
+            XgasAncillary::Inferred(opts) => {
                 let (private_name, public_name) = infer_names_fxn();
-                let do_copy = public_file.variable(&public_name).is_none();
-                if !do_copy {
-                    log::debug!("Not copying variable '{private_name}' as public variable '{public_name}' was already copied");
-                }
-                do_copy
-            }
-            XgasAncillary::OptInferredIfFirst => {
-                let (private_name, public_name) = infer_names_fxn();
-                if private_file.variable(&private_name).is_none() {
+                let is_in_priv_file = private_file.variable(&private_name).is_none();
+                if !opts.required && !is_in_priv_file {
                     log::debug!(
                         "Optional private variable '{private_name}' does not exist, so not copying"
                     );
                     return false;
                 }
-                let do_copy = public_file.variable(&public_name).is_none();
-                if !do_copy {
+
+                let is_first_in_pub_file = public_file.variable(&public_name).is_none();
+                if opts.only_if_first && !is_first_in_pub_file {
                     log::debug!("Not copying variable '{private_name}' as public variable '{public_name}' was already copied");
+                    return false;
                 }
-                do_copy
+
+                return true;
             }
             XgasAncillary::Specified {
-                private_name: _,
-                public_name: _,
-            } => true,
-            XgasAncillary::SpecifiedIfFirst {
+                only_if_first,
                 private_name,
                 public_name,
             } => {
                 let public_name = public_name.as_deref().unwrap_or(&private_name);
-                let do_copy = public_file.variable(public_name).is_none();
-                if !do_copy {
+                let is_first_in_pub_file = public_file.variable(public_name).is_none();
+                if *only_if_first && !is_first_in_pub_file {
                     log::debug!("Not copying variable '{private_name}' as public variable '{public_name}' was already copied");
+                    false
+                } else {
+                    true
                 }
-                do_copy
             }
             XgasAncillary::Omit => false,
+        }
+    }
+
+    fn _is_first_in_public_file(public_file: &netcdf::File, public_varname: &str) -> bool {
+        public_file.variable(&public_varname).is_none()
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct XgasAncInferOptions {
+    #[serde(default)]
+    pub(crate) only_if_first: bool,
+
+    #[serde(default = "crate::config::default_true")]
+    pub(crate) required: bool,
+
+    #[serde(skip)]
+    pub(crate) rename: Option<Rename>,
+}
+
+impl XgasAncInferOptions {
+    pub(crate) fn new_required(rename: Option<Rename>) -> Self {
+        Self {
+            only_if_first: false,
+            required: true,
+            rename,
+        }
+    }
+
+    pub(crate) fn new_if_first(rename: Option<Rename>) -> Self {
+        Self {
+            only_if_first: true,
+            required: true,
+            rename,
+        }
+    }
+
+    pub(crate) fn opt_new_if_first(rename: Option<Rename>) -> Self {
+        Self {
+            only_if_first: true,
+            required: false,
+            rename,
         }
     }
 }
