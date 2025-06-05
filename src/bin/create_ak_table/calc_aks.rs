@@ -1,3 +1,4 @@
+//! Function for computing the binned AKs
 use std::{collections::HashMap, f64};
 
 use error_stack::ResultExt;
@@ -31,6 +32,8 @@ impl CalcError {
     }
 }
 
+/// Represents a set of binned AK tables for one or more gases
+/// on a consistent vertical grid.
 pub(crate) struct AkTableSet {
     pub(crate) tables: HashMap<String, AkTable>,
     pub(crate) sza_bin_centers: Array1<f64>,
@@ -38,21 +41,40 @@ pub(crate) struct AkTableSet {
     pub(crate) altitude: Array1<f64>,
 }
 
+/// Represents a set of binned AKs for a single gas
 pub(crate) struct AkTable {
     pub(crate) bins: AkBinType,
     pub(crate) aks: Array2<f64>,
 }
 
+/// How the AKs for one gas were binned
 pub(crate) enum AkBinType {
+    /// AKs were binned by SZA.
+    /// SZA bins must be consistent across gases,
+    /// so are provided in the [`AkTableSet`] containing
+    /// the gases.
     SZA,
 }
 
+/// Represents per-spectrum AKs read in from a `.all` file,
+/// reshaped to write the AKs as a 2D array
 struct SpectrumAks {
+    /// The minimum altitude values for each spectrum (shape = `nspec`)
     zmin: Array1<f64>,
+
+    /// The solar zenith angles for each spectrum (shape = `nspec`)
     sza: Array1<f64>,
+
+    /// The airmass for each spectrum (shape = `nspec`)
     airmass: Array1<f64>,
+
+    /// The altitude grid for all of the spectra (shape = `nlev`)
     z: Array1<f64>,
+
+    /// The mean pressure grid for all of the spectra (shape = `nlev`)
     p: Array1<f64>,
+
+    /// The averaging kernels for each spectrum (shape = `nspec` by `nlev`)
     ak: Array2<f64>,
 }
 
@@ -69,7 +91,8 @@ impl SpectrumAks {
     }
 }
 
-/// Create the collection of
+/// Create the collection of binned averaging kernels
+/// and check that all gases are on the same vertical grid.
 pub(crate) fn make_ak_tables(
     ak_infos: HashMap<String, Vec<AkInfo>>,
 ) -> error_stack::Result<AkTableSet, CalcError> {

@@ -3,12 +3,9 @@ use netcdf::Extents;
 
 use crate::{
     calc_aks::{AkTable, AkTableSet},
+    naming::{ak_varname, PRES_VAR_NAME, SZA_DIM_NAME, Z_DIM_NAME},
     AppendMode,
 };
-
-static Z_DIM_NAME: &'static str = "z";
-static SZA_DIM_NAME: &'static str = "sza_bin";
-static PRES_VAR_NAME: &'static str = "pressure";
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum WriteError {
@@ -22,6 +19,7 @@ impl WriteError {
     }
 }
 
+///
 pub(crate) fn write_aks_to_dset(
     ds: &mut netcdf::FileMut,
     aks: &AkTableSet,
@@ -111,12 +109,12 @@ fn add_ak(
     table: &AkTable,
     append_mode: &AppendMode,
 ) -> error_stack::Result<(), WriteError> {
-    let ak_varname = format!("x{gas}_aks");
-    if ds.variable(&ak_varname).is_some() {
+    let varname = ak_varname(gas);
+    if ds.variable(&varname).is_some() {
         match append_mode {
-            AppendMode::No => panic!("{ak_varname} exists - this should not happen when we are overwriting the existing file."),
+            AppendMode::No => panic!("{varname} exists - this should not happen when we are overwriting the existing file."),
             AppendMode::Keep => return Ok(()),
-            AppendMode::Error => panic!("{ak_varname} exists - this should have already been checked before we got to writing the AKs."),
+            AppendMode::Error => panic!("{varname} exists - this should have already been checked before we got to writing the AKs."),
         }
     }
 
@@ -124,19 +122,17 @@ fn add_ak(
         crate::calc_aks::AkBinType::SZA => SZA_DIM_NAME,
     };
     let mut var = ds
-        .add_variable::<f64>(&ak_varname, &[Z_DIM_NAME, bin_dim])
+        .add_variable::<f64>(&varname, &[Z_DIM_NAME, bin_dim])
         .change_context_lazy(|| {
-            WriteError::context(format!("creating the '{ak_varname}' variable"))
+            WriteError::context(format!("creating the '{varname}' variable"))
         })?;
     var.put_attribute("description", format!("X{gas} column averaging kernels"))
         .change_context_lazy(|| {
             WriteError::context(format!(
-                "adding the 'description' attribute to the '{ak_varname}' variable"
+                "adding the 'description' attribute to the '{varname}' variable"
             ))
         })?;
     var.put(table.aks.view(), Extents::All)
-        .change_context_lazy(|| {
-            WriteError::context(format!("writing the '{ak_varname}' variable"))
-        })?;
+        .change_context_lazy(|| WriteError::context(format!("writing the '{varname}' variable")))?;
     Ok(())
 }
