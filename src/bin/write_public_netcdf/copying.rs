@@ -664,6 +664,16 @@ impl XgasCopy {
         &self.gas
     }
 
+    pub(crate) fn gas_from_xgas(&self) -> &str {
+        let s = if let Some((s, _)) = self.xgas_varname().split_once('_') {
+            s
+        } else {
+            self.xgas_varname()
+        };
+
+        s.trim_matches('x')
+    }
+
     pub(crate) fn gas_full_name(&self) -> &str {
         &self.gas_long
     }
@@ -807,16 +817,39 @@ impl CopySet for XgasCopy {
             &gas_units
         };
 
+        // Get any existing "ancillary_variables" attribute. We won't put it into the attr_overrides
+        // yet because we need to know which ancillary variables are actually available. We'll insert it
+        // manually at the end.
+        let mut ancillary_vars = match get_string_attr(&xgas_var, "ancillary_variables") {
+            Ok(mut s) => {
+                s.push(' ');
+                s
+            }
+            Err(e) => {
+                let inner = e.current_context();
+                if let CopyError::MissingReqAttr { parent: _, attr: _ } = inner {
+                    "".to_string()
+                } else {
+                    return Err(e);
+                }
+            }
+        };
+
         let attr_to_remove = default_attr_remove();
         let mut attr_overrides = self.xgas_attr_overrides.clone();
+        if !attr_overrides.contains_key("description") {
+            let new_desc = xgas_helpers::update_xgas_description(&xgas_var, self.gas_from_xgas())?;
+            attr_overrides.insert("description".to_string(), new_desc);
+        }
         self.maybe_add_traceability_scale_attr(private_file, public_file, &mut attr_overrides)?;
 
         // Now copy the Xgas itself
+        let public_xgas_name = self.xgas_public.as_deref().unwrap_or(&self.xgas);
         copy_vmr_variable_from_dset::<f32, _>(
             private_file,
             public_file,
             &self.xgas,
-            &self.xgas_public.as_deref().unwrap_or(&self.xgas),
+            public_xgas_name,
             time_subsetter,
             &format!("column average {} mole fraction", self.gas_long),
             attr_overrides,
@@ -840,6 +873,9 @@ impl CopySet for XgasCopy {
                 &attr_to_remove,
                 &gas_units,
             )?;
+
+            ancillary_vars.push_str(&public_error_name);
+            ancillary_vars.push(' ');
         }
 
         // And the prior Xgas value
@@ -867,6 +903,9 @@ impl CopySet for XgasCopy {
                 &attr_to_remove,
                 &gas_units,
             )?;
+
+            ancillary_vars.push_str(&public_prxgas_name);
+            ancillary_vars.push(' ');
         }
 
         // Now the a priori profiles. They will (for now) be expanded
@@ -875,6 +914,9 @@ impl CopySet for XgasCopy {
             .prior_profile
             .get_var_names_opt(private_file, &public_file, || self.infer_prior_prof_names());
         if let Some((private_prior_name, public_prior_name)) = opt {
+            ancillary_vars.push_str(&public_prior_name);
+            ancillary_vars.push(' ');
+
             let long_name = format!("a priori {} profile", self.gas_long);
             let mut attr_overrides = self.prior_profile_attr_overrides.clone();
             // description is allowed to be overridden. units and long_units are not, but those are handled in the
@@ -944,7 +986,21 @@ impl CopySet for XgasCopy {
                 &extrap_flag_varname,
                 ak_extrap_flags.view(),
             )?;
+
+            ancillary_vars.push_str(&public_ak_name);
+            ancillary_vars.push(' ');
         }
+
+        let ancillary_vars = ancillary_vars.trim_end();
+        let mut public_xgas_var = public_file.variable_mut(public_xgas_name)
+            .expect("public Xgas variable must exist - it should have been created earlier in this function");
+        public_xgas_var
+            .put_attribute("ancillary_variables", ancillary_vars)
+            .change_context_lazy(|| {
+                CopyError::context(format!(
+                    "updating the 'ancillary_variables' attribute for {public_xgas_name}"
+                ))
+            })?;
 
         Ok(())
     }

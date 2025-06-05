@@ -17,6 +17,33 @@ use super::{
     find_subset_dim, get_string_attr, CopyError, Subsetter,
 };
 
+pub(super) fn update_xgas_description(
+    xgas_var: &netcdf::Variable,
+    gas: &str,
+) -> error_stack::Result<netcdf::AttributeValue, CopyError> {
+    let curr_descr = get_string_attr(xgas_var, "description").change_context_lazy(|| {
+        CopyError::context(format!("updating the description for {}", xgas_var.name()))
+    })?;
+
+    // In my test file, the capitalization of column_o2 was not consistent. We want to keep
+    // the capitalization of any extra description, hence the use of an index from the lowercased
+    // string to do the split.
+    let lower_desc = curr_descr.to_ascii_lowercase();
+    let split_on = "/column_o2";
+    let extra_desc = if let Some(i) = lower_desc.find(split_on) {
+        let iextra = i + split_on.len();
+        curr_descr[iextra..].trim()
+    } else {
+        return Ok(curr_descr.into());
+    };
+
+    if extra_desc.is_empty() {
+        Ok(format!("o2_mean_mole_fraction * column_{gas} / column_o2").into())
+    } else {
+        Ok(format!("o2_mean_mole_fraction * column_{gas} / column_o2, {extra_desc}").into())
+    }
+}
+
 pub(super) fn convert_dmf_array<T>(
     mut data: ArrayD<T>,
     orig_unit: &str,
