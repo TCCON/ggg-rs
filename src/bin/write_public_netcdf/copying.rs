@@ -755,6 +755,10 @@ impl XgasCopy {
         public_file: &netcdf::File,
         attr_overrides: &mut IndexMap<String, AttributeValue>,
     ) -> error_stack::Result<(), CopyError> {
+        if attr_overrides.contains_key("wmo_or_analogous_scale") {
+            return Ok(());
+        }
+
         let scale_varnames =
             self.traceability_scale
                 .get_var_names_opt(private_file, public_file, || {

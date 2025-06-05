@@ -112,6 +112,11 @@ ak = { type = "specified_if_first", private_name = "ak_xlco2" }
 slant_bin = { type = "specified", private_name = "ak_slant_xlco2_bin" }
 
 [[xgas]]
+xgas = "xco"
+gas = "co"
+xgas_attr_overrides = { wmo_or_analogous_scale = "Not used" }
+
+[[xgas]]
 xgas = "xhcl"
 gas = "hcl"
 ak = { type = "opt_inferred_if_first" }
