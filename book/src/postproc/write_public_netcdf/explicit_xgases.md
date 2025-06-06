@@ -46,17 +46,17 @@ ak = { type = "omit" }
 [[xgas]]
 xgas = "xco2_x2019"
 gas = "co2"
-prior_profile = { type = "specified_if_first", private_name = "prior_1co2", public_name = "prior_co2" }
-prior_xgas = { type = "specified_if_first", private_name = "prior_xco2_x2019", public_name = "prior_xco2" }
-ak = { type = "specified_if_first", private_name = "ak_xco2" }
+prior_profile = { type = "specified", only_if_first = true, private_name = "prior_1co2", public_name = "prior_co2" }
+prior_xgas = { type = "specified", only_if_first = true, private_name = "prior_xco2_x2019", public_name = "prior_xco2" }
+ak = { type = "specified", only_if_first = true, private_name = "ak_xco2" }
 slant_bin = { type = "specified", private_name = "ak_slant_xco2_bin" }
 
 [[xgas]]
 xgas = "xwco2_x2019"
 gas = "co2"
-prior_profile = { type = "specified_if_first", private_name = "prior_1co2", public_name = "prior_co2" }
-prior_xgas = { type = "specified_if_first", private_name = "prior_xwco2_x2019", public_name = "prior_xco2" }
-ak = { type = "specified_if_first", private_name = "ak_xwco2" }
+prior_profile = { type = "specified", only_if_first = true, private_name = "prior_1co2", public_name = "prior_co2" }
+prior_xgas = { type = "specified", only_if_first = true, private_name = "prior_xwco2_x2019", public_name = "prior_xco2" }
+ak = { type = "specified", only_if_first = true, private_name = "ak_xwco2" }
 slant_bin = { type = "specified", private_name = "ak_slant_xwco2_bin" }
 ```
 
@@ -95,24 +95,34 @@ for a warning that a particular attribute cannot be set.
 
 ## Ancillary variable specifications
 
-The ancillary variables (prior profile, prior Xgas, AK, slant bin, and traceability scale) can be defined as one of the following six types:
+The ancillary variables (prior profile, prior Xgas, AK, slant bin, and traceability scale) can be defined as one of the following three types:
 
 - `inferred`: indicates that this ancillary variable must be included and should not conflict with any other
-  variable. The private and public variable names will be inferred from the Xgas and gas names.
-- `inferred_if_first`: similar to `inferred`, except that it is not an error if the variable already exists
-  in the public file. This is meant to support cases like described for CO2 above, where multiple Xgases share
-  a single ancillary variable - as long as one Xgas copies it, the other Xgases do not need to.
-  **Note that the writer does not check that the existing variable's data are equal to what would be written for the new variable!**
-- `opt_inferred_if_first`: similar to `inferred_if_first`, except that if the private variable does not exist,
-  then this variable will be skipped instead of causing an error. This is intended for [Xgas discovery rules](/write_public_netcdf/xgas_discovery.html#rules) more than explicit Xgas definitions.
+  variable. The private and public variable names will be inferred from the Xgas and gas names. This type has
+  two options:
+    - `only_if_first`: a boolean (`false` by default) that when set to `true` will skip copying the relevant
+      variable if a variable with the same public name is already in the public file.
+      **Note that the writer does not check that the existing variable's data are equal to what would be written for the new variable!**
+    - `required`: a boolean (`true` by default) that when set to `false` allows this variable to be missing
+      from the private file. This is intended for [Xgas discovery rules](/write_public_netcdf/xgas_discovery.html#rules)
+      more than explicit Xgas definitions.
 - `specified`: allows you to specify exactly which variable to copy with the `private_name` field. You can also
   give the `public_name` field to indicate what the variable name in the output file should be; if that is omitted,
   then the public variable will have the same name as the private variable. It is an error if the public variable
-  already exists.
-- `specified_if_first`: similar to `specified`, except that it is not an error if the public variable already exists.
-  (This is analogous to the relationship between `inferred` and `inferred_if_first`). This has the same `private_name`
-  and `public_name` fields as `specified`.
+  already exists. The also allows the `only_if_first` field, which behaves how it does for the `inferred` type.
 - `omit`: indicates that this variable should not be copied.
+
+In the following example, the prior Xgas field shows the use of the `inferred` options, the prior profile field
+shows the use of the `specified` options, and the AK field the use of `omit`.
+
+```toml
+[[xgas]]
+xgas = "xhcl"
+gas = "hcl"
+prior_xgas = { type = "inferred", only_if_first = true, required = false }
+prior_profile = { type = "specified", only_if_first = true, private_name = "prior_1hcl", public_name = "prior_hcl" }
+ak = { type = "omit" }
+```
   
 ## Ancillary variable name inference
 

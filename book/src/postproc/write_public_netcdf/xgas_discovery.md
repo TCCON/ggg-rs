@@ -20,10 +20,6 @@ By default, the configuration will add a single regex rule that matches the patt
 You can disable this by setting `xgas_rules = false` in the [`[defaults]`](/write_public_netcdf/defaults.html) section of the config.
 This rule is designed to match basic Xgas variables, e.g., "xch4", "xn2o", etc.
 
-The rules also include default settings for the prior profile, prior column average, averaging kernel (and its slant Xgas bins), and the traceability scale.
-These can be specified the same way as described [in the Xgases ancillary subsection](/write_public_netcdf/explicit_xgases.html#ancillary-variable-specifications),
-and the defaults are the same as well.
-
 An example of a regular expression rule that uses the default ways to infer its ancillary variables is:
 
 ```toml
@@ -56,7 +52,7 @@ This means that if a variable matches multiple rules, then its ancillary variabl
 
 Discovery rules can specify the fields `xgas_attr_overrides`, `xgas_error_attr_overrides`, `prior_profile_attr_overrides`,
 `prior_xgas_attr_overrides`, and `ak_attr_overrides` to set attributes on their respective variables.
-These should be used for attributes that will be the same for _all_ of the variables of that type created by this rule.
+These should be used for attributes that will be the same for _all_ the variables of that type created by this rule.
 For example, to add a cautionary note about experimental data to our previous mid-IR discovery rule:
 
 ```toml
@@ -66,6 +62,13 @@ xgas_attr_overrides = { note = "Experimental data, use with caution!" }
 ak = { type = "omit" }
 traceability_scale = { type = "omit" }
 ```
+
+## Ancillary variables
+
+The rules also include default settings for the prior profile, prior column average, averaging kernel (and its slant Xgas bins), and the traceability scale.
+These can be specified the same way as described [in the Xgases ancillary subsection](/write_public_netcdf/explicit_xgases.html#ancillary-variable-specifications),
+and the defaults are the same as well.
+However only the `inferred` and `omit` types may be used, as `specified` does not make sense when a rule may apply to more than one Xgas.
 
 ## Exclusions
 

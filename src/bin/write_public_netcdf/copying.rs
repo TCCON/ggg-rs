@@ -12,7 +12,7 @@ use serde::{Deserialize, Deserializer};
 use crate::{
     config::default_attr_remove,
     constants::{PRIOR_INDEX_VARNAME, PROGRAM_NAME, TIME_DIM_NAME},
-    discovery::{AncillaryDiscoveryMethod, Rename, XgasMatchRule},
+    discovery::{Rename, XgasMatchRule},
 };
 use copy_helpers::{copy_variable_general, copy_variable_new_data, copy_vmr_variable_from_dset};
 use copy_utils::{
@@ -614,25 +614,50 @@ impl XgasCopy {
     ) -> Self {
         let xgas_error = rule
             .xgas_error
-            .map(|x| x.into())
-            .unwrap_or(XgasAncillary::Inferred);
-        let prior_profile = rule.prior_profile.map(|x| x.into()).unwrap_or_else(|| {
-            XgasAncillary::Inferred(XgasAncInferOptions::new_if_first(rule.clone_rename()))
-        });
-        let prior_xgas = rule.prior_xgas.map(|x| x.into()).unwrap_or_else(|| {
-            XgasAncillary::Inferred(XgasAncInferOptions::new_if_first(rule.clone_rename()))
-        });
-        let ak = rule.ak.map(|x| x.into()).unwrap_or_else(|| {
-            XgasAncillary::Inferred(XgasAncInferOptions::new_if_first(rule.clone_rename()))
-        });
+            .as_ref()
+            .map(|x| x.clone_into_xgas_ancillary_with_rename(rule.clone_rename()))
+            .unwrap_or_else(|| {
+                XgasAncillary::Inferred(XgasAncInferOptions::new_required(rule.clone_rename()))
+            });
+
+        let prior_profile = rule
+            .prior_profile
+            .as_ref()
+            .map(|x| x.clone_into_xgas_ancillary_with_rename(rule.clone_rename()))
+            .unwrap_or_else(|| {
+                XgasAncillary::Inferred(XgasAncInferOptions::new_if_first(rule.clone_rename()))
+            });
+
+        let prior_xgas = rule
+            .prior_xgas
+            .as_ref()
+            .map(|x| x.clone_into_xgas_ancillary_with_rename(rule.clone_rename()))
+            .unwrap_or_else(|| {
+                XgasAncillary::Inferred(XgasAncInferOptions::new_if_first(rule.clone_rename()))
+            });
+
+        let ak = rule
+            .ak
+            .as_ref()
+            .map(|x| x.clone_into_xgas_ancillary_with_rename(rule.clone_rename()))
+            .unwrap_or_else(|| {
+                XgasAncillary::Inferred(XgasAncInferOptions::new_if_first(rule.clone_rename()))
+            });
+
         let slant_bin = rule
             .slant_bin
-            .map(|x| x.into())
-            .unwrap_or(XgasAncillary::Inferred);
+            .as_ref()
+            .map(|x| x.clone_into_xgas_ancillary_with_rename(rule.clone_rename()))
+            .unwrap_or_else(|| XgasAncillary::Inferred(XgasAncInferOptions::new_required(None)));
+
         let traceability_scale = rule
             .traceability_scale
-            .map(|x| x.into())
-            .unwrap_or(XgasAncillary::Inferred);
+            .as_ref()
+            .map(|x| x.clone_into_xgas_ancillary_with_rename(rule.clone_rename()))
+            .unwrap_or(XgasAncillary::Inferred(XgasAncInferOptions::new_required(
+                rule.clone_rename(),
+            )));
+
         Self {
             xgas: xgas.to_string(),
             xgas_public: xgas_public.map(|name| name.to_string()),
@@ -1019,24 +1044,9 @@ pub(crate) enum XgasAncillary {
         private_name: String,
         public_name: Option<String>,
     },
-    /// Assume that another Xgas will provide the necessary variable
-    // SpecifiedIfFirst {
-    //     private_name: String,
-    //     public_name: Option<String>,
-    // },
+
     /// Do not create this ancillary variable
     Omit,
-}
-
-impl From<AncillaryDiscoveryMethod> for XgasAncillary {
-    fn from(value: AncillaryDiscoveryMethod) -> Self {
-        match value {
-            AncillaryDiscoveryMethod::Inferred => Self::Inferred,
-            AncillaryDiscoveryMethod::InferredIfFirst => Self::InferredIfFirst,
-            AncillaryDiscoveryMethod::OptInferredIfFirst => Self::OptInferredIfFirst,
-            AncillaryDiscoveryMethod::Omit => Self::Omit,
-        }
-    }
 }
 
 impl XgasAncillary {
@@ -1385,14 +1395,21 @@ mod tests {
     fn test_de_xgas_anc_inferred() {
         let toml_str = r#"type = "inferred""#;
         let anc_de: XgasAncillary = toml::from_str(toml_str).expect("deserialization should work");
-        assert_eq!(anc_de, XgasAncillary::Inferred);
+        assert_eq!(
+            anc_de,
+            XgasAncillary::Inferred(XgasAncInferOptions::new_required(None))
+        );
     }
 
     #[test]
     fn test_de_xgas_anc_inferred_if_first() {
-        let toml_str = r#"type = "inferred_if_first""#;
+        let toml_str = r#"type = "inferred"
+        only_if_first = true"#;
         let anc_de: XgasAncillary = toml::from_str(toml_str).expect("deserialization should work");
-        assert_eq!(anc_de, XgasAncillary::InferredIfFirst);
+        assert_eq!(
+            anc_de,
+            XgasAncillary::Inferred(XgasAncInferOptions::new_if_first(None))
+        );
     }
 
     #[test]
@@ -1403,6 +1420,7 @@ mod tests {
         assert_eq!(
             anc_de,
             XgasAncillary::Specified {
+                only_if_first: false,
                 private_name: "prior_xco2".to_string(),
                 public_name: None
             }
@@ -1416,6 +1434,7 @@ mod tests {
         assert_eq!(
             anc_de,
             XgasAncillary::Specified {
+                only_if_first: false,
                 private_name: "prior_1co2".to_string(),
                 public_name: Some("prior_co2".to_string())
             }
@@ -1424,25 +1443,29 @@ mod tests {
 
     #[test]
     fn test_de_xgas_anc_specified_if_first() {
-        let toml_str = r#"type = "specified_if_first"
+        let toml_str = r#"type = "specified"
+        only_if_first = true
         private_name = "prior_xco2""#;
         let anc_de: XgasAncillary = toml::from_str(toml_str).expect("deserialization should work");
         assert_eq!(
             anc_de,
-            XgasAncillary::SpecifiedIfFirst {
+            XgasAncillary::Specified {
+                only_if_first: true,
                 private_name: "prior_xco2".to_string(),
                 public_name: None
             }
         );
 
-        let toml_str = r#"type = "specified_if_first"
+        let toml_str = r#"type = "specified"
+        only_if_first = true
         private_name = "prior_1co2"
         public_name = "prior_co2"
         "#;
         let anc_de: XgasAncillary = toml::from_str(toml_str).expect("deserialization should work");
         assert_eq!(
             anc_de,
-            XgasAncillary::SpecifiedIfFirst {
+            XgasAncillary::Specified {
+                only_if_first: true,
                 private_name: "prior_1co2".to_string(),
                 public_name: Some("prior_co2".to_string())
             }
@@ -1473,27 +1496,31 @@ mod tests {
         let toml_str = r#"xgas = "xco2"
         gas = "co2"
         gas_long = "carbon dioxide"
-        prior_profile = { type = "specified_if_first", private_name = "prior_1co2", public_name = "prior_co2" }
-        prior_xgas = { type = "specified_if_first", private_name = "prior_xco2_x2019", public_name = "prior_xco2" }
-        ak = { type = "specified_if_first", private_name = "ak_xco2" }
+        prior_profile = { type = "specified", only_if_first = true, private_name = "prior_1co2", public_name = "prior_co2" }
+        prior_xgas = { type = "specified", only_if_first = true, private_name = "prior_xco2_x2019", public_name = "prior_xco2" }
+        ak = { type = "specified", only_if_first = true, private_name = "ak_xco2" }
         slant_bin = { type = "specified", private_name = "ak_slant_xco2_bin" }
         "#;
 
         let xgas_de: XgasCopy = toml::from_str(toml_str).expect("deserialization should not fail");
         let mut xgas_expected = XgasCopy::new("xco2", "co2", "carbon dioxide");
-        xgas_expected.prior_profile = XgasAncillary::SpecifiedIfFirst {
+        xgas_expected.prior_profile = XgasAncillary::Specified {
+            only_if_first: true,
             private_name: "prior_1co2".to_string(),
             public_name: Some("prior_co2".to_string()),
         };
-        xgas_expected.prior_xgas = XgasAncillary::SpecifiedIfFirst {
+        xgas_expected.prior_xgas = XgasAncillary::Specified {
+            only_if_first: true,
             private_name: "prior_xco2_x2019".to_string(),
             public_name: Some("prior_xco2".to_string()),
         };
-        xgas_expected.ak = XgasAncillary::SpecifiedIfFirst {
+        xgas_expected.ak = XgasAncillary::Specified {
+            only_if_first: true,
             private_name: "ak_xco2".to_string(),
             public_name: None,
         };
         xgas_expected.slant_bin = XgasAncillary::Specified {
+            only_if_first: false,
             private_name: "ak_slant_xco2_bin".to_string(),
             public_name: None,
         };

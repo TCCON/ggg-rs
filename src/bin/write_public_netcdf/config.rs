@@ -16,7 +16,7 @@ use serde::Deserialize;
 
 use crate::{
     constants::DEFAULT_GAS_LONG_NAMES,
-    copying::{CopyGlobalAttr, PriorProfCopy, XgasAncillary},
+    copying::{CopyGlobalAttr, PriorProfCopy, XgasAncInferOptions, XgasAncillary},
     discovery::{AncillaryDiscoveryMethod, XgasMatchMethod, XgasMatchRule},
     AuxVarCopy, ComputedVariable, XgasCopy,
 };
@@ -400,11 +400,11 @@ pub(crate) fn default_aux_vars() -> Vec<AuxVarCopy> {
 }
 
 pub(crate) fn default_ancillary_infer_first() -> XgasAncillary {
-    XgasAncillary::InferredIfFirst
+    XgasAncillary::Inferred(XgasAncInferOptions::new_if_first(None))
 }
 
 pub(crate) fn default_ancillary_infer() -> XgasAncillary {
-    XgasAncillary::Inferred
+    XgasAncillary::Inferred(XgasAncInferOptions::new_required(None))
 }
 
 fn add_default_aux_vars(config: &mut Config) {
@@ -443,7 +443,9 @@ fn add_default_xgas_rules(config: &mut Config) {
         XgasMatchMethod::regex_from_string(pattern, None)
             .expect("default Xgas regular expression must be valid"),
     );
-    std_rule.traceability_scale = Some(AncillaryDiscoveryMethod::OptInferredIfFirst);
+    std_rule.traceability_scale = Some(AncillaryDiscoveryMethod::Inferred(
+        XgasAncInferOptions::opt_new_if_first(None),
+    ));
     config.discovery.rule.push(std_rule);
 }
 
@@ -522,5 +524,17 @@ mod tests {
                 res.unwrap_err()
             );
         }
+    }
+
+    #[test]
+    fn test_standard_tccon_config() {
+        Config::from_toml_str(STANDARD_TCCON_TOML)
+            .expect("deserializing the standard TCCON configuration should not fail");
+    }
+
+    #[test]
+    fn test_extended_tccon_config() {
+        Config::from_toml_str(EXTENDED_TCCON_TOML)
+            .expect("deserializing the extended TCCON configuration should not fail");
     }
 }

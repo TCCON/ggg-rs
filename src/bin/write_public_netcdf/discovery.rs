@@ -7,7 +7,7 @@ use netcdf::AttributeValue;
 use regex::Regex;
 use serde::Deserialize;
 
-use crate::copying::de_attribute_overrides;
+use crate::copying::{de_attribute_overrides, XgasAncInferOptions, XgasAncillary};
 use crate::XgasCopy;
 
 #[derive(Debug, thiserror::Error)]
@@ -178,9 +178,9 @@ impl XgasMatchMethod {
     pub(crate) fn clone_into_rename(&self) -> Option<Rename> {
         match self {
             XgasMatchMethod::Suffix {
-                discovery_re,
+                discovery_re: _,
                 replacement_re,
-                suf,
+                suf: _,
                 new_suf,
             } => {
                 if let Some(replacement) = new_suf {
@@ -192,7 +192,11 @@ impl XgasMatchMethod {
                     None
                 }
             }
-            XgasMatchMethod::Regex { re, pat, rep_pat } => {
+            XgasMatchMethod::Regex {
+                re,
+                pat: _,
+                rep_pat,
+            } => {
                 if let Some(replacement) = rep_pat {
                     Some(Rename {
                         re: re.clone(),
@@ -277,13 +281,27 @@ fn match_xgas_var_regex<'a>(varname: &'a str, re: &Regex) -> Option<&'a str> {
     Some(gas.as_str())
 }
 
-#[derive(Debug, Deserialize, PartialEq, Eq, Clone, Copy)]
+#[derive(Debug, Deserialize, PartialEq, Eq, Clone)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum AncillaryDiscoveryMethod {
-    Inferred,
-    InferredIfFirst,
-    OptInferredIfFirst,
+    Inferred(XgasAncInferOptions),
     Omit,
+}
+
+impl AncillaryDiscoveryMethod {
+    pub(crate) fn clone_into_xgas_ancillary_with_rename(
+        &self,
+        rename: Option<Rename>,
+    ) -> XgasAncillary {
+        match self {
+            AncillaryDiscoveryMethod::Inferred(opts) => {
+                let mut opts = opts.clone();
+                opts.rename = rename;
+                XgasAncillary::Inferred(opts)
+            }
+            AncillaryDiscoveryMethod::Omit => XgasAncillary::Omit,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, PartialEq)]
