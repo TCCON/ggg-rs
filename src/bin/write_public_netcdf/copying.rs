@@ -1117,7 +1117,8 @@ impl XgasAncillary {
         match self {
             XgasAncillary::Inferred(opts) => {
                 let (private_name, public_name) = infer_names_fxn();
-                let is_in_priv_file = private_file.variable(&private_name).is_none();
+                let is_in_priv_file = private_file.variable(&private_name).is_some();
+                log::trace!("Variable '{private_name}' is in the private file = {is_in_priv_file} (required = {})", opts.required);
                 if !opts.required && !is_in_priv_file {
                     log::debug!(
                         "Optional private variable '{private_name}' does not exist, so not copying"
@@ -1125,8 +1126,8 @@ impl XgasAncillary {
                     return false;
                 }
 
-                let is_first_in_pub_file = public_file.variable(&public_name).is_none();
-                if opts.only_if_first && !is_first_in_pub_file {
+                let is_in_pub_file = public_file.variable(&public_name).is_some();
+                if opts.only_if_first && is_in_pub_file {
                     log::debug!("Not copying variable '{private_name}' as public variable '{public_name}' was already copied");
                     return false;
                 }
@@ -1139,8 +1140,8 @@ impl XgasAncillary {
                 public_name,
             } => {
                 let public_name = public_name.as_deref().unwrap_or(&private_name);
-                let is_first_in_pub_file = public_file.variable(public_name).is_none();
-                if *only_if_first && !is_first_in_pub_file {
+                let is_in_pub_file = public_file.variable(public_name).is_some();
+                if *only_if_first && is_in_pub_file {
                     log::debug!("Not copying variable '{private_name}' as public variable '{public_name}' was already copied");
                     false
                 } else {
