@@ -42,6 +42,17 @@
         <script src="../../toc.js"></script>
     </head>
     <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
     <div id="body-container">
         <!-- Work around some values being stored in localStorage wrapped in quotes -->
         <script>
@@ -119,7 +130,7 @@
                             <li role="none"><button role="menuitem" class="theme" id="navy">Navy</button></li>
                             <li role="none"><button role="menuitem" class="theme" id="ayu">Ayu</button></li>
                         </ul>
-                        <button id="search-toggle" class="icon-button" type="button" title="Search. (Shortkey: s)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="S" aria-controls="searchbar">
+                        <button id="search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="searchbar">
                             <i class="fa fa-search"></i>
                         </button>
                     </div>
@@ -177,11 +188,17 @@ This is used to match up to, e.g., the priors which do not distinguish between t
 <li><code>gas_long</code> (optional): the full name of the gas instead of its abbreviation, e.g. "carbon dioxide" for CO2. If not given,
 then the configuration will try to find the <code>gas</code> value in its <a href="/write_public_netcdf/gas_proper_names.html"><code>[gas_long_names]</code></a> section and use that,
 falling back on the <code>gas</code> value if the gas is not defined in the gas long names section.</li>
+<li><code>xgas_attr_overrides</code> (optional): a table of attribute values that can override existing attribute values on the private Xgas variable.</li>
+<li><code>xgas_error_attr_overrides</code> (optional): a table of attribute values that can override existing attribute values on the private Xgas error variable.</li>
 <li><code>prior_profile</code> (optional): how to copy the a priori profile.</li>
+<li><code>prior_profile_attr_overrides</code> (optional): a table of attribute values that can override existing attribute values on the private prior profile variable.</li>
 <li><code>prior_xgas</code> (optional): how to copy the a priori column average.</li>
+<li><code>prior_xgas_attr_overrides</code> (optional): a table of attribute values that can override existing attribute values on the private prior Xgas variable.</li>
 <li><code>ak</code> (optional): how to copy the averaging kernels.</li>
+<li><code>ak_attr_overrides</code> (optional): a table of attribute values that can override existing attribute values on the private AK variable.</li>
 <li><code>slant_bin</code> (optional): how to find the slant Xgas bin variable needed to expand the AKs.</li>
 <li><code>traceability_scale</code> (optional): how to find the variable containing the WMO or analogous scale for this data.</li>
+<li><code>required</code> (optional): this is <code>true</code> by default; set it to <code>false</code> if you want to copy this Xgas if present but it is not an error if it is missing.</li>
 </ul>
 <p><code>prior_profile</code>, <code>prior_xgas</code>, <code>ak</code>, <code>slant_bin</code>, and <code>traceability_scale</code> can all be defined following the syntax in the <a href="#ancillary-variable-specifications">ancillary variable specifications</a>.
 Note that <code>slant_bin</code> is a special case in that it will only be used if the AKs are to be copied, but cannot be omitted in that case.</p>
@@ -197,17 +214,17 @@ ak = { type = "omit" }
 [[xgas]]
 xgas = "xco2_x2019"
 gas = "co2"
-prior_profile = { type = "specified_if_first", private_name = "prior_1co2", public_name = "prior_co2" }
-prior_xgas = { type = "specified_if_first", private_name = "prior_xco2_x2019", public_name = "prior_xco2" }
-ak = { type = "specified_if_first", private_name = "ak_xco2" }
+prior_profile = { type = "specified", only_if_first = true, private_name = "prior_1co2", public_name = "prior_co2" }
+prior_xgas = { type = "specified", only_if_first = true, private_name = "prior_xco2_x2019", public_name = "prior_xco2" }
+ak = { type = "specified", only_if_first = true, private_name = "ak_xco2" }
 slant_bin = { type = "specified", private_name = "ak_slant_xco2_bin" }
 
 [[xgas]]
 xgas = "xwco2_x2019"
 gas = "co2"
-prior_profile = { type = "specified_if_first", private_name = "prior_1co2", public_name = "prior_co2" }
-prior_xgas = { type = "specified_if_first", private_name = "prior_xwco2_x2019", public_name = "prior_xco2" }
-ak = { type = "specified_if_first", private_name = "ak_xwco2" }
+prior_profile = { type = "specified", only_if_first = true, private_name = "prior_1co2", public_name = "prior_co2" }
+prior_xgas = { type = "specified", only_if_first = true, private_name = "prior_xwco2_x2019", public_name = "prior_xco2" }
+ak = { type = "specified", only_if_first = true, private_name = "ak_xwco2" }
 slant_bin = { type = "specified", private_name = "ak_slant_xwco2_bin" }
 </code></pre>
 <p>First we have <code>xluft</code>.
@@ -221,26 +238,59 @@ These would not be discovered by the <a href="/write_public_netcdf/xgas_discover
 Further, the mapping to their prior and AK variables is unique: all the CO2 Xgas variables can share the prior profiles and column averages, and each "flavor" of CO2 (regular, wCO2, or lCO2) can use the same AKs whether it is on the X2007 or X2019 scale.
 Thus, we not only define that these variables need copied, but that we want to rename the prior variables to just "prior_co2" and "prior_xco2" and only copy these the first time we find them.
 We also ensure that the AKs and slant bins point to the correct variables.</p>
+<p>If we wanted to set the <code>note</code> attribute of <code>xluft</code>, we could do that like so:</p>
+<pre><code class="language-toml">[[xgas]]
+xgas = "xluft"
+gas = "luft"
+gas_long = "dry air"
+prior_profile = { type = "omit" }
+prior_xgas = { type = "omit" }
+ak = { type = "omit" }
+xgas_attr_overrides = { note = "This is a diagnostic quantity" }
+</code></pre>
+<div id="admonition-note" class="admonition admonish-note" role="note" aria-labelledby="admonition-note-title">
+<div class="admonition-title">
+<div id="admonition-note-title">
+<p>Note</p>
+</div>
+<a class="admonition-anchor-link" href="#admonition-note"></a>
+</div>
+<div>
+<p>Not all attributes can be overridden, some are set internally by the netCDF writer to ensure consistency.
+If an attribute is not getting the value you expect, first check the logging output from the netCDF writer
+for a warning that a particular attribute cannot be set.</p>
+</div>
+</div>
 <h2 id="ancillary-variable-specifications"><a class="header" href="#ancillary-variable-specifications">Ancillary variable specifications</a></h2>
-<p>The ancillary variables (prior profile, prior Xgas, AK, slant bin, and traceability scale) can be defined as one of the following six types:</p>
+<p>The ancillary variables (prior profile, prior Xgas, AK, slant bin, and traceability scale) can be defined as one of the following three types:</p>
 <ul>
 <li><code>inferred</code>: indicates that this ancillary variable must be included and should not conflict with any other
-variable. The private and public variable names will be inferred from the Xgas and gas names.</li>
-<li><code>inferred_if_first</code>: similar to <code>inferred</code>, except that it is not an error if the variable already exists
-in the public file. This is meant to support cases like described for CO2 above, where multiple Xgases share
-a single ancillary variable - as long as one Xgas copies it, the other Xgases do not need to.
+variable. The private and public variable names will be inferred from the Xgas and gas names. This type has
+two options:
+<ul>
+<li><code>only_if_first</code>: a boolean (<code>false</code> by default) that when set to <code>true</code> will skip copying the relevant
+variable if a variable with the same public name is already in the public file.
 <strong>Note that the writer does not check that the existing variable's data are equal to what would be written for the new variable!</strong></li>
-<li><code>opt_inferred_if_first</code>: similar to <code>inferred_if_first</code>, except that if the private variable does not exist,
-then this variable will be skipped instead of causing an error. This is intended for <a href="/write_public_netcdf/xgas_discovery.html#rules">Xgas discovery rules</a> more than explicit Xgas definitions.</li>
+<li><code>required</code>: a boolean (<code>true</code> by default) that when set to <code>false</code> allows this variable to be missing
+from the private file. This is intended for <a href="/write_public_netcdf/xgas_discovery.html#rules">Xgas discovery rules</a>
+more than explicit Xgas definitions.</li>
+</ul>
+</li>
 <li><code>specified</code>: allows you to specify exactly which variable to copy with the <code>private_name</code> field. You can also
 give the <code>public_name</code> field to indicate what the variable name in the output file should be; if that is omitted,
 then the public variable will have the same name as the private variable. It is an error if the public variable
-already exists.</li>
-<li><code>specified_if_first</code>: similar to <code>specified</code>, except that it is not an error if the public variable already exists.
-(This is analogous to the relationship between <code>inferred</code> and <code>inferred_if_first</code>). This has the same <code>private_name</code>
-and <code>public_name</code> fields as <code>specified</code>.</li>
+already exists. The also allows the <code>only_if_first</code> field, which behaves how it does for the <code>inferred</code> type.</li>
 <li><code>omit</code>: indicates that this variable should not be copied.</li>
 </ul>
+<p>In the following example, the prior Xgas field shows the use of the <code>inferred</code> options, the prior profile field
+shows the use of the <code>specified</code> options, and the AK field the use of <code>omit</code>.</p>
+<pre><code class="language-toml">[[xgas]]
+xgas = "xhcl"
+gas = "hcl"
+prior_xgas = { type = "inferred", only_if_first = true, required = false }
+prior_profile = { type = "specified", only_if_first = true, private_name = "prior_1hcl", public_name = "prior_hcl" }
+ak = { type = "omit" }
+</code></pre>
 <h2 id="ancillary-variable-name-inference"><a class="header" href="#ancillary-variable-name-inference">Ancillary variable name inference</a></h2>
 <p>The writer uses the following rules when asked to infer ancillary variable names.
 In these, <code>{xgas_var}</code> indicates the Xgas variable name and <code>{gas}</code> the physical gas name.</p>

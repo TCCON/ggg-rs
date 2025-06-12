@@ -42,6 +42,17 @@
         <script src="../../toc.js"></script>
     </head>
     <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
     <div id="body-container">
         <!-- Work around some values being stored in localStorage wrapped in quotes -->
         <script>
@@ -119,7 +130,7 @@
                             <li role="none"><button role="menuitem" class="theme" id="navy">Navy</button></li>
                             <li role="none"><button role="menuitem" class="theme" id="ayu">Ayu</button></li>
                         </ul>
-                        <button id="search-toggle" class="icon-button" type="button" title="Search. (Shortkey: s)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="S" aria-controls="searchbar">
+                        <button id="search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="searchbar">
                             <i class="fa fa-search"></i>
                         </button>
                     </div>
@@ -177,9 +188,6 @@ This looks like <code>(?&lt;gas&gt;...)</code> where the <code>...</code> is the
 <p>By default, the configuration will add a single regex rule that matches the pattern <code>^x(?&lt;gas&gt;[a-z][a-z0-9]*)$</code>.
 You can disable this by setting <code>xgas_rules = false</code> in the <a href="/write_public_netcdf/defaults.html"><code>[defaults]</code></a> section of the config.
 This rule is designed to match basic Xgas variables, e.g., "xch4", "xn2o", etc.</p>
-<p>The rules also include default settings for the prior profile, prior column average, averaging kernel (and its slant Xgas bins), and the traceability scale.
-These can be specified the same way as described <a href="/write_public_netcdf/explicit_xgases.html#ancillary-variable-specifications">in the Xgases ancillary subsection</a>,
-and the defaults are the same as well.</p>
 <p>An example of a regular expression rule that uses the default ways to infer its ancillary variables is:</p>
 <pre><code class="language-toml">[[discovery.rule]]
 regex = '^column_average_(?&lt;gas&gt;\w+)$'
@@ -201,6 +209,22 @@ traceability_scale = { type = "omit" }
 <p>Note that the suffix rule contains a "suffix" key, while the regular expression rule has a "regex" key - this is how they are distinguished.
 Also note that rules are checked in order, and a variable is added following the first rule that matches.
 This means that if a variable matches multiple rules, then its ancillary variables will be set up following the first rule that matched.</p>
+<h2 id="attributes"><a class="header" href="#attributes">Attributes</a></h2>
+<p>Discovery rules can specify the fields <code>xgas_attr_overrides</code>, <code>xgas_error_attr_overrides</code>, <code>prior_profile_attr_overrides</code>,
+<code>prior_xgas_attr_overrides</code>, and <code>ak_attr_overrides</code> to set attributes on their respective variables.
+These should be used for attributes that will be the same for <em>all</em> the variables of that type created by this rule.
+For example, to add a cautionary note about experimental data to our previous mid-IR discovery rule:</p>
+<pre><code class="language-toml">[[discovery.rule]]
+suffix = "mir"
+xgas_attr_overrides = { note = "Experimental data, use with caution!" }
+ak = { type = "omit" }
+traceability_scale = { type = "omit" }
+</code></pre>
+<h2 id="ancillary-variables"><a class="header" href="#ancillary-variables">Ancillary variables</a></h2>
+<p>The rules also include default settings for the prior profile, prior column average, averaging kernel (and its slant Xgas bins), and the traceability scale.
+These can be specified the same way as described <a href="/write_public_netcdf/explicit_xgases.html#ancillary-variable-specifications">in the Xgases ancillary subsection</a>,
+and the defaults are the same as well.
+However only the <code>inferred</code> and <code>omit</code> types may be used, as <code>specified</code> does not make sense when a rule may apply to more than one Xgas.</p>
 <h2 id="exclusions"><a class="header" href="#exclusions">Exclusions</a></h2>
 <p>The second part of the discovery section are lists of gases or variables to exclude.
 The first option is <code>excluded_xgas_variables</code>.
