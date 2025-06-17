@@ -58,6 +58,19 @@ description = "column density of oxygen retrieved from the singlet-delta band"
 note = "Use the o2_mean_mole_fraction variable to convert to a column of dry air if needed, e.g., for calculation of surface pressure."
 ancillary_variables = "o2_mean_mole_fraction"
 
+[[aux]]
+private_name = "column_o2_error"
+long_name = "oxygen column density error"
+[aux.attr_overrides]
+description = "one-sigma precision"
+
+[[aux]]
+private_name = "o2_7885_ovc_o2"
+public_name = "prior_column_o2"
+long_name = "a priori oxygen column density"
+[aux.attr_overrides]
+description = "Column density calculated from the PRIOR of oxygen"
+units = "molecules.cm-2"
 
 [[xgas]]
 xgas = "xluft"

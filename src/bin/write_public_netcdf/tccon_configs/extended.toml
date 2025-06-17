@@ -22,6 +22,13 @@ usage = "This is a non-standard TCCON data product, please consult the site PI a
 ancillary_variables = "o2_mean_mole_fraction"
 
 [[aux]]
+private_name = "column_ao2_error_si"
+public_name = "column_ao2_error_visible"
+long_name = "oxygen column density error"
+[aux.attr_overrides]
+description = "one-sigma precision"
+
+[[aux]]
 private_name = "column_bo2_si"
 public_name = "column_bo2_visible"
 long_name = "oxygen column density"
@@ -32,6 +39,13 @@ description = "column density of oxygen retrieved from the B-band"
 note = "Use the o2_mean_mole_fraction variable to convert to a column of dry air if needed, e.g., for calculation of surface pressure."
 usage = "This is a non-standard TCCON data product, please consult the site PI and/or TCCON algorithm team if you plan to use it in your work."
 ancillary_variables = "o2_mean_mole_fraction"
+
+[[aux]]
+private_name = "column_bo2_error_si"
+public_name = "column_bo2_error_visible"
+long_name = "oxygen column density error"
+[aux.attr_overrides]
+description = "one-sigma precision"
 
 [[discovery.rule]]
 suffix = "si"
