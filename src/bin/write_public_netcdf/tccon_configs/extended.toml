@@ -25,6 +25,7 @@ ancillary_variables = "o2_mean_mole_fraction"
 private_name = "column_ao2_error_si"
 public_name = "column_ao2_error_visible"
 long_name = "oxygen column density error"
+required = false
 [aux.attr_overrides]
 description = "one-sigma precision"
 
@@ -44,6 +45,7 @@ ancillary_variables = "o2_mean_mole_fraction"
 private_name = "column_bo2_error_si"
 public_name = "column_bo2_error_visible"
 long_name = "oxygen column density error"
+required = false
 [aux.attr_overrides]
 description = "one-sigma precision"
 
