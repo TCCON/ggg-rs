@@ -125,7 +125,8 @@ pub(super) fn expand_prior_profiles_from_file(
             "getting data for prior profile variable '{prior_varname}'"
         ))
     })?;
-    let prior_unit = get_string_attr(&prior_var, "units")?;
+    let prior_unit = get_string_attr(&prior_var, "units")
+        .change_context_lazy(|| CopyError::context("getting units for priors during expansion"))?;
     let prior_data = if let Some(unit) = target_unit {
         convert_dmf_array(prior_data, &prior_unit, unit).change_context_lazy(|| {
             CopyError::context(format!(

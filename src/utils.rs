@@ -1,14 +1,14 @@
 //! General GGG utilities, not particular to any program or I/O step.
-use std::ffi::{OsStr, OsString};
-use std::num::NonZeroU8;
-use std::{env, f64};
 use std::error::Error;
+use std::ffi::{OsStr, OsString};
 use std::fmt::Display;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read, Write};
+use std::num::NonZeroU8;
 use std::ops::{Deref, DerefMut};
-use std::path::{PathBuf, Path};
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
+use std::{env, f64};
 
 use chrono::{DateTime, Datelike, TimeZone, Utc};
 use error_stack::ResultExt;
@@ -17,14 +17,13 @@ use itertools::Itertools;
 use log::debug;
 use ndarray::{Array1, ArrayView1};
 use serde::Serialize;
-use serde::{Deserialize, Deserializer, de::Error as DeserError};
+use serde::{de::Error as DeserError, Deserialize, Deserializer};
 
-use crate::error::{DateTimeError, BodyError};
+use crate::error::{BodyError, DateTimeError};
 
 use crate::error::HeaderError;
 
 static WINDOW_PARSE_REGEX: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-
 
 /// Standard error type for all GGG functions
 #[derive(Debug)]
@@ -37,13 +36,23 @@ pub enum GggError {
     /// Used when a file could not be opened, e.g. it does not exist or there was a file system error.
     /// For the inner fields, `descr` must be a short description of the file type, `path` the path to the file
     /// attempted to open, and `reason` the root cause of being unable to open the file.
-    CouldNotOpen{descr: String, path: PathBuf, reason: String},
+    CouldNotOpen {
+        descr: String,
+        path: PathBuf,
+        reason: String,
+    },
     /// Used when a problem occurred while reading from a file. This means that the file exists and could
-    /// be opened, but the filesystem gave some error while trying to read the contents. `path` must be the path 
+    /// be opened, but the filesystem gave some error while trying to read the contents. `path` must be the path
     /// to the problematic file and `cause` a description of the problem (often the string representation of another
     /// error type).
-    CouldNotRead{path: PathBuf, reason: String},
-    CouldNotWrite{path: PathBuf, reason: String},
+    CouldNotRead {
+        path: PathBuf,
+        reason: String,
+    },
+    CouldNotWrite {
+        path: PathBuf,
+        reason: String,
+    },
     /// Used for problems with the header format in file, meaning it could be read in, but not interpreted
     /// properly *or* there is some inconsistency (e.g. different number of columns given in the first line of the
     /// file from the number of columns actually in the file). `path` must be the path to the problematic file and
@@ -51,11 +60,16 @@ pub enum GggError {
     HeaderError(HeaderError), // TODO: replace instances of this with error_stack reports? Or is this better in a library?
     /// Used for problems with the format of the data in a file, usually meaning that it could not be converted
     /// to the proper type. `path` must be the path to the problematic file and `cause` a description of the problem.
-    DataError{path: PathBuf, cause: String},
+    DataError {
+        path: PathBuf,
+        cause: String,
+    },
     /// A generic error for an unimplemented case in the code
     NotImplemented(String),
     /// A general error for one-off cases that don't need their own variant
     Custom(String),
+    /// An error type meant for use with `error_stack` to add context to a lower-level error
+    Context(String),
 }
 
 // TODO: break into smaller errors
@@ -64,28 +78,43 @@ impl Display for GggError {
         match self {
             Self::GggPathError(inner) => {
                 write!(f, "Error getting GGGPATH: {inner}")
-            },
+            }
             Self::UnknownApodization(a) => {
                 write!(f, "Unknown apodization type: '{a}'")
-            },
-            Self::CouldNotOpen { descr, path, reason} => {
-                write!(f, "Could not open {descr} at {} because: {reason}", path.display())
-            },
-            Self::CouldNotRead {path, reason} => {
-                write!(f, "Could not read from {} because: {reason}", path.display())
-            },
-            Self::CouldNotWrite {path, reason} => {
+            }
+            Self::CouldNotOpen {
+                descr,
+                path,
+                reason,
+            } => {
+                write!(
+                    f,
+                    "Could not open {descr} at {} because: {reason}",
+                    path.display()
+                )
+            }
+            Self::CouldNotRead { path, reason } => {
+                write!(
+                    f,
+                    "Could not read from {} because: {reason}",
+                    path.display()
+                )
+            }
+            Self::CouldNotWrite { path, reason } => {
                 write!(f, "Could not write to {} because: {reason}", path.display())
-            },
+            }
             Self::HeaderError(err) => {
                 write!(f, "{err}")
-            },
+            }
             Self::DataError { path, cause } => {
                 write!(f, "Error in data format of {}: {cause}", path.display())
-            },
+            }
             Self::NotImplemented(case) => {
                 write!(f, "Not implemented: {case}")
-            },
+            }
+            Self::Context(msg) => {
+                write!(f, "{msg}")
+            }
             Self::Custom(msg) => {
                 write!(f, "{msg}")
             }
@@ -103,7 +132,10 @@ impl Error for GggError {}
 
 impl GggError {
     pub fn could_not_read<S: ToString>(path: PathBuf, reason: S) -> Self {
-        Self::CouldNotRead { path: path.to_owned(), reason: reason.to_string() }
+        Self::CouldNotRead {
+            path: path.to_owned(),
+            reason: reason.to_string(),
+        }
     }
 
     pub fn not_implemented<S: ToString>(case: S) -> Self {
@@ -113,6 +145,10 @@ impl GggError {
     pub fn custom<S: ToString>(msg: S) -> Self {
         Self::Custom(msg.to_string())
     }
+
+    pub fn context<S: ToString>(msg: S) -> Self {
+        Self::Context(msg.to_string())
+    }
 }
 
 /// An interior error type for the `GggPathError` variant of [`GggError`]
@@ -120,7 +156,7 @@ impl GggError {
 pub enum GggPathErrorKind {
     /// Indicates that no GGGPATH environmental variable was set in the current environment.
     NotSet,
-    /// Indicates that the path taken from the environment points to a directory that 
+    /// Indicates that the path taken from the environment points to a directory that
     /// doesn't exist at all. The contained [`PathBuf`] will be the path it expected.
     DoesNotExist(PathBuf),
     /// Indicated that the path taken from the environment points to *something* but that
@@ -133,28 +169,142 @@ impl Display for GggPathErrorKind {
         match self {
             Self::NotSet => {
                 write!(f, "GGGPATH/gggpath environmental variables not set")
-            },
+            }
             Self::DoesNotExist(p) => {
                 write!(f, "Current GGGPATH ({}) does not exist", p.display())
-            },
+            }
             Self::IsNotDir(p) => {
                 write!(f, "Current GGGPATH ({}) is not a directory", p.display())
-            },
+            }
         }
     }
 }
 
+/// A separate error type used for netCDF-related errors.
+/// This is kept separate from [`GggError`] to simplify the use of the
+/// "netcdf" feature flag.
+#[cfg(feature = "netcdf")]
+#[derive(Debug)]
+pub enum GggNcError {
+    MissingVarAttr {
+        attribute: String,
+        variable: String,
+        group: Option<String>,
+    },
+    MissingGroupAttr {
+        attribute: String,
+        group: String,
+    },
+    MissingVar {
+        variable: String,
+        group: Option<String>,
+    },
+    NcErr(netcdf::Error),
+    Context(String),
+}
+
+#[cfg(feature = "netcdf")]
+impl From<netcdf::Error> for GggNcError {
+    fn from(value: netcdf::Error) -> Self {
+        Self::NcErr(value)
+    }
+}
+
+#[cfg(feature = "netcdf")]
+impl Display for GggNcError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            GggNcError::MissingVarAttr {
+                attribute,
+                variable,
+                group,
+            } => {
+                if let Some(grp) = group {
+                    write!(
+                        f,
+                        "Attribute '{attribute}' not found on variable '{grp}/{variable}'"
+                    )
+                } else {
+                    write!(
+                        f,
+                        "Attribute '{attribute}' not found on variable '{variable}'"
+                    )
+                }
+            }
+            GggNcError::MissingGroupAttr { attribute, group } => {
+                write!(f, "Attribute '{attribute}' not found on group '{group}'")
+            }
+            GggNcError::MissingVar { variable, group } => {
+                if let Some(grp) = group {
+                    write!(f, "Variable '{variable}' not found in group '{grp}'")
+                } else {
+                    write!(f, "Variable '{variable}' not found")
+                }
+            }
+            GggNcError::NcErr(error) => {
+                write!(f, "{error}")
+            }
+            GggNcError::Context(msg) => {
+                write!(f, "{msg}")
+            }
+        }
+    }
+}
+
+#[cfg(feature = "netcdf")]
+impl Error for GggNcError {}
+
+#[cfg(feature = "netcdf")]
+impl GggNcError {
+    /// Construct an error about a missing variable attribute. Passing `None`
+    /// as the group should indicate that the group is not known. Use `Some("")`
+    /// to represent the root group.
+    pub fn missing_var_attr<A: ToString, V: ToString, G: ToString>(
+        attr: A,
+        var: V,
+        grp: Option<G>,
+    ) -> Self {
+        Self::MissingVarAttr {
+            attribute: attr.to_string(),
+            variable: var.to_string(),
+            group: grp.map(|s| s.to_string()),
+        }
+    }
+
+    /// Construct an error about a missing group attribute.
+    pub fn missing_group_attr<A: ToString, G: ToString>(attr: A, grp: G) -> Self {
+        Self::MissingGroupAttr {
+            attribute: attr.to_string(),
+            group: grp.to_string(),
+        }
+    }
+    /// Construct an error about a missing variable. Passing `None`
+    /// as the group should indicate that the group is not known. Use `Some("")`
+    /// to represent the root group.
+    pub fn missing_var<V: ToString, G: ToString>(var: V, grp: Option<G>) -> Self {
+        Self::MissingVar {
+            variable: var.to_string(),
+            group: grp.map(|s| s.to_string()),
+        }
+    }
+
+    /// Construct a variant useful for adding context to a lower-level error.
+    pub fn context<C: ToString>(msg: C) -> Self {
+        Self::Context(msg.to_string())
+    }
+}
+
 /// The various apodization functions allowed by GGG
-/// 
+///
 /// [`FromStr`] and [`ToString`] are implemented to convert
 /// this into and from the following strings:
-/// 
+///
 /// * "BX" => `BoxCar`
 /// * "N1" => `WeakNortonBeer
 /// * "N2" => `MediumNortonBeer`
 /// * "N3" => `StrongNortonBeer`
 /// * "TR" => `Triangular`
-/// 
+///
 /// For [`FromStr`], the conversion ignores case.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum ApodizationFxn {
@@ -162,7 +312,7 @@ pub enum ApodizationFxn {
     WeakNortonBeer,
     MediumNortonBeer,
     StrongNortonBeer,
-    Triangular
+    Triangular,
 }
 
 impl ApodizationFxn {
@@ -182,13 +332,12 @@ impl ApodizationFxn {
 }
 
 impl ApodizationFxn {
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<Self, D::Error> 
-    where D: Deserializer<'de>
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
     {
         let value = String::deserialize(deserializer)?;
-        Self::from_str(&value).map_err(
-            |e| D::Error::custom(e.to_string())
-        )
+        Self::from_str(&value).map_err(|e| D::Error::custom(e.to_string()))
     }
 }
 
@@ -202,7 +351,7 @@ impl FromStr for ApodizationFxn {
             "n2" => Ok(Self::MediumNortonBeer),
             "n3" => Ok(Self::StrongNortonBeer),
             "tr" => Ok(Self::Triangular),
-            _ => Err(GggError::UnknownApodization(s.to_owned()))
+            _ => Err(GggError::UnknownApodization(s.to_owned())),
         }
     }
 }
@@ -221,18 +370,18 @@ impl Display for ApodizationFxn {
 }
 
 /// Get the GGG path as defined in the environment
-/// 
+///
 /// This will check for the environmental variables "GGGPATH" and "gggpath"
 /// in that order, the first one found is used.
-/// 
+///
 /// # Returns
 /// A [`Result`] containing the GGG path as a [`PathBuf`]. It returns an `Err`
 /// if:
-/// 
+///
 /// * no GGGPATH variable is set in the current environment, or
 /// * the GGGPATH points to a nonexistant directory, or
 /// * the GGGPATH points to a file and not a directory.
-/// 
+///
 /// Which error occurred is communicated by the inner [`GggPathErrorKind`] enum.
 pub fn get_ggg_path() -> Result<PathBuf, GggError> {
     let env_path = env::var_os("GGGPATH")
@@ -241,7 +390,9 @@ pub fn get_ggg_path() -> Result<PathBuf, GggError> {
         .and_then(|p| Ok(PathBuf::from(p)))?;
 
     if !env_path.exists() {
-        return Err(GggError::GggPathError(GggPathErrorKind::DoesNotExist(env_path)));
+        return Err(GggError::GggPathError(GggPathErrorKind::DoesNotExist(
+            env_path,
+        )));
     }
 
     if !env_path.is_dir() {
@@ -252,123 +403,154 @@ pub fn get_ggg_path() -> Result<PathBuf, GggError> {
 }
 
 /// Compute effective vertical paths used by GFIT for integrating trace gas profiles.
-/// 
+///
 /// `zmin` is the minimum altitude that the light ray reaches, `z` is the altitude grid,
 /// and `d` is the number density of air profile on that grid. `zmin` and `z` must be in
 /// the same units, `d` is commonly given in molec. cm-3, but any number density unit
 /// is acceptable.
-/// 
+///
 /// # Returns
 /// If successful, returns the effective vertical paths in the same units as `z`.
 /// These can must multiplied by a vector of trace gas number densities to get
-/// per-level effective partial column densities. 
-/// 
+/// per-level effective partial column densities.
+///
 /// Returns an error if (1) `z` and `d` are different lengths, (2) `zmin` is less
 /// than `z[0]`, or (3) if any element of `d` after the first is < 0.
 pub fn effective_vertical_path(zmin: f64, z: &[f64], d: &[f64]) -> Result<Array1<f64>, GggError> {
     if z.len() != d.len() {
-        return Err(GggError::custom("z and d must have the same number of elements"));
+        return Err(GggError::custom(
+            "z and d must have the same number of elements",
+        ));
     }
 
     let mut vpath = Array1::zeros((z.len(),));
-    let ifirst = z.iter().position(|zi| *zi > zmin)
+    let ifirst = z
+        .iter()
+        .position(|zi| *zi > zmin)
         .unwrap_or_else(|| z.len() - 1);
 
     if ifirst == 0 {
         let z0 = z.get(0).unwrap_or(&-999.0);
-        return Err(GggError::not_implemented(format!("zmin ({zmin:.3}) is less that the first element of z ({z0:.3})")));
+        return Err(GggError::not_implemented(format!(
+            "zmin ({zmin:.3}) is less that the first element of z ({z0:.3})"
+        )));
     }
 
     let dz = z[ifirst] - z[ifirst - 1];
-    let xo = (zmin - z[ifirst - 1])/dz;
+    let xo = (zmin - z[ifirst - 1]) / dz;
     let logrp = if d[ifirst] < 0.0 {
         0.0
     } else {
-        (d[ifirst-1]/d[ifirst]).ln()
+        (d[ifirst - 1] / d[ifirst]).ln()
     };
     let xl = logrp * (1.0 - xo);
-    vpath[ifirst - 1] = dz * (1.0 - xo) * (1.0 - xo - xl * (1.0 + 2.0 * xo) / 3.0 
-        +xl.powi(2) * ( 1.0 + 3.0 * xo) / 12.0 + xl.powi(3) * (1.0 + 4.0 * xo) / 60.0) / 2.0;
-    vpath[ifirst] = dz * (1.0 - xo ) * (1.0 + xo + xl * (1.0 + 2.0 * xo) / 3.0
-        +xl.powi(2) * (1.0 + 3.0 * xo) / 12.0 - xl.powi(3) * (1.0 + 4.0 * xo) / 60.0) / 2.0;
+    vpath[ifirst - 1] = dz
+        * (1.0 - xo)
+        * (1.0 - xo - xl * (1.0 + 2.0 * xo) / 3.0
+            + xl.powi(2) * (1.0 + 3.0 * xo) / 12.0
+            + xl.powi(3) * (1.0 + 4.0 * xo) / 60.0)
+        / 2.0;
+    vpath[ifirst] = dz
+        * (1.0 - xo)
+        * (1.0 + xo + xl * (1.0 + 2.0 * xo) / 3.0 + xl.powi(2) * (1.0 + 3.0 * xo) / 12.0
+            - xl.powi(3) * (1.0 + 4.0 * xo) / 60.0)
+        / 2.0;
 
-    for ilev in (ifirst+1)..z.len() {
+    for ilev in (ifirst + 1)..z.len() {
         if d[ilev] < 0.0 {
             return Err(GggError::not_implemented(format!(
-                "d[{}] is less than 0", ilev
+                "d[{}] is less than 0",
+                ilev
             )));
         }
-        let dz = z[ilev] - z[ilev-1];
-        let logrp = (d[ilev-1] / d[ilev]).ln();
-        vpath[ilev-1] += dz * (1.0 - logrp / 3.0 + logrp.powi(2) / 12.0 - logrp.powi(3) / 60.0) / 2.0;
+        let dz = z[ilev] - z[ilev - 1];
+        let logrp = (d[ilev - 1] / d[ilev]).ln();
+        vpath[ilev - 1] +=
+            dz * (1.0 - logrp / 3.0 + logrp.powi(2) / 12.0 - logrp.powi(3) / 60.0) / 2.0;
         vpath[ilev] = dz * (1.0 + logrp / 3.0 + logrp.powi(2) / 12.0 + logrp.powi(3) / 60.0) / 2.0;
     }
     Ok(vpath)
 }
 
 /// A wrapper around another struct implementing the [`BufRead`] trait that provides some convenience methods.
-/// 
+///
 /// Generally, you should prefer this struct over a plain [`BufReader`] throughout GGG Rust code. It has
 /// two helper methods (`read_header_line` and `read_data_line`) to help with reading GGG files more ergonomically.
-/// It also stores the path of the file opened so that you can reference it more readily in error messages. 
-/// 
+/// It also stores the path of the file opened so that you can reference it more readily in error messages.
+///
 /// This struct also implements dereferencing to the contained [`BufRead`] object. This means that you can call
 /// any [`BufRead`] methods, such as `read_line` directly on this struct if desired.
 pub struct FileBuf<F: BufRead> {
     reader: F,
-    pub path: PathBuf
+    pub path: PathBuf,
 }
 
 impl FileBuf<BufReader<File>> {
     /// Open a file in buffered mode.
-    /// 
+    ///
     /// This will create a `FileBuf` that uses a [`BufReader<File>`] internally.
-    /// 
+    ///
     /// # Returns
     /// A [`Result`] with the `FileBuf` instance. An error is returned if the file could
     /// not be opened by `std::fs::File::open`. The error from that method will be displayed
     /// as the `cause` string in the returned [`GggError::CouldNotOpen`].
     pub fn open<P: AsRef<Path>>(file: P) -> Result<Self, GggError> {
         let path = file.as_ref();
-        let f = File::open(path)
-            .or_else(|e|  Err(GggError::CouldNotOpen { descr: "file".to_owned(), path: path.to_owned(), reason: e.to_string() }))?;
+        let f = File::open(path).or_else(|e| {
+            Err(GggError::CouldNotOpen {
+                descr: "file".to_owned(),
+                path: path.to_owned(),
+                reason: e.to_string(),
+            })
+        })?;
         let r = BufReader::new(f);
-        Ok(Self { reader: r, path: path.to_owned() })
+        Ok(Self {
+            reader: r,
+            path: path.to_owned(),
+        })
     }
 }
 
-impl <F: BufRead> FileBuf<F> {
+impl<F: BufRead> FileBuf<F> {
     /// Read and return one line from the header of a GGG file.
-    /// 
+    ///
     /// # Returns
     /// A [`Result`] with the line as an owned [`String`]. If an error occured, the error
     /// message will indicate that it occurred while reading a header line.
     pub fn read_header_line(&mut self) -> Result<String, HeaderError> {
         let mut buf = String::new();
-        self.read_line(&mut buf)
-            .or_else(|e| Err(HeaderError::CouldNotRead { location: self.path.as_path().into(), cause: e.to_string() }))?;
+        self.read_line(&mut buf).or_else(|e| {
+            Err(HeaderError::CouldNotRead {
+                location: self.path.as_path().into(),
+                cause: e.to_string(),
+            })
+        })?;
         Ok(buf)
     }
 
     /// Read and return one line from the data block of a GGG file.
-    /// 
+    ///
     /// # Returns
     /// A [`Result`] with the line as an owned [`String`]. The only difference between this
     /// method and `read_header_line` is that the error message in this function indicates that
     /// the error occurred while reading part of the data.
     pub fn read_data_line(&mut self) -> Result<String, GggError> {
         let mut buf = String::new();
-        self.read_line(&mut buf)
-            .or_else(|e| Err(GggError::CouldNotRead { path: self.path.to_owned(), reason: format!("{e} (while reading the data)") }))?;
+        self.read_line(&mut buf).or_else(|e| {
+            Err(GggError::CouldNotRead {
+                path: self.path.to_owned(),
+                reason: format!("{e} (while reading the data)"),
+            })
+        })?;
         Ok(buf)
     }
 
     /// Consume the FileBuf, returning the contained reader
-    /// 
+    ///
     /// Useful when you know you do not need the extra functionality of the `FileBuf`
-    /// anymore but do want to call a method on the [`BufRead`] reader that requires 
+    /// anymore but do want to call a method on the [`BufRead`] reader that requires
     /// a move, e.g. the `lines` method:
-    /// 
+    ///
     /// ```no_run
     /// use std::io::BufRead; // needed for the .lines() method
     /// use ggg_rs::utils::FileBuf;
@@ -390,7 +572,7 @@ impl<F: BufRead> Deref for FileBuf<F> {
     }
 }
 
-impl <F: BufRead> DerefMut for FileBuf<F> {
+impl<F: BufRead> DerefMut for FileBuf<F> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.reader
     }
@@ -412,12 +594,11 @@ impl<F: BufRead> BufRead for FileBuf<F> {
     }
 }
 
-
 /// A structure to use in command line interfaces when output may be to a new file or modifying one in place
-/// 
+///
 /// The intention is you would incorporate this into a [`clap`] Derive-based parsers
 /// like so:
-/// 
+///
 /// ```no_run
 /// # use std::path::PathBuf;
 /// # use ggg_rs::utils::OutputOptCli;
@@ -428,12 +609,12 @@ impl<F: BufRead> BufRead for FileBuf<F> {
 ///     output: OutputOptCli
 /// }
 /// ```
-/// 
+///
 /// This will put the arguments `--in-place` and `-o`/`--output-file` into your CLI.
 /// Then, you can use the `setup_output` method to get an [`OptInplaceWriter`] which
 /// will help with writing to the correct output file.
 #[derive(Debug, clap::Args)]
-#[group(required=true)]
+#[group(required = true)]
 pub struct OutputOptCli {
     /// Provide this flag to modify the output/destination file directly.
     /// Mutually exclusive with --output-file, but one of this and --output-file
@@ -464,28 +645,28 @@ impl OutputOptCli {
 }
 
 /// A structure that helps with optionally writing to a new file or modifying one in place.
-/// 
+///
 /// This will typically be created from the `setup_output` method of `OutputOptCli`. If needed,
 /// you can create it diretly with its `new_in_place` and `new_separate` methods, which create
 /// a writer configured to help with modifying a file in place vs. writing a separate file.
-/// 
+///
 /// The difference is that the "in-place" modification assumes that the file given as the output
 /// path exists and is being read from, so it creates a temporary file. When you call `finalize`,
 /// it renames the temporary file to its final location. This way, you can read from the original
 /// file to copy and modify its contents into the new file, then overwrite the original only if
 /// the new file is successfully completed:
-/// 
+///
 /// ```no_run
 /// # use std::path::PathBuf;
 /// # use ggg_rs::utils::OptInplaceWriter;
 /// use std::io::BufRead;
 /// use std::io::Write;
-/// 
+///
 /// let p = PathBuf::from("./example.txt");
 /// let file = std::fs::File::open(&p).unwrap();
 /// let mut reader = std::io::BufReader::new(file);
 /// let mut writer = OptInplaceWriter::new_in_place(p).unwrap();
-/// 
+///
 /// write!(&mut writer, "new line").unwrap();
 /// let mut line = String::new();
 /// reader.read_line(&mut line).unwrap();
@@ -495,13 +676,13 @@ impl OutputOptCli {
 /// // Now "example.txt" has "new line" as its first line
 /// // and its original first line was moved down one.
 /// ```
-/// 
+///
 /// If not doing an in-place modification, then this writes directly to the output file
 /// as if you used `std::fs::File`.
-/// 
+///
 /// **Note: you *must* call `finalize` for the in-place modification to complete! Otherwise
 /// the changes will only be in a hidden file.**
-/// 
+///
 /// As shown in the above example, this implements `std::io::Write`, so you can use it with
 /// the `write!` and `writeln!` macros, as well as other standard methods to write to files.
 pub struct OptInplaceWriter {
@@ -514,8 +695,9 @@ pub struct OptInplaceWriter {
 impl OptInplaceWriter {
     /// Create a new writer to defer writing to `path` until `finalize()` is called.
     pub fn new_in_place(path: PathBuf) -> std::io::Result<Self> {
-        let curr_name = path.file_name()
-            .ok_or_else(|| std::io::Error::other(format!("Could not get base name of {}", path.display())))?;
+        let curr_name = path.file_name().ok_or_else(|| {
+            std::io::Error::other(format!("Could not get base name of {}", path.display()))
+        })?;
 
         let tmp_name = if curr_name.to_string_lossy().starts_with(".") {
             let mut n = OsString::new();
@@ -532,17 +714,27 @@ impl OptInplaceWriter {
 
         let out_path = path.with_file_name(tmp_name);
         let file = std::fs::File::create(&out_path)?;
-        Ok(Self { in_place: true, out_path, final_path: path, file })
+        Ok(Self {
+            in_place: true,
+            out_path,
+            final_path: path,
+            file,
+        })
     }
 
     /// Create a new writer that writes directly to `path`.
     pub fn new_separate(path: PathBuf) -> std::io::Result<Self> {
         let file = std::fs::File::create(&path)?;
-        Ok(Self { in_place: false, out_path: path, final_path: PathBuf::new(), file })
+        Ok(Self {
+            in_place: false,
+            out_path: path,
+            final_path: PathBuf::new(),
+            file,
+        })
     }
 
-    /// Perform any finalization. 
-    /// 
+    /// Perform any finalization.
+    ///
     /// Consumes the writer, since after this call, no further data should be written.
     /// For all writers, this flushes any remaining data to disk. For in-place writers,
     /// this moves the temporary file into the final output location.
@@ -572,7 +764,7 @@ impl Write for OptInplaceWriter {
 }
 
 /// Read the contents of input from a file or stdin.
-/// 
+///
 /// If `input_path` is just "-", then this reads from stdin. Otherwise, it
 /// reads the contents of `input_path`. Note that the stdin read is blocking;
 /// if the user provides no input, the program may hang indefinitely.
@@ -589,7 +781,7 @@ pub fn read_input_file_or_stdin(input_path: &Path) -> std::io::Result<Vec<u8>> {
 }
 
 /// A structure representing some common elements contained in GGG file headers
-/// 
+///
 /// This is meant for files that have at least two numbers in the first line of the file,
 /// representing the number of header lines and number of data columns, respectively, and
 /// has the column names as the last line in the header.
@@ -606,74 +798,90 @@ pub struct CommonHeader {
     /// Will be `None` if not found in the header.
     pub fformat: Option<FortFormat>,
     /// The data column names
-    pub column_names: Vec<String>
+    pub column_names: Vec<String>,
 }
 
 /// Read the "shape" information from the first line of a GGG file
-/// 
+///
 /// Almost all GGG files follow the convention that the first line contains a sequence
 /// of numbers that describe the file. In many cases, the first number is the number
 /// of header lines, and the second is the number of data columns. Some files however,
 /// will have additional numbers or may use these first two numbers for other things.
 /// This function is agnostic over how many numbers are in the first line, and will just
 /// return them all.
-/// 
+///
 /// # Parameters
-/// 
+///
 /// * `f` - the just-opened `FileBuf` instance pointing to the file to query, the next `read_line` call on it must
 ///   return the line with the numbers to parse. After this function returns, the reader will be pointing to the
 ///   second line of the file.
 /// * `min_numbers` - the minimum count of numbers expected from the first line of the file. This function will ensure
 ///   that the returned vector has at least that many, so you can safely index it up to `min_numbers - 1`.
-/// 
+///
 /// # Returns
 /// A [`Result`] containing a vector of the numbers parsed from the first line of `f`. An `Err` will be returned in a
 /// number of cases.
-/// 
+///
 /// * The file could not be read (error variant = [`GggError::CouldNotRead`])
 /// * The first line could not be parsed entirely as space-separated numbers (error variant = [`GggError::HeaderError`])
 /// * The count of numbers parsed is fewer than `min_numbers` (error variant = [`GggError::HeaderError`])
-/// 
+///
 /// # See also
 /// * [`get_nhead_ncol`] - shortcut to get the first two numbers (number of header lines and number of data columns)
 /// * [`get_nhead`] - shortcut to get the first number (number of header lines)
-pub fn get_file_shape_info<F: BufRead>(f: &mut FileBuf<F>, min_numbers: usize) -> Result<Vec<usize>, HeaderError> {
+pub fn get_file_shape_info<F: BufRead>(
+    f: &mut FileBuf<F>,
+    min_numbers: usize,
+) -> Result<Vec<usize>, HeaderError> {
     let mut buf = String::new();
-    f.read_line(&mut buf)
-        .or_else(|e| Err(HeaderError::CouldNotRead { location: f.path.as_path().into(), cause: e.to_string() }))?;
+    f.read_line(&mut buf).or_else(|e| {
+        Err(HeaderError::CouldNotRead {
+            location: f.path.as_path().into(),
+            cause: e.to_string(),
+        })
+    })?;
 
     let mut numbers = vec![];
     for (i, s) in buf.trim().split_whitespace().enumerate() {
         let val: usize = s.parse().map_err(|_| {
             // let loc = FileLocation::new(Some(f.path), None, None);
-            HeaderError::ParseError { location: f.path.as_path().into(), cause: format!("Could not parse number at position {}: {s}", i+1) }
+            HeaderError::ParseError {
+                location: f.path.as_path().into(),
+                cause: format!("Could not parse number at position {}: {s}", i + 1),
+            }
         })?;
         numbers.push(val);
     }
 
     if numbers.len() < min_numbers {
-        return Err(HeaderError::ParseError { location: f.path.as_path().into(), cause: format!("Expected at least {min_numbers} numbers, found {}", numbers.len()) });
+        return Err(HeaderError::ParseError {
+            location: f.path.as_path().into(),
+            cause: format!(
+                "Expected at least {min_numbers} numbers, found {}",
+                numbers.len()
+            ),
+        });
     }
 
     Ok(numbers)
 }
 
 /// Return the number of header lines and number of data columns in a GGG file.
-/// 
+///
 /// # Parameters
-/// 
+///
 /// * `f` - the just-opened `FileBuf` instance pointing to the file to query, the next `read_line` call on it must
 ///   return the line with the numbers to parse. After this function returns, the reader will be pointing to the
 ///   second line of the file.
-/// 
+///
 /// # Returns
 /// A [`Result`] containing the number of header lines and number of data columns as a two-elemet tuple.
 /// An `Err` will be returned in a number of cases.
-/// 
+///
 /// * The file could not be read (error variant = [`GggError::CouldNotRead`])
 /// * The first line could not be parsed entirely as space-separated numbers (error variant = [`GggError::HeaderError`])
 /// * The first line did not contain at least two numbers (error variant = [`GggError::HeaderError`])
-/// 
+///
 /// # See also
 /// * [`get_file_shape_info`] - get an arbitrary count of numbers parsed from the first line of a file
 /// * [`get_nhead`] - shortcut to get the first numbers (number of header lines)
@@ -684,20 +892,20 @@ pub fn get_nhead_ncol<F: BufRead>(f: &mut FileBuf<F>) -> Result<(usize, usize), 
 }
 
 /// Return the number of header lines in a GGG file.
-/// 
+///
 /// # Parameters
-/// 
+///
 /// * `f` - the just-opened `FileBuf` instance pointing to the file to query, the next `read_line` call on it must
 ///   return the line with the numbers to parse. After this function returns, the reader will be pointing to the
 ///   second line of the file.
-/// 
+///
 /// # Returns
 /// A [`Result`] containing the number of header lines. An `Err` will be returned in a number of cases.
-/// 
+///
 /// * The file could not be read (error variant = [`HeaderError::CouldNotRead`])
 /// * The first line could not be parsed entirely as space-separated numbers (error variant = [`HeaderError::ParseError`])
 /// * The first line did not contain at least one number (error variant = [`HeaderError::ParseError`])
-/// 
+///
 /// # See also
 /// * [`get_file_shape_info`] - get an arbitrary count of numbers parsed from the first line of a file
 /// * [`get_nhead_ncol`] - shortcut to get the first two numbers (number of header lines and number of data columns)
@@ -707,27 +915,26 @@ pub fn get_nhead<F: BufRead>(f: &mut FileBuf<F>) -> Result<usize, HeaderError> {
     Ok(nums[0])
 }
 
-
 /// Read the common elements found in GGG file header blocks.
-/// 
+///
 /// See the documentation for [`CommonHeader`] for which elements of GGG file headers can be read in.
-/// 
+///
 /// # Parameters
-/// 
+///
 /// * `f` - the just-opened `FileBuf` instance pointing to the file to query, the next `read_line` call on it must
 ///   return the line with the numbers to parse. After this function returns, the reader will be pointing to the
 ///   first non-header line of the file (i.e. will be ready to return data.)
-/// 
+///
 /// # Returns
-/// A [`Result`] containing the [`CommonHeader`] with what information was found in the file header. An error can 
+/// A [`Result`] containing the [`CommonHeader`] with what information was found in the file header. An error can
 /// be returned for a number of reasons:
-/// 
+///
 /// * The number of header lines and data columns could not be parsed from the first line of the file (error variant
 /// = [`GggError::CouldNotRead`] or [`GggError::HeaderError`])
 /// * Any line of the header could not be read (error variant = [`GggError::CouldNotRead`])
 /// * A missing value line was identified, but the value after the colon could not be interpreted as a float
 /// (error variant = [`GggError::HeaderError`])
-/// * The number of column names does not match the number of columns listed in the first line (error variant = 
+/// * The number of column names does not match the number of columns listed in the first line (error variant =
 /// [`GggError::HeaderError`])
 pub fn read_common_header<F: BufRead>(f: &mut FileBuf<F>) -> Result<CommonHeader, HeaderError> {
     let (mut nhead, ncol) = get_nhead_ncol(f)?;
@@ -739,20 +946,26 @@ pub fn read_common_header<F: BufRead>(f: &mut FileBuf<F>) -> Result<CommonHeader
         let line = f.read_header_line()?;
         if line.starts_with("format=") {
             let format_str = line.replace("format=", "");
-            fformat = Some(
-                FortFormat::parse(&format_str)
-                    .map_err(|e| HeaderError::ParseError {
-                        location: f.path.as_path().into(), 
-                        cause: format!("Error parsing format line: {e}") 
-                    })?
+            fformat =
+                Some(
+                    FortFormat::parse(&format_str).map_err(|e| HeaderError::ParseError {
+                        location: f.path.as_path().into(),
+                        cause: format!("Error parsing format line: {e}"),
+                    })?,
                 );
         }
         if line.starts_with("missing:") {
             let missing_str = line.replace("missing:", "");
             let missing_str = missing_str.trim();
             missing = Some(
-                missing_str.parse::<f64>()
-                .map_err(|_| HeaderError::ParseError { location: f.path.as_path().into(), cause: format!("Expecting a real number following 'missing:', got {missing_str}") })?
+                missing_str
+                    .parse::<f64>()
+                    .map_err(|_| HeaderError::ParseError {
+                        location: f.path.as_path().into(),
+                        cause: format!(
+                            "Expecting a real number following 'missing:', got {missing_str}"
+                        ),
+                    })?,
             );
         }
         nhead -= 1;
@@ -760,17 +973,27 @@ pub fn read_common_header<F: BufRead>(f: &mut FileBuf<F>) -> Result<CommonHeader
 
     // Last line should be the column names
     let line = f.read_header_line()?;
-    let column_names: Vec<String> = line.split_whitespace()
+    let column_names: Vec<String> = line
+        .split_whitespace()
         .map(|name| name.trim().to_owned())
         .collect();
 
     if column_names.len() != ncol {
         let nnames = column_names.len();
         let reason = format!("number of column names ({nnames}) does not equal the number of columns listed in the first line of the header ({ncol})");
-        return Err(HeaderError::ParseError { location: f.path.as_path().into(), cause: reason });
+        return Err(HeaderError::ParseError {
+            location: f.path.as_path().into(),
+            cause: reason,
+        });
     }
 
-    Ok(CommonHeader { nhead, ncol, missing, fformat, column_names })
+    Ok(CommonHeader {
+        nhead,
+        ncol,
+        missing,
+        fformat,
+        column_names,
+    })
 }
 
 /// A structure representing the list of directories where spectra may be stored.
@@ -789,14 +1012,20 @@ impl From<Vec<PathBuf>> for DataPartition {
     /// the current directory not existing).
     fn from(value: Vec<PathBuf>) -> Self {
         let paths = value.into_iter().map(|p| make_path_abs(p)).collect_vec();
-        Self { paths, previous_index: std::cell::Cell::new(0) }
+        Self {
+            paths,
+            previous_index: std::cell::Cell::new(0),
+        }
     }
 }
 
 impl DataPartition {
     /// Create a new `DataPartition` with no paths. Use the `add_path` method to populate it.
     pub fn new_empty() -> Self {
-        Self { paths: vec![], previous_index: std::cell::Cell::new(0) }
+        Self {
+            paths: vec![],
+            previous_index: std::cell::Cell::new(0),
+        }
     }
 
     /// Add a new path to the data partition
@@ -808,7 +1037,7 @@ impl DataPartition {
     ///
     /// This will store each uncommented path from the file. (Note that the GGG convention is
     /// to use a colon to indicate a comment.) An `Err` is returned if:
-    /// 
+    ///
     /// * `$GGGPATH` is not set,
     /// * `$GGGPATH/config/data_part.lst` does not exist, or
     /// * a line of `data_part.lst` could not be read.
@@ -816,7 +1045,11 @@ impl DataPartition {
         let gggpath = get_ggg_path()?;
         let data_partition_file = gggpath.join("config/data_part.lst");
         if !data_partition_file.exists() {
-            return Err(GggError::CouldNotOpen { descr: "data_part.lst".to_owned(), path: data_partition_file, reason: "does not exist".to_owned() });
+            return Err(GggError::CouldNotOpen {
+                descr: "data_part.lst".to_owned(),
+                path: data_partition_file,
+                reason: "does not exist".to_owned(),
+            });
         }
 
         Self::new_from_file(&data_partition_file)
@@ -837,9 +1070,9 @@ impl DataPartition {
             let line = match line {
                 Ok(l) => l,
                 Err(e) => {
-                    return Err(GggError::CouldNotRead { 
-                        path: data_partition_file.to_path_buf(), 
-                        reason: format!("Error reading line {} was: {}", iline+1, e)
+                    return Err(GggError::CouldNotRead {
+                        path: data_partition_file.to_path_buf(),
+                        reason: format!("Error reading line {} was: {}", iline + 1, e),
                     });
                 }
             };
@@ -851,14 +1084,17 @@ impl DataPartition {
             }
         }
 
-        Ok(Self { paths, previous_index: std::cell::Cell::new(0) })
+        Ok(Self {
+            paths,
+            previous_index: std::cell::Cell::new(0),
+        })
     }
 
     /// Find a spectrum in one of the directories listed in the data_part.lst file.
-    /// 
+    ///
     /// This searches each (uncommented) directory in `$GGGPATH/config/data_part.lst`
     /// until it finds a spectrum with file name `specname` or it runs out of directories.
-    /// 
+    ///
     /// # Returns
     /// If the spectrum was found, then an `Some(p)` is returned, where `p` is the path
     /// to the spectrum. If the spectrum was *not* found, `None` is returned.
@@ -867,7 +1103,7 @@ impl DataPartition {
     /// This always starts from the first path in the configured data partition, whereas the
     /// Fortran (at least in GGG2020) may resume from its previous line.
     pub fn find_spectrum(&self, specname: &str) -> Option<PathBuf> {
-        // Try the previous directory where we found a spectrum first - 
+        // Try the previous directory where we found a spectrum first -
         // since runlogs normally keep spectra from the same location together,
         // each call to this function has a good chance of needing the same
         // path as the previous.
@@ -882,19 +1118,20 @@ impl DataPartition {
         // how the Fortran does it - unless Geoff changed that.
         for (path_idx, search_path) in self.paths.iter().enumerate() {
             // Already checked the previous index
-            if path_idx == prev_idx { continue; }
+            if path_idx == prev_idx {
+                continue;
+            }
 
             let spec_path = search_path.join(specname);
             if spec_path.exists() {
                 self.previous_index.set(path_idx);
-                return Some(spec_path)
+                return Some(spec_path);
             }
         }
 
         None
     }
 }
-
 
 #[derive(Debug, clap::Args)]
 #[group(multiple = false)]
@@ -925,10 +1162,9 @@ impl DataPartArgs {
 }
 
 pub fn parse_window_name(window: &str) -> Result<(&str, f32), BodyError> {
-    let re = WINDOW_PARSE_REGEX.get_or_init(|| 
-        regex::Regex::new(r"^([a-z0-9]+)_([0-9]+)")
-            .expect("Could not compile window name regex")
-    );
+    let re = WINDOW_PARSE_REGEX.get_or_init(|| {
+        regex::Regex::new(r"^([a-z0-9]+)_([0-9]+)").expect("Could not compile window name regex")
+    });
 
     let matches = re.captures(window).ok_or_else(|| BodyError::unexpected_format(
         format!("Window {window} did not match the expected format, GAS_CENTER. GAS must contain lowercase letters and numbers, CENTER must contain numbers immediately following the underscore."),
@@ -937,54 +1173,78 @@ pub fn parse_window_name(window: &str) -> Result<(&str, f32), BodyError> {
         None
     ))?;
 
-    let gas = matches.get(1).expect("Window name regex match must contain a first capture group").as_str();
-    let center = matches.get(2).expect("Window name regex match must contain a first capture group").as_str();
-    let center = center.parse::<f32>().expect("Window center capture group should be a valid number");
+    let gas = matches
+        .get(1)
+        .expect("Window name regex match must contain a first capture group")
+        .as_str();
+    let center = matches
+        .get(2)
+        .expect("Window name regex match must contain a first capture group")
+        .as_str();
+    let center = center
+        .parse::<f32>()
+        .expect("Window center capture group should be a valid number");
     Ok((gas, center))
 }
 
 /// Convert a runlog year, day, and hour value to a proper UTC datetime
-/// 
+///
 /// GGG runlogs store the ZPD time of a spectrum as a year, day of year, and UTC hour value where the
 /// day of year accounts for leap years (i.e. Mar 1 is DOY 60 on non-leap years and DOY 61 on leap years)
 /// and the UTC hour has a decimal component that provides the minutes and seconds. This function converts
 /// those values into a [`chrono::DateTime`] with the UTC timezone.
 #[deprecated = "use the zpd_time method on RunlogRecord instead"]
-pub fn runlog_ydh_to_datetime(year: i32, day_of_year: i32, utc_hour: f64) -> chrono::DateTime<chrono::Utc> {
+pub fn runlog_ydh_to_datetime(
+    year: i32,
+    day_of_year: i32,
+    utc_hour: f64,
+) -> chrono::DateTime<chrono::Utc> {
     // TODO: verify zpd_time on RunlogRecord gives the same output as this
     let ihours = utc_hour.floor();
     let iminutes = ((utc_hour - ihours) * 60.0).floor();
     let iseconds = (((utc_hour - ihours) * 60.0 - iminutes) * 60.0).floor();
 
     chrono::Utc.with_ymd_and_hms(year, 1, 1, 0, 0, 0).unwrap()
-    + chrono::Duration::days((day_of_year - 1).into())
-    + chrono::Duration::hours(ihours as i64)
-    + chrono::Duration::minutes(iminutes as i64)
-    + chrono::Duration::seconds(iseconds as i64)
+        + chrono::Duration::days((day_of_year - 1).into())
+        + chrono::Duration::hours(ihours as i64)
+        + chrono::Duration::minutes(iminutes as i64)
+        + chrono::Duration::seconds(iseconds as i64)
 }
 
 /// Get the list of windows in a `multiggg.sh` file.
-/// 
+///
 /// With `include_runlog_name = false`, the returned strings will just be
 /// the window names, e.g. "co2_6220". With `include_runlog_name = true`, the
 /// name of the runlog will follow the window, e.g. "co2_6220.pa_ggg_benchmark".
-/// 
+///
 /// Lines in the multiggg.sh file beginning with a ":" will be skipped. Lines
 /// beginning with a "#" are *not* skipped; this is deliberate so that you can
 /// comment out windows that need rerun and they will still be recognized as
 /// windows to include in data collation.
-pub fn get_windows_from_multiggg(multiggg_file: &Path, include_runlog_name: bool) -> error_stack::Result<Vec<String>, BodyError> {
+pub fn get_windows_from_multiggg(
+    multiggg_file: &Path,
+    include_runlog_name: bool,
+) -> error_stack::Result<Vec<String>, BodyError> {
     let mut windows = vec![];
-    let f = std::fs::File::open(multiggg_file)
-        .change_context_lazy(|| BodyError::could_not_read(
-            "error opening file", Some(multiggg_file.to_path_buf()), None, None
-        ))?;
+    let f = std::fs::File::open(multiggg_file).change_context_lazy(|| {
+        BodyError::could_not_read(
+            "error opening file",
+            Some(multiggg_file.to_path_buf()),
+            None,
+            None,
+        )
+    })?;
     let rdr = std::io::BufReader::new(f);
     let mut nskipped = 0;
     for (iline, line) in rdr.lines().enumerate() {
-        let line = line.change_context_lazy(|| BodyError::could_not_read(
-            "lines iteration failed", Some(multiggg_file.to_path_buf()), Some(iline+1), None)
-        )?;
+        let line = line.change_context_lazy(|| {
+            BodyError::could_not_read(
+                "lines iteration failed",
+                Some(multiggg_file.to_path_buf()),
+                Some(iline + 1),
+                None,
+            )
+        })?;
 
         if line.starts_with(":") {
             nskipped += 1;
@@ -996,28 +1256,41 @@ pub fn get_windows_from_multiggg(multiggg_file: &Path, include_runlog_name: bool
         }
 
         // Assume a line like "/home/jlaugh/GGG/ggg-my-devel/bin/gfit luft_6146.pa_ggg_benchmark.ggg"
-        let (_, ggg_file) = line.split_once("gfit ").ok_or_else(
-            || BodyError::unexpected_format(
+        let (_, ggg_file) = line.split_once("gfit ").ok_or_else(|| {
+            BodyError::unexpected_format(
                 "expected the line to contain 'gfit' followed by a space",
-                Some(multiggg_file.to_path_buf()), Some(iline+1), None)
-        )?;
+                Some(multiggg_file.to_path_buf()),
+                Some(iline + 1),
+                None,
+            )
+        })?;
 
         let (delim, err_msg) = if include_runlog_name {
-            (".ggg", "expected a file with the .ggg extension after 'gfit'")
+            (
+                ".ggg",
+                "expected a file with the .ggg extension after 'gfit'",
+            )
         } else {
             (".", "expected the .ggg file to have a period in it")
         };
 
-        let (window, _) = ggg_file.split_once(delim).ok_or_else(
-            || BodyError::unexpected_format(
-                err_msg, Some(multiggg_file.to_path_buf()), Some(iline), None)
-        )?;
+        let (window, _) = ggg_file.split_once(delim).ok_or_else(|| {
+            BodyError::unexpected_format(
+                err_msg,
+                Some(multiggg_file.to_path_buf()),
+                Some(iline),
+                None,
+            )
+        })?;
 
         windows.push(window.to_string());
     }
 
     if nskipped > 0 {
-        debug!("{nskipped} lines in {} skipped as commented out", multiggg_file.display());
+        debug!(
+            "{nskipped} lines in {} skipped as commented out",
+            multiggg_file.display()
+        );
     }
     Ok(windows)
 }
@@ -1059,9 +1332,11 @@ impl Iterator for DateIter {
 }
 
 pub fn iter_dates(start_date: chrono::NaiveDate, end_date: chrono::NaiveDate) -> DateIter {
-    DateIter { curr: start_date, end: end_date }
+    DateIter {
+        curr: start_date,
+        end: end_date,
+    }
 }
-
 
 #[derive(Debug, thiserror::Error)]
 pub enum EncodingError {
@@ -1071,7 +1346,6 @@ pub enum EncodingError {
     ConversionError(String),
 }
 
-
 pub fn read_unknown_encoding_file<P: AsRef<Path>>(filepath: P) -> Result<String, EncodingError> {
     let mut f = std::fs::File::open(filepath)?;
     let mut buf = vec![];
@@ -1079,22 +1353,20 @@ pub fn read_unknown_encoding_file<P: AsRef<Path>>(filepath: P) -> Result<String,
     let (content_result, _) = encoding::types::decode(
         &buf,
         encoding::types::DecoderTrap::Strict,
-        encoding::all::UTF_8
+        encoding::all::UTF_8,
     );
 
     content_result.map_err(|e| EncodingError::ConversionError(e.into_owned()))
 }
 
 /// Remove a comment from a line
-/// 
+///
 /// GGG often (though not always) considers anything after a
 /// colon in a line to be a comment. This function will return
 /// everything in `value` up to the first colon. If there is not
 /// a colon in `value`, the the full string is returned.
 pub fn remove_comment(value: &str) -> &str {
-    value.split_once(":")
-        .map(|(a, _)| a)
-        .unwrap_or(value)
+    value.split_once(":").map(|(a, _)| a).unwrap_or(value)
 }
 
 pub fn remove_comment_multiple_lines(value: &str) -> String {
@@ -1109,19 +1381,25 @@ pub fn remove_comment_multiple_lines(value: &str) -> String {
 }
 
 /// Returns `true` if `year` is a leap year in the Gregorian calendar, i.e.:
-/// 
+///
 /// - it is a multiple or 400, or
 /// - it is a multiple of 4 but not a multiple of 100
 pub fn is_leap_year(year: i32) -> bool {
-    if year % 400 == 0 { return true; }
-    if year % 100 == 0 { return false; }
-    if year % 4 == 0 { return true; }
+    if year % 400 == 0 {
+        return true;
+    }
+    if year % 100 == 0 {
+        return false;
+    }
+    if year % 4 == 0 {
+        return true;
+    }
     false
 }
 
 /// Convert an integer year, 1-based day of year, and UTC hour to a decimal year and day of year
 /// that include the smaller components, specifically:
-/// 
+///
 /// - the first value is year plus the day and hour as a fraction of the year,
 /// - the second value is the day plus the hour as a fraction of the day, and
 /// - the third value is the hour returned unchanged.
@@ -1131,7 +1409,6 @@ pub fn to_decimal_year_day_hour(year: i32, day: i32, hour: f64) -> (f64, f64, f6
     let dec_year = year as f64 + dec_doy / ndays;
     (dec_year, dec_doy, hour)
 }
-
 
 pub fn is_usa_dst(datetime: chrono::NaiveDateTime) -> Result<bool, DateTimeError> {
     // Based on the rules listed on Wikipedia as of 2023-01-23 (https://en.wikipedia.org/wiki/Daylight_saving_time_in_the_United_States#1975%E2%80%931986:_Extension_of_daylight_saving_time),
@@ -1170,7 +1447,7 @@ pub fn is_usa_dst(datetime: chrono::NaiveDateTime) -> Result<bool, DateTimeError
 
 enum Nth {
     N(NonZeroU8),
-    Last
+    Last,
 }
 
 impl From<u8> for Nth {
@@ -1179,7 +1456,12 @@ impl From<u8> for Nth {
     }
 }
 
-fn nth_day_of_week(year: i32, month: u32, weekday: chrono::Weekday, n: Nth) -> Result<chrono::NaiveDate, DateTimeError> {
+fn nth_day_of_week(
+    year: i32,
+    month: u32,
+    weekday: chrono::Weekday,
+    n: Nth,
+) -> Result<chrono::NaiveDate, DateTimeError> {
     let mut date = chrono::NaiveDate::from_ymd_opt(year, month, 1)
         .ok_or_else(|| DateTimeError::InvalidYearMonthDay(year, month, 1))?;
 
@@ -1195,33 +1477,39 @@ fn nth_day_of_week(year: i32, month: u32, weekday: chrono::Weekday, n: Nth) -> R
         }
 
         if n > 0 && m == n {
-            return Ok(date)
+            return Ok(date);
         }
 
         date += chrono::Duration::days(1);
         if date.month() != month && n != 0 {
-            return Err(DateTimeError::NoNthWeekday { year, month, n, weekday })
+            return Err(DateTimeError::NoNthWeekday {
+                year,
+                month,
+                n,
+                weekday,
+            });
         } else if date.month() != month {
             // back up to the last instance of the requested weekday in the month
             while date.weekday() != weekday {
                 date -= chrono::Duration::days(1);
             }
-            return Ok(date)
+            return Ok(date);
         }
     }
 }
 
-
-pub fn nctimes_to_datetime(timestamps: ArrayView1<f64>, units: &str) -> Result<Array1<DateTime<Utc>>, GggError> {
+pub fn nctimes_to_datetime(
+    timestamps: ArrayView1<f64>,
+    units: &str,
+) -> Result<Array1<DateTime<Utc>>, GggError> {
     if units != "seconds since 1970-01-01 00:00:00" {
         return Err(GggError::Custom(format!("Wrong units for nctime: '{units}' (currently only 'seconds since 1970-01-01 00:00:00' supported)")));
     }
-    let it = timestamps.iter()
-        .map(|&ts| {
-            let nanos = (ts * 1_000_000_000.0).trunc() as i64;
-            let dt = DateTime::from_timestamp_nanos(nanos);
-            dt
-        });
+    let it = timestamps.iter().map(|&ts| {
+        let nanos = (ts * 1_000_000_000.0).trunc() as i64;
+        let dt = DateTime::from_timestamp_nanos(nanos);
+        dt
+    });
     Ok(Array1::from_iter(it))
 }
 
@@ -1256,18 +1544,27 @@ fn sha256_digest<R: Read>(mut reader: R) -> std::io::Result<ring::digest::Digest
     Ok(context.finish())
 }
 
-
 /// Make a backup of a file.
 ///
 /// With `increment_backup = false`, this will only append `backup_suffix` to the original filename
 /// and copy the original to that file. If that backup existed previously, it will be overwritten.
 /// With `increment_backup = true`, an additional suffix from .000 to .999 will be appended so that
 /// previous backups are not deleted. This will return an error if the suffix needs to exceed 999.
-pub fn make_backup<S: AsRef<OsStr>>(original: &Path, backup_suffix: S, increment_backup: bool) -> std::io::Result<()> {
-    let mut filename = original.file_name()
-        .ok_or_else(|| std::io::Error::other(format!("Could not get file name for original file {}", original.display())))?
+pub fn make_backup<S: AsRef<OsStr>>(
+    original: &Path,
+    backup_suffix: S,
+    increment_backup: bool,
+) -> std::io::Result<()> {
+    let mut filename = original
+        .file_name()
+        .ok_or_else(|| {
+            std::io::Error::other(format!(
+                "Could not get file name for original file {}",
+                original.display()
+            ))
+        })?
         .to_os_string();
-    
+
     filename.push(backup_suffix);
     if increment_backup {
         let mut i = 0;
@@ -1278,11 +1575,13 @@ pub fn make_backup<S: AsRef<OsStr>>(original: &Path, backup_suffix: S, increment
             let this_file = original.with_file_name(this_filename);
             if !this_file.exists() {
                 std::fs::copy(original, this_file)?;
-                return Ok(())
+                return Ok(());
             }
             i += 1;
         }
-        Err(std::io::Error::other("Maximum number of backups (1000) exceeded"))
+        Err(std::io::Error::other(
+            "Maximum number of backups (1000) exceeded",
+        ))
     } else {
         let new = original.with_file_name(filename);
         std::fs::copy(original, new)?;
@@ -1294,8 +1593,7 @@ fn make_path_abs(p: PathBuf) -> PathBuf {
     if p.is_absolute() {
         p
     } else {
-        let cwd = std::env::current_dir()
-            .expect("Could not get current working directory.");
+        let cwd = std::env::current_dir().expect("Could not get current working directory.");
         cwd.join(p)
     }
 }
@@ -1307,10 +1605,16 @@ mod tests {
     #[test]
     fn test_nth_day_of_week() {
         let first_sunday_apr = nth_day_of_week(2023, 4, chrono::Weekday::Sun, 1.into()).unwrap();
-        assert_eq!(first_sunday_apr, chrono::NaiveDate::from_ymd_opt(2023, 4, 2).unwrap());
+        assert_eq!(
+            first_sunday_apr,
+            chrono::NaiveDate::from_ymd_opt(2023, 4, 2).unwrap()
+        );
 
         let last_sunday_oct = nth_day_of_week(2023, 10, chrono::Weekday::Sun, Nth::Last).unwrap();
-        assert_eq!(last_sunday_oct, chrono::NaiveDate::from_ymd_opt(2023, 10, 29).unwrap());
+        assert_eq!(
+            last_sunday_oct,
+            chrono::NaiveDate::from_ymd_opt(2023, 10, 29).unwrap()
+        );
     }
 
     #[test]
@@ -1366,14 +1670,20 @@ mod tests {
 
         while let Some(test_case) = load_next_vpath_case(&mut rdr) {
             let vpath = effective_vertical_path(
-                test_case.zmin, test_case.z.as_slice().unwrap(), test_case.d.as_slice().unwrap()
-            ).unwrap();
+                test_case.zmin,
+                test_case.z.as_slice().unwrap(),
+                test_case.d.as_slice().unwrap(),
+            )
+            .unwrap();
             assert!(
                 // We use an epsilon of 1e-4 because the input data only has 4 digits after the decimal,
                 // so there can be some rounding.
                 vpath.abs_diff_eq(&test_case.vpath, 1e-4),
                 "vpath does not match expected for profile {} zmin = {}.\nOurs = {}\nexpected = {}",
-                test_case.prof_num, test_case.zmin, vpath, test_case.vpath
+                test_case.prof_num,
+                test_case.zmin,
+                vpath,
+                test_case.vpath
             );
         }
     }
@@ -1383,16 +1693,21 @@ mod tests {
         zmin: f64,
         z: Array1<f64>,
         d: Array1<f64>,
-        vpath: Array1<f64>
+        vpath: Array1<f64>,
     }
 
     fn load_next_vpath_case(rdr: &mut BufReader<std::fs::File>) -> Option<VpathCase> {
         fn parse_data_line(line: &str, expected_label: &str) -> Array1<f64> {
             let tmp = line.split_once(':').unwrap();
             if tmp.0.trim() != expected_label {
-                panic!("In vpath.dat, expected line starting with '{expected_label}', got '{}'", tmp.0.trim());
+                panic!(
+                    "In vpath.dat, expected line starting with '{expected_label}', got '{}'",
+                    tmp.0.trim()
+                );
             }
-            let values = tmp.1.split_ascii_whitespace()
+            let values = tmp
+                .1
+                .split_ascii_whitespace()
                 .map(|s| s.trim().parse::<f64>().unwrap());
             Array1::from_iter(values)
         }
@@ -1413,15 +1728,25 @@ mod tests {
             panic!("First line of a block in vpath.dat should include 'zmin'");
         }
         let tmp = prof_line.split_once('=').unwrap();
-        let prof_num = tmp.0.trim()
+        let prof_num = tmp
+            .0
+            .trim()
             .split_ascii_whitespace()
-            .nth(1).unwrap()
-            .parse::<i32>().unwrap();
+            .nth(1)
+            .unwrap()
+            .parse::<i32>()
+            .unwrap();
         let zmin = tmp.1.trim().parse::<f64>().unwrap();
         let z = parse_data_line(&z_line, "z");
         let d = parse_data_line(&d_line, "d");
         let vpath = parse_data_line(&vpath_line, "vpath");
 
-        Some(VpathCase { prof_num, zmin, z, d, vpath })
+        Some(VpathCase {
+            prof_num,
+            zmin,
+            z,
+            d,
+            vpath,
+        })
     }
 }
