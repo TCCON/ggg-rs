@@ -59,7 +59,6 @@ fn driver(clargs: Cli) -> error_stack::Result<(), CliError> {
         return Ok(());
     }
 
-    // TODO: time subsetter needs to account for data latency
     let opt_end_date = clargs.get_release_lag_date()?;
 
     let private_nc_file = clargs
@@ -67,9 +66,11 @@ fn driver(clargs: Cli) -> error_stack::Result<(), CliError> {
         .expect("If --check-config-only not given, a private netCDF file must be given");
     let private_ds = netcdf::open(&private_nc_file).change_context(CliError::OpeningPrivateFile)?;
 
-    let time_subsetter = make_time_subsetter(&private_ds, opt_end_date)?;
+    let time_subsetter = make_time_subsetter(&private_ds, opt_end_date, !clargs.no_order_by_time)?;
     let private_file_name = &private_nc_file;
-    let public_file_name = if clargs.no_rename_by_dates {
+    let public_file_name = if let Some(out_file) = clargs.output_file.as_deref() {
+        out_file.to_path_buf()
+    } else if clargs.no_rename_by_dates {
         make_public_name_from_stem(private_file_name, config.extra_extension.as_deref())?
     } else {
         make_public_name_from_dates(
@@ -112,6 +113,12 @@ struct Cli {
     #[clap(long)]
     no_rename_by_dates: bool,
 
+    /// Specify the path at which to write the output file. Will be overwritten
+    /// if it exists. This argument takes precedence over the --no-rename-by-dates
+    /// flag.
+    #[clap(long)]
+    output_file: Option<PathBuf>,
+
     /// Will attempt to parse the selected configuration and print
     /// a debugging representation to stdout, then stop without
     /// creating a netCDF file.
@@ -138,6 +145,12 @@ struct Cli {
     /// the private netCDF file name.
     #[clap(long, group = "data_latency")]
     data_latency_file: Option<PathBuf>,
+
+    /// Disable reordering of data by time. The default behavior is to reorder
+    /// arrays with a `time` dimension so that the time dimension is ordered
+    /// chronologically
+    #[clap(long)]
+    no_order_by_time: bool,
 
     // config_file: Option<PathBuf>,
     #[command(flatten)]
@@ -267,6 +280,7 @@ fn load_config(extended: bool, custom_file: Option<PathBuf>) -> Result<Config, C
 fn make_time_subsetter(
     private_ds: &netcdf::File,
     opt_end_date: Option<NaiveDate>,
+    order_by_time: bool,
 ) -> error_stack::Result<Subsetter, CliError> {
     let flags = private_ds
         .variable("flag")
@@ -276,16 +290,23 @@ fn make_time_subsetter(
         .change_context(CliError::Subsetting)?
         .into_dimensionality::<Ix1>()
         .change_context(CliError::Subsetting)?;
-    let mut subsetter = Subsetter::from_flag(flags.view());
+
+    let nc_times = private_ds
+        .variable("time")
+        .ok_or_else(|| netcdf::Error::NotFound("variable 'time'".to_string()))
+        .change_context(CliError::Subsetting)?
+        .get::<f64, _>(Extents::All)
+        .change_context(CliError::Subsetting)?
+        .into_dimensionality::<Ix1>()
+        .change_context(CliError::Subsetting)?;
+
+    let mut subsetter = if order_by_time {
+        log::info!("Will ensure that data are time-ordered");
+        Subsetter::from_flag_and_time(flags.view(), nc_times.view())
+    } else {
+        Subsetter::from_flag(flags.view())
+    };
     if let Some(end_date) = opt_end_date {
-        let nc_times = private_ds
-            .variable("time")
-            .ok_or_else(|| netcdf::Error::NotFound("variable 'time'".to_string()))
-            .change_context(CliError::Subsetting)?
-            .get::<f64, _>(Extents::All)
-            .change_context(CliError::Subsetting)?
-            .into_dimensionality::<Ix1>()
-            .change_context(CliError::Subsetting)?;
         log::debug!("Subsetting to observations before {end_date}");
         subsetter.add_cutoff_date(nc_times.view(), end_date);
     }

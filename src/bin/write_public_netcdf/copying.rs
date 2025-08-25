@@ -121,6 +121,8 @@ pub(crate) struct Subsetter {
 }
 
 impl Subsetter {
+    /// Create a subsetter that retains the original order of spectra in the output file,
+    /// and limits to spectra with `flag == 0`.
     pub(crate) fn from_flag(flag: ArrayView1<i32>) -> Self {
         let it = flag
             .iter()
@@ -128,6 +130,30 @@ impl Subsetter {
             .filter_map(|(i, &f)| if f == 0 { Some(i) } else { None });
         let keep_inds = Vec::from_iter(it);
         Self { keep_inds }
+    }
+
+    /// Create a subsetter that sorts data along the `time` axis as well as limits to
+    /// spectra with `flag == 0`.
+    pub(crate) fn from_flag_and_time(flag: ArrayView1<i32>, time: ArrayView1<f64>) -> Self {
+        let mut me = Self::from_flag(flag);
+        if time.iter().any(|t| t.is_nan()) {
+            log::warn!("At least one time value was a NaN, any data corresponding to NaN times will be placed at the end of the time dimension")
+        }
+
+        me.keep_inds.sort_by(|&i1, &i2| {
+            let t1 = time.get(i1).expect("Tried to get a time at an index beyond the end of the times array during time-ordering");
+            let t2 = time.get(i2).expect("Tried to get a time at an index beyond the end of the times array during time-ordering");
+
+            match (t1.is_nan(), t2.is_nan()) {
+                (true, true) => std::cmp::Ordering::Equal,
+                (true, false) => std::cmp::Ordering::Greater,
+                (false, true) => std::cmp::Ordering::Less,
+                (false, false) => t1.partial_cmp(&t2).expect(
+                    "partial comparison should not produce None since neither value is a NaN",
+                ),
+            }
+        });
+        me
     }
 
     pub(crate) fn add_cutoff_date(&mut self, nc_times: ArrayView1<f64>, end_date: NaiveDate) {
