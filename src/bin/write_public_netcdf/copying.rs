@@ -2,8 +2,9 @@ use chrono::NaiveDate;
 use compute_helpers::add_geos_version_variable;
 use error_stack::ResultExt;
 use ggg_rs::{
-    nc_utils::NcArray,
+    nc_utils::{get_string_attr, GetNcAttr, NcArray},
     units::{dmf_long_name, Quantity},
+    utils::GggNcError,
 };
 use indexmap::IndexMap;
 use itertools::Itertools;
@@ -18,9 +19,7 @@ use crate::{
     discovery::{Rename, XgasMatchRule},
 };
 use copy_helpers::{copy_variable_general, copy_variable_new_data, copy_vmr_variable_from_dset};
-use copy_utils::{
-    add_needed_dims, add_needed_new_dims, find_subset_dim, get_root_string_attr, get_string_attr,
-};
+use copy_utils::{add_needed_dims, add_needed_new_dims, find_subset_dim};
 use xgas_helpers::{
     convert_array_units, expand_prior_profiles_from_file, expand_slant_xgas_binned_aks_from_file,
     get_traceability_scale, write_extrapolation_flags,
@@ -883,10 +882,17 @@ impl CopySet for XgasCopy {
             }
             Err(e) => {
                 let inner = e.current_context();
-                if let CopyError::MissingReqAttr { parent: _, attr: _ } = inner {
+                if let GggNcError::MissingVarAttr {
+                    attribute: _,
+                    variable: _,
+                    group: _,
+                } = inner
+                {
                     "".to_string()
                 } else {
-                    return Err(e);
+                    return Err(e).change_context_lazy(|| {
+                        CopyError::context("getting the 'ancillary_variables' attribute to update")
+                    });
                 }
             }
         };
@@ -1350,7 +1356,8 @@ fn add_history_attr(
     let mut history = if private_file.attribute("history").is_none() {
         "".to_string()
     } else {
-        let mut s = get_root_string_attr(private_file, "history")?;
+        let mut s = get_string_attr(private_file, "history")
+            .change_context_lazy(|| CopyError::context("updating the 'history' attribute"))?;
         s.push('\n');
         s
     };

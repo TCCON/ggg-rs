@@ -12,7 +12,7 @@ use num_traits::Zero;
 
 use crate::{
     constants::{AK_PRESSURE_VARNAME, PRIOR_INDEX_VARNAME, PRIOR_PRESSURE_VARNAME},
-    copying::copy_utils::{get_string_attr_from_file, NcChar},
+    copying::copy_utils::NcChar,
     TIME_DIM_NAME,
 };
 
@@ -86,7 +86,9 @@ pub(super) fn expand_slant_xgas_binned_aks_from_file(
     // ak_pressure is a single vector, so we don't need to subset it. But prior_pressure is an array,
     // and for GGG2020.1 and earlier files at least will still be on the prior_time dimension.
     let ak_pressure = read_req_var::<f32, Ix1>(private_file, AK_PRESSURE_VARNAME)?;
-    let ak_pres_units = get_string_attr_from_file(private_file, AK_PRESSURE_VARNAME, "units")?;
+    let ak_pres_units =
+        nc_utils::get_string_attr_from_file(private_file, AK_PRESSURE_VARNAME, "units")
+            .change_context_lazy(|| CopyError::context("getting AK pressure units"))?;
     let prior_pressure = expand_prior_profiles_from_file(
         private_file,
         PRIOR_PRESSURE_VARNAME,
@@ -160,7 +162,8 @@ pub(super) fn expand_prior_profiles_from_file(
             "getting data for prior profile variable '{prior_varname}'"
         ))
     })?;
-    let prior_unit = get_string_attr(&prior_var, "units")?;
+    let prior_unit = get_string_attr(&prior_var, "units")
+        .change_context_lazy(|| CopyError::context("getting units for priors during expansion"))?;
     let prior_data = if let Some((quantity, unit)) = target_unit {
         convert_array_units(prior_data, &prior_unit, quantity, unit).change_context_lazy(|| {
             CopyError::context(format!(

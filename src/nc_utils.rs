@@ -1,5 +1,6 @@
 use std::{io::Read, path::Path};
 
+use error_stack::ResultExt;
 use indexmap::IndexMap;
 use interp::interp_slice;
 use itertools::Itertools;
@@ -13,7 +14,7 @@ use serde::{de::Error, Deserialize};
 
 use crate::{
     units::{unit_conv_factor, Quantity},
-    utils::GggError,
+    utils::{GggError, GggNcError},
 };
 
 /// A type that can hold a variety of arrays that might be stored
@@ -436,4 +437,93 @@ pub fn read_nc_site_metadata(
         ))
     })?;
     toml::from_str(&buf)
+}
+
+/// Retrieve the value of a string attribute on a netCDF variable, group, or file.
+///
+/// # See also
+///
+/// - [`get_string_attr_from_file`]: for when you have the file open, but need to
+/// get an attribute from another variable.
+pub fn get_string_attr<O: GetNcAttr>(
+    object: O,
+    attr: &str,
+) -> error_stack::Result<String, GggNcError> {
+    let vres = object.get_attr_val(attr)?;
+
+    let sres: Result<String, _> = vres.try_into();
+
+    sres.change_context_lazy(|| {
+        GggNcError::context(format!(
+            "Could not convert attribute '{attr}' on {} to a string",
+            object.description()
+        ))
+    })
+}
+
+/// Retrieve a string attribute's value from a variable in an open file.
+///
+/// # See also
+///
+/// - [`get_string_attr`]: for when you already have the file, group,
+/// or variable from which you wish to access the attribute.
+pub fn get_string_attr_from_file(
+    file: &netcdf::File,
+    varname: &str,
+    attr: &str,
+) -> error_stack::Result<String, GggNcError> {
+    let var = file
+        .variable(varname)
+        .ok_or_else(|| GggNcError::MissingVar {
+            variable: varname.to_string(),
+            group: None,
+        })?;
+
+    get_string_attr(&var, attr)
+}
+
+/// A trait used to allow generic access to netCDF attribute values across
+/// different netCDF constructs (files, groups, variables).
+pub trait GetNcAttr {
+    /// Get the value of a given attribute
+    fn get_attr_val(&self, attr: &str) -> Result<netcdf::AttributeValue, GggNcError>;
+    /// Describe the object we are getting the attribute from - useful in error messages.
+    fn description(&self) -> String;
+}
+
+impl<'v> GetNcAttr for &netcdf::Variable<'v> {
+    fn get_attr_val(&self, attr: &str) -> Result<netcdf::AttributeValue, GggNcError> {
+        self.attribute_value(attr)
+            .ok_or_else(|| GggNcError::missing_var_attr::<_, _, String>(attr, self.name(), None))?
+            .map_err(|e| GggNcError::from(e))
+    }
+
+    fn description(&self) -> String {
+        format!("variable '{}'", self.name())
+    }
+}
+
+impl<'g> GetNcAttr for &netcdf::Group<'g> {
+    fn get_attr_val(&self, attr: &str) -> Result<netcdf::AttributeValue, GggNcError> {
+        self.attribute_value(attr)
+            .ok_or_else(|| GggNcError::missing_group_attr(attr, self.name()))?
+            .map_err(|e| GggNcError::from(e))
+    }
+
+    fn description(&self) -> String {
+        format!("group '{}'", self.name())
+    }
+}
+
+impl GetNcAttr for &netcdf::File {
+    fn get_attr_val(&self, attr: &str) -> Result<netcdf::AttributeValue, GggNcError> {
+        self.attribute(attr)
+            .ok_or_else(|| GggNcError::missing_group_attr(attr, ""))?
+            .value()
+            .map_err(|e| GggNcError::from(e))
+    }
+
+    fn description(&self) -> String {
+        "group '/'".to_string()
+    }
 }
