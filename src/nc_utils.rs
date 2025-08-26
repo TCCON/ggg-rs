@@ -11,7 +11,10 @@ use netcdf::{
 use num_traits::Zero;
 use serde::{de::Error, Deserialize};
 
-use crate::{units::dmf_conv_factor, utils::GggError};
+use crate::{
+    units::{unit_conv_factor, Quantity},
+    utils::GggError,
+};
 
 /// A type that can hold a variety of arrays that might be stored
 /// in a netCDF file. It is best created by reading from a netCDF
@@ -214,7 +217,7 @@ pub fn expand_slant_xgas_binned_aks(
     let slant_xgas_bins = if xgas_units == bin_units {
         slant_xgas_bins
     } else {
-        let cf = dmf_conv_factor(bin_units, xgas_units).map_err(|e| {
+        let cf = unit_conv_factor(bin_units, xgas_units, Quantity::DMF).map_err(|e| {
             GggError::custom(format!(
                 "Error converting AK slant Xgas bins to proper unit: {e}"
             ))
@@ -321,6 +324,83 @@ fn quantize(v: f32, minval: f32, maxval: f32, n: f32) -> f32 {
     let vi = (vn * (n - 1.0)).round() / (n - 1.0);
     // Restore original magnitude
     vi * (maxval - minval) + minval
+}
+
+pub fn interp_aks_to_new_pressures(
+    aks: ArrayView2<f32>,
+    ak_pressure: Array1<f32>,
+    target_pressures: ArrayView2<f32>,
+) -> error_stack::Result<Array2<f32>, GggError> {
+    if aks.shape()[0] != target_pressures.shape()[0] {
+        return Err(GggError::Custom(
+            "First dimension of `aks` is a different length from the first dimension of `target_pressures`"
+                .to_string(),
+        )
+        .into());
+    }
+
+    if aks.shape()[1] != ak_pressure.len() {
+        return Err(GggError::Custom(
+            "Second dimension of `aks` is a different length from the `ak_pressure` vector"
+                .to_string(),
+        )
+        .into());
+    }
+
+    // The interp crate expects that the x coordinate is increasing, so
+    // check that the ak_pressure vector is surface-to-space and flip if
+    // needed.
+    let (ak_pressure, flip_aks) = if ak_pressure.len() > 1 && ak_pressure[1] - ak_pressure[0] < 0.0
+    {
+        log::debug!("Will flip AKs during interpolation so pressure is increasing");
+        let p = ak_pressure.iter().copied().rev().collect_vec();
+        (p, true)
+    } else {
+        log::debug!("Will not flip AKs during interpolation; pressure is already increasing");
+        let p = ak_pressure.to_vec();
+        (p, false)
+    };
+
+    // Now we can simply iterate over the AKs and interpolate/extrapolate them
+    // to the target pressures.
+    let n_obs = target_pressures.shape()[0];
+    let n_lev = target_pressures.shape()[1];
+    let mut aks_out = Array2::from_elem([n_obs, n_lev], f32::NAN);
+
+    ndarray::Zip::from(aks_out.rows_mut())
+        .and(aks.rows())
+        .and(target_pressures.rows())
+        .for_each(|mut out_row, in_row, pres_row| {
+            let tmp = if flip_aks {
+                let in_row = in_row.iter().copied().rev().collect_vec();
+                interp_slice(
+                    &ak_pressure,
+                    &in_row,
+                    pres_row.as_standard_layout().as_slice().expect(
+                        "pres_row array to slice should succeed after converting to standard layout",
+                    ),
+                    &interp::InterpMode::Extrapolate,
+                )
+                // We don't need to reverse the output because the prior pressure row
+                // wasn't reversed - so the interpolation already outputs it in the
+                // correct order.
+            } else {
+                interp_slice(
+                    &ak_pressure,
+                    &in_row.as_standard_layout().as_slice().expect(
+                        "in_row array to slice should succeed after converting to standard layout",
+                    ),
+                    pres_row.as_standard_layout().as_slice().expect(
+                        "pres_row array to slice should succeed after converting to standard layout",
+                    ),
+                    &interp::InterpMode::Extrapolate,
+                )
+            };
+            let tmp = Array1::from_vec(tmp);
+            out_row.assign(&tmp);
+        });
+
+    Ok(aks_out)
 }
 
 // ---------------- //

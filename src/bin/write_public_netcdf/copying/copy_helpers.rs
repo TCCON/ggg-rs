@@ -12,7 +12,7 @@ use num_traits::Zero;
 use crate::TIME_DIM_NAME;
 
 use super::{
-    add_needed_dims, add_needed_new_dims, convert_dmf_array, find_subset_dim, get_string_attr,
+    add_needed_dims, add_needed_new_dims, convert_array_units, find_subset_dim, get_string_attr,
     CopyError, Subsetter,
 };
 
@@ -65,7 +65,7 @@ pub(super) fn copy_vmr_variable_from_dset<
         data
     };
 
-    let data = convert_dmf_array(data, &var_unit, target_unit)
+    let data = convert_array_units(data, &var_unit, ggg_rs::units::Quantity::DMF, target_unit)
            .change_context_lazy(|| CopyError::context(format!("getting conversion factor for {private_varname} to scale to the primary Xgas variable unit")))?;
     if attr_overrides
         .insert("units".to_string(), target_unit.into())

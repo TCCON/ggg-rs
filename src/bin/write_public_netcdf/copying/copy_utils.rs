@@ -10,6 +10,39 @@ use crate::TIME_DIM_NAME;
 
 use super::{CopyError, Subsetter};
 
+/// Read a required variable that does not need subset to `flag == 0` data.
+///
+/// If a variable _may_ need subset, it is safe to use [`read_and_subset_req_var`],
+/// and that function will identify if the time dimension is present. This function
+/// is a convenience for cases where subsetting definitely will not be necessary
+/// and you do not have the subsetter available.
+pub(super) fn read_req_var<T: NcTypeDescriptor + Copy + Zero, D: Dimension>(
+    file: &netcdf::File,
+    varname: &str,
+) -> error_stack::Result<Array<T, D>, CopyError> {
+    let var = file
+        .variable(varname)
+        .ok_or_else(|| CopyError::MissingReqVar(varname.to_string()))?;
+
+    let arr = var
+        .get::<T, _>(Extents::All)
+        .change_context_lazy(|| CopyError::context(format!("reading variable '{varname}'")))?;
+
+    let arr = arr.into_dimensionality::<D>().change_context_lazy(|| {
+        CopyError::context(format!("converting variable '{varname}' dimensionality"))
+    })?;
+
+    Ok(arr)
+}
+
+/// Read a required variable that may need subset to `flag == 0` data.
+///
+/// If the given variable does not have a time dimension, then no subsetting
+/// will be performed. Otherwise, subsetting will occur along the time dimension,
+/// defined by [`TIME_DIM_NAME`].
+///
+/// If you need a function to read a variable without a [`Subsetter`] available,
+/// use [`read_req_var`].
 pub(super) fn read_and_subset_req_var<T: NcTypeDescriptor + Copy + Zero, D: Dimension>(
     file: &netcdf::File,
     varname: &str,
@@ -37,6 +70,14 @@ pub(super) fn read_and_subset_req_var<T: NcTypeDescriptor + Copy + Zero, D: Dime
     Ok(arr)
 }
 
+/// Retrieve a string attribute's value from a variable already present in memory.
+///
+/// # See also
+///
+/// - [`get_string_attr_from_file`]: to get the variable and its attribute
+/// in one function.
+/// - [`get_root_string_attr`]: to get a string attribute from the root group
+/// of a file.
 pub(super) fn get_string_attr(
     var: &netcdf::Variable,
     attr: &str,
@@ -59,6 +100,34 @@ pub(super) fn get_string_attr(
     })
 }
 
+/// Retrieve a string attribute's value from a variable in an open file.
+///
+/// # See also
+///
+/// - [`get_string_attr`]: to get a string attribute value from
+/// a variable object.
+/// - [`get_root_string_attr`]: to get a string attribute from the root group
+/// of a file.
+pub(super) fn get_string_attr_from_file(
+    file: &netcdf::File,
+    varname: &str,
+    attr: &str,
+) -> error_stack::Result<String, CopyError> {
+    let var = file
+        .variable(varname)
+        .ok_or_else(|| CopyError::MissingReqVar(varname.to_string()))?;
+
+    get_string_attr(&var, attr)
+}
+
+/// Retrieve a string attribute's value from the root group of a netCDF file.
+///
+/// # See also
+///
+/// - [`get_string_attr`]: to get a string attribute value from
+/// a variable object.
+/// - [`get_string_attr_from_file`]: to get the variable and its attribute
+/// in one function.
 pub(super) fn get_root_string_attr(
     file: &netcdf::File,
     attr: &str,

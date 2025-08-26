@@ -4,16 +4,20 @@ use std::ops::Mul;
 use error_stack::ResultExt;
 use ggg_rs::{
     nc_utils,
-    units::{dmf_conv_factor, UnknownUnitError},
+    units::{unit_conv_factor, Quantity, UnknownUnitError},
 };
 use ndarray::{Array1, Array2, ArrayD, ArrayView1, Ix1, Ix2};
 use netcdf::{Extents, NcTypeDescriptor};
 use num_traits::Zero;
 
-use crate::{copying::copy_utils::NcChar, TIME_DIM_NAME};
+use crate::{
+    constants::{AK_PRESSURE_VARNAME, PRIOR_INDEX_VARNAME, PRIOR_PRESSURE_VARNAME},
+    copying::copy_utils::{get_string_attr_from_file, NcChar},
+    TIME_DIM_NAME,
+};
 
 use super::{
-    copy_utils::{chars_to_string, read_and_subset_req_var},
+    copy_utils::{chars_to_string, read_and_subset_req_var, read_req_var},
     find_subset_dim, get_string_attr, CopyError, Subsetter,
 };
 
@@ -44,9 +48,10 @@ pub(super) fn update_xgas_description(
     }
 }
 
-pub(super) fn convert_dmf_array<T>(
+pub(super) fn convert_array_units<T>(
     mut data: ArrayD<T>,
     orig_unit: &str,
+    quantity: Quantity,
     target_unit: &str,
 ) -> Result<ArrayD<T>, UnknownUnitError>
 where
@@ -55,7 +60,7 @@ where
     // Only do a conversion if the units are different. This saves some
     // multiplying and avoids any weird floating point error
     if orig_unit != target_unit {
-        let conv_factor = dmf_conv_factor(&orig_unit, target_unit)?;
+        let conv_factor = unit_conv_factor(&orig_unit, target_unit, quantity)?;
         data.mapv_inplace(|el| el * T::from(conv_factor));
     }
     Ok(data)
@@ -78,6 +83,20 @@ pub(super) fn expand_slant_xgas_binned_aks_from_file(
     let slant_xgas_bins =
         read_and_subset_req_var::<f32, Ix1>(private_file, slant_bin_varname, time_subsetter)?;
 
+    // ak_pressure is a single vector, so we don't need to subset it. But prior_pressure is an array,
+    // and for GGG2020.1 and earlier files at least will still be on the prior_time dimension.
+    let ak_pressure = read_req_var::<f32, Ix1>(private_file, AK_PRESSURE_VARNAME)?;
+    let ak_pres_units = get_string_attr_from_file(private_file, AK_PRESSURE_VARNAME, "units")?;
+    let prior_pressure = expand_prior_profiles_from_file(
+        private_file,
+        PRIOR_PRESSURE_VARNAME,
+        PRIOR_INDEX_VARNAME,
+        Some((Quantity::Pressure, ak_pres_units.as_str())),
+        time_subsetter,
+    )?
+    .into_dimensionality::<Ix2>()
+    .change_context_lazy(|| CopyError::context("converting prior pressure to 2D"))?;
+
     // We need the Xgas-related units too
     let xgas_var = private_file
         .variable(xgas_varname)
@@ -95,6 +114,7 @@ pub(super) fn expand_slant_xgas_binned_aks_from_file(
         ))
     })?;
 
+    // Now we actually expand the AKs
     let slant_xgas_values = xgas * airmass;
     let (expanded_aks, extrap_flags) = nc_utils::expand_slant_xgas_binned_aks(
         slant_xgas_values.view(),
@@ -106,14 +126,29 @@ pub(super) fn expand_slant_xgas_binned_aks_from_file(
     )
     .change_context_lazy(|| CopyError::custom(format!("expanding '{ak_varname}'")))?;
 
+    // ...and interpolate to the prior pressure levels.
+    let expanded_aks = nc_utils::interp_aks_to_new_pressures(
+        expanded_aks.view(),
+        ak_pressure,
+        prior_pressure.view(),
+    )
+    .change_context_lazy(|| {
+        CopyError::context(format!("interpolating '{ak_varname}' to prior pressures"))
+    })?;
+
     Ok((expanded_aks, extrap_flags))
 }
 
+/// Read a prior variable from the private netCDF file and expand its
+/// first dimension from `prior_time` to `time`.
+///
+/// # Warning
+/// This function does not check if the prior variable needs expanded.
 pub(super) fn expand_prior_profiles_from_file(
     private_file: &netcdf::File,
     prior_varname: &str,
     prior_index_varname: &str,
-    target_unit: Option<&str>,
+    target_unit: Option<(Quantity, &str)>,
     time_subsetter: &Subsetter,
 ) -> error_stack::Result<ArrayD<f32>, CopyError> {
     // Get the compact prior profiles and convert them to the target units
@@ -126,8 +161,8 @@ pub(super) fn expand_prior_profiles_from_file(
         ))
     })?;
     let prior_unit = get_string_attr(&prior_var, "units")?;
-    let prior_data = if let Some(unit) = target_unit {
-        convert_dmf_array(prior_data, &prior_unit, unit).change_context_lazy(|| {
+    let prior_data = if let Some((quantity, unit)) = target_unit {
+        convert_array_units(prior_data, &prior_unit, quantity, unit).change_context_lazy(|| {
             CopyError::context(format!(
                 "converting prior profile variable '{prior_varname}' units"
             ))

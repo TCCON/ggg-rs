@@ -3,12 +3,15 @@ use std::fmt::Display;
 #[derive(Debug)]
 pub struct UnknownUnitError {
     pub quantity: &'static str,
-    pub unit: String
+    pub unit: String,
 }
 
 impl UnknownUnitError {
     fn new<S: ToString>(quantity: &'static str, unit: S) -> Self {
-        Self { quantity, unit: unit.to_string() }
+        Self {
+            quantity,
+            unit: unit.to_string(),
+        }
     }
 }
 
@@ -20,11 +23,27 @@ impl Display for UnknownUnitError {
 
 impl std::error::Error for UnknownUnitError {}
 
+pub enum Quantity {
+    DMF,
+    Pressure,
+}
 
+impl Quantity {
+    fn from_base_unit(&self, unit: &str) -> Result<f32, UnknownUnitError> {
+        match self {
+            Quantity::DMF => parts_to(unit),
+            Quantity::Pressure => pascals_to(unit),
+        }
+    }
+}
 
-pub fn dmf_conv_factor(old_unit: &str, new_unit: &str) -> Result<f32, UnknownUnitError> {
-    let fac1 = parts_to(old_unit)?;
-    let fac2 = parts_to(new_unit)?;
+pub fn unit_conv_factor(
+    old_unit: &str,
+    new_unit: &str,
+    quantity: Quantity,
+) -> Result<f32, UnknownUnitError> {
+    let fac1 = quantity.from_base_unit(old_unit)?;
+    let fac2 = quantity.from_base_unit(new_unit)?;
     Ok(fac2 / fac1)
 }
 
@@ -45,6 +64,14 @@ pub fn dmf_long_name(dmf_unit: &str) -> Result<&'static str, UnknownUnitError> {
         "ppm" => Ok("parts per million"),
         "ppb" => Ok("parts per billion"),
         "ppt" => Ok("parts per trillion"),
-        _ => Err(UnknownUnitError::new("mole fraction", dmf_unit))
+        _ => Err(UnknownUnitError::new("mole fraction", dmf_unit)),
+    }
+}
+
+fn pascals_to(pres_unit: &str) -> Result<f32, UnknownUnitError> {
+    match pres_unit {
+        "hPa" => Ok(1e-2),
+        "atm" => Ok(1.0 / 101325.0),
+        _ => Err(UnknownUnitError::new("pressure", pres_unit)),
     }
 }

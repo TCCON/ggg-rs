@@ -374,8 +374,6 @@ pub(crate) fn default_aux_vars() -> Vec<AuxVarCopy> {
         AuxVarCopy::new("year", "year", true),
         AuxVarCopy::new("day", "day of year", true),
         AuxVarCopy::new("prior_altitude", "altitude a.s.l.", true),
-        AuxVarCopy::new("ak_altitude", "altitude a.s.l.", true),
-        AuxVarCopy::new("ak_pressure", "pressure", true),
         AuxVarCopy::new("hour", "UTC hour", true),
         AuxVarCopy::new("lat", "latitude", true),
         AuxVarCopy::new("long", "longitude", true),

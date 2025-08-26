@@ -1,7 +1,10 @@
 use chrono::NaiveDate;
 use compute_helpers::add_geos_version_variable;
 use error_stack::ResultExt;
-use ggg_rs::{nc_utils::NcArray, units::dmf_long_name};
+use ggg_rs::{
+    nc_utils::NcArray,
+    units::{dmf_long_name, Quantity},
+};
 use indexmap::IndexMap;
 use itertools::Itertools;
 use ndarray::{ArrayD, ArrayView1, ArrayViewD, Axis};
@@ -11,7 +14,7 @@ use serde::{Deserialize, Deserializer};
 
 use crate::{
     config::default_attr_remove,
-    constants::{PRIOR_INDEX_VARNAME, PROGRAM_NAME, TIME_DIM_NAME},
+    constants::{PRIOR_INDEX_VARNAME, PRIOR_PRESSURE_VARNAME, PROGRAM_NAME, TIME_DIM_NAME},
     discovery::{Rename, XgasMatchRule},
 };
 use copy_helpers::{copy_variable_general, copy_variable_new_data, copy_vmr_variable_from_dset};
@@ -19,7 +22,7 @@ use copy_utils::{
     add_needed_dims, add_needed_new_dims, find_subset_dim, get_root_string_attr, get_string_attr,
 };
 use xgas_helpers::{
-    convert_dmf_array, expand_prior_profiles_from_file, expand_slant_xgas_binned_aks_from_file,
+    convert_array_units, expand_prior_profiles_from_file, expand_slant_xgas_binned_aks_from_file,
     get_traceability_scale, write_extrapolation_flags,
 };
 
@@ -468,7 +471,9 @@ impl CopySet for PriorProfCopy {
             private_file,
             &self.private_name,
             PRIOR_INDEX_VARNAME,
-            self.target_vmr_unit.as_deref(),
+            self.target_vmr_unit
+                .as_deref()
+                .map(|unit| (Quantity::DMF, unit)),
             time_subsetter,
         )?;
 
@@ -906,7 +911,10 @@ impl CopySet for XgasCopy {
             attr_overrides,
             &attr_to_remove,
             &gas_units,
-        )?;
+        )
+        .change_context_lazy(|| {
+            CopyError::context(format!("copying Xgas variable '{}'", self.xgas))
+        })?;
 
         // And its error value
         let error_names_opt = self
@@ -923,7 +931,13 @@ impl CopySet for XgasCopy {
                 self.xgas_error_attr_overrides.clone(),
                 &attr_to_remove,
                 &gas_units,
-            )?;
+            )
+            .change_context_lazy(|| {
+                CopyError::context(format!(
+                    "copying error variable '{private_error_name}' for Xgas {}",
+                    self.xgas
+                ))
+            })?;
 
             ancillary_vars.push_str(&public_error_name);
             ancillary_vars.push(' ');
@@ -953,7 +967,13 @@ impl CopySet for XgasCopy {
                 attr_overrides,
                 &attr_to_remove,
                 &gas_units,
-            )?;
+            )
+            .change_context_lazy(|| {
+                CopyError::context(format!(
+                    "copying prior Xgas variable '{private_prxgas_name}' for Xgas {}",
+                    self.xgas
+                ))
+            })?;
 
             ancillary_vars.push_str(&public_prxgas_name);
             ancillary_vars.push(' ');
@@ -976,12 +996,19 @@ impl CopySet for XgasCopy {
                 .entry("description".to_string())
                 .or_insert_with(|| format!("a priori profile of {}", self.gas_long).into());
 
-            let prior_copier = PriorProfCopy::new(private_prior_name, long_name, true)
+            let prior_copier = PriorProfCopy::new(private_prior_name.clone(), long_name, true)
                 .with_public_name(public_prior_name)
                 .with_vmr_units(gas_units)
                 .set_attr_overrides(attr_overrides);
 
-            prior_copier.copy(private_file, public_file, time_subsetter)?;
+            prior_copier
+                .copy(private_file, public_file, time_subsetter)
+                .change_context_lazy(|| {
+                    CopyError::context(format!(
+                        "copying prior profile variable '{private_prior_name}' for Xgas {}",
+                        self.xgas
+                    ))
+                })?;
         }
 
         // Likewise for the AKs
@@ -1001,12 +1028,23 @@ impl CopySet for XgasCopy {
                 &self.slant_bin_name(),
                 time_subsetter,
                 Some(500),
-            )?;
+            )
+            .change_context_lazy(|| {
+                CopyError::context(format!(
+                    "expanding AK variable '{private_ak_name}' for Xgas {}",
+                    self.xgas
+                ))
+            })?;
 
             let extrap_flag_varname = format!("extrapolation_flags_{public_ak_name}");
-            let level_dim_name = ak_var.dimensions()
-                .get(0)
-                .ok_or_else(|| CopyError::custom(format!("Expected AK variable '{private_ak_name}' to have altitude as the first dimension, but had no dimensions")))?
+
+            // Try to get the prior pressure level dimension to replace the AK level dim name,
+            // since we've interpolated to the prior pressure levels.
+            let level_dim_name = private_file.variable(PRIOR_PRESSURE_VARNAME)
+                .ok_or_else(|| CopyError::custom(format!("Could not find variable '{PRIOR_PRESSURE_VARNAME}' to get the new level dimension for the interpolated AKs")))?
+                .dimensions()
+                .get(1)
+                .ok_or_else(|| CopyError::custom(format!("Expected variable '{PRIOR_PRESSURE_VARNAME}' to have levels as the second dimension, but it did not have a second dimension")))?
                 .name();
 
             let mut attr_overrides = self.ak_attr_overrides.clone();
@@ -1029,14 +1067,26 @@ impl CopySet for XgasCopy {
                 &format!("{} averaging kernel", self.gas_long),
                 &attr_overrides,
                 &attr_to_remove,
-            )?;
+            )
+            .change_context_lazy(|| {
+                CopyError::context(format!(
+                    "copying expanded AKs into '{public_ak_name}' for Xgas {}",
+                    self.xgas
+                ))
+            })?;
 
             write_extrapolation_flags(
                 public_file,
                 &public_ak_name,
                 &extrap_flag_varname,
                 ak_extrap_flags.view(),
-            )?;
+            )
+            .change_context_lazy(|| {
+                CopyError::context(format!(
+                    "writing AK extrapolation flags to '{extrap_flag_varname}' for Xgas {}",
+                    self.xgas
+                ))
+            })?;
 
             ancillary_vars.push_str(&public_ak_name);
             ancillary_vars.push(' ');
