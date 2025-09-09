@@ -4,9 +4,8 @@ use error_stack::ResultExt;
 
 use crate::{error::WriteError, readers::ProgramVersion};
 
-
 /// Write the header of a postprocessing file.
-/// 
+///
 /// # Inputs
 /// - `f`: the handle to write to, usually a mutable [`std::io::BufWriter`] or similar.
 /// - `ncol`: the number of columns in the file (including the spectrum name).
@@ -22,17 +21,24 @@ use crate::{error::WriteError, readers::ProgramVersion};
 ///   larger than any real value, [`POSTPROC_FILL_VALUE`] is a good default.
 /// - `format_str`: the Fortran format string which the output follows.
 /// - `column_names`: a slice of all the data columns' names.
-/// 
+///
 /// A note on `format_str` regarding compatibility with Fortran GGG programs: many of these programs
 /// expect a 1-character-wide column just after the spectrum name which is kept for compatibility with
 /// older runlog formats. Since the Rust code does not serialize that, the `format_str` value you pass
 /// here should include that if needed, even if that means it differs from the string used by [`fortformat`]
 /// to actually write the output. (That is, usually you will remove the "a1" column for the string given
 /// to [`fortformat`] and add one to the width of the spectrum name column.)
-pub fn write_postproc_header<W: Write>(mut f: W, ncol: usize, nrow: usize, naux: usize, program_versions: &[ProgramVersion],
-                                       extra_lines: &[String], missing_value: f64, format_str: &str, column_names: &[String])
--> error_stack::Result<(), WriteError>
-{
+pub fn write_postproc_header<W: Write>(
+    mut f: W,
+    ncol: usize,
+    nrow: usize,
+    naux: usize,
+    program_versions: &[ProgramVersion],
+    extra_lines: &[String],
+    missing_value: f64,
+    format_str: &str,
+    column_names: &[String],
+) -> error_stack::Result<(), WriteError> {
     // Skip single-character fields; those seem to be a holdover to allow a : or ; to follow
     // the spectrum name?
     let col_width = fortformat::FortFormat::parse(format_str)
@@ -75,7 +81,11 @@ pub fn write_postproc_header<W: Write>(mut f: W, ncol: usize, nrow: usize, naux:
 
     for (width, name) in col_width.zip(column_names) {
         let width = width as usize;
-        let n = if name.len() >= width - 1 { 0 } else { width - 1 - name.len() };
+        let n = if name.len() >= width - 1 {
+            0
+        } else {
+            width - 1 - name.len()
+        };
         write!(f, " {name}{}", " ".repeat(n)).change_context_lazy(|| WriteError::IoError)?;
     }
     writeln!(f, "").change_context_lazy(|| WriteError::IoError)?;

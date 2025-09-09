@@ -1,11 +1,14 @@
 //! Utilities for reading runlogs and iterating over their data records.
-use std::{path::Path, io::BufReader, fs::File};
+use std::{fs::File, io::BufReader, path::Path};
 
 use fortformat::de::from_str_with_fields;
 use itertools::Itertools;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-use crate::{error::HeaderError, utils::{self, GggError}};
+use crate::{
+    error::HeaderError,
+    utils::{self, GggError},
+};
 
 pub const NUM_RUNLOG_COLS: usize = 36;
 
@@ -86,7 +89,10 @@ pub struct RunlogDataRec {
     #[serde(rename = "SNR")]
     pub snr: i32,
     /// Apodization function
-    #[serde(rename = "APF", deserialize_with = "utils::ApodizationFxn::deserialize")]
+    #[serde(
+        rename = "APF",
+        deserialize_with = "utils::ApodizationFxn::deserialize"
+    )]
     pub apf: utils::ApodizationFxn,
     /// Instrument internal temperature in deg. C
     pub tins: f64,
@@ -113,7 +119,7 @@ pub struct RunlogDataRec {
     /// Tracker frequency in cm-1
     pub wavtkr: f64,
     /// Airmass-independent path length in kilometers
-    pub aipl: f64
+    pub aipl: f64,
 }
 
 impl RunlogDataRec {
@@ -124,13 +130,14 @@ impl RunlogDataRec {
     /// Return the zero path difference time defined in this entry
     ///
     /// Converts the year, day, and hour fields of the runlog entry to
-    /// a [`chrono::DateTime`] instance with the UTC timezone. Will 
+    /// a [`chrono::DateTime`] instance with the UTC timezone. Will
     /// return `None` if the day value is out of range for the given year.
     /// In most cases, it is safe to unwrap the returned option, since
-    /// `create_runlog` should not generate an invalid day-of-year value. 
+    /// `create_runlog` should not generate an invalid day-of-year value.
     pub fn zpd_time(&self) -> Option<chrono::DateTime<chrono::Utc>> {
         let dt = chrono::NaiveDate::from_yo_opt(self.year, self.day as u32)?
-            .and_hms_opt(0, 0, 0).unwrap()
+            .and_hms_opt(0, 0, 0)
+            .unwrap()
             .and_utc();
         let delta_nanos = self.hour * 3600.0 * 1e9;
         let tdel = chrono::TimeDelta::nanoseconds(delta_nanos as i64);
@@ -142,63 +149,139 @@ impl approx::AbsDiffEq for RunlogDataRec {
     type Epsilon = f64;
 
     fn default_epsilon() -> Self::Epsilon {
-        // Since all floating point fields are f64, we use f64. 
+        // Since all floating point fields are f64, we use f64.
         // If an f32 is added in the future, that should probably
         // be used instead
         f64::EPSILON
     }
 
     fn abs_diff_eq(&self, other: &Self, epsilon: Self::Epsilon) -> bool {
-        if self.commented != other.commented { return false; }
-        if self.spectrum_name != other.spectrum_name { return false; }
-        if self.year != other.year { return false; }
-        if self.day != other.day { return false; }
-        if f64::abs_diff_ne(&self.hour, &other.hour, epsilon) { return false; }
-        if f64::abs_diff_ne(&self.obs_lat, &other.obs_lat, epsilon) { return false; }
-        if f64::abs_diff_ne(&self.obs_lon, &other.obs_lon, epsilon) { return false; }
-        if f64::abs_diff_ne(&self.obs_alt, &other.obs_alt, epsilon) { return false; }
-        if f64::abs_diff_ne(&self.hour, &other.hour, epsilon) { return false; }
-        if f64::abs_diff_ne(&self.asza, &other.asza, epsilon) { return false; }
-        if f64::abs_diff_ne(&self.poff, &other.poff, epsilon) { return false; }
-        if f64::abs_diff_ne(&self.azim, &other.azim, epsilon) { return false; }
-        if f64::abs_diff_ne(&self.osds, &other.osds, epsilon) { return false; }
-        if f64::abs_diff_ne(&self.opd, &other.opd, epsilon) { return false; }
-        if f64::abs_diff_ne(&self.fovi, &other.fovi, epsilon) { return false; }
-        if f64::abs_diff_ne(&self.fovo, &other.fovo, epsilon) { return false; }
-        if f64::abs_diff_ne(&self.amal, &other.amal, epsilon) { return false; }
-        if self.ifirst != other.ifirst { return false; }
-        if self.ilast != other.ilast { return false; }
-        if f64::abs_diff_ne(&self.delta_nu, &other.delta_nu, epsilon) { return false; }
-        if self.pointer != other.pointer { return false; }
-        if self.bpw != other.bpw { return false; }
-        if self.snr != other.snr { return false; }
-        if self.apf != other.apf { return false; }
-        if f64::abs_diff_ne(&self.tins, &other.tins, epsilon) { return false; }
-        if f64::abs_diff_ne(&self.pins, &other.pins, epsilon) { return false; }
-        if f64::abs_diff_ne(&self.hins, &other.hins, epsilon) { return false; }
-        if f64::abs_diff_ne(&self.tout, &other.tout, epsilon) { return false; }
-        if f64::abs_diff_ne(&self.pout, &other.pout, epsilon) { return false; }
-        if f64::abs_diff_ne(&self.hout, &other.hout, epsilon) { return false; }
-        if f64::abs_diff_ne(&self.sia, &other.sia, epsilon) { return false; }
-        if f64::abs_diff_ne(&self.fvsi, &other.fvsi, epsilon) { return false; }
-        if f64::abs_diff_ne(&self.wspd, &other.wspd, epsilon) { return false; }
-        if f64::abs_diff_ne(&self.wdir, &other.wdir, epsilon) { return false; }
-        if f64::abs_diff_ne(&self.lasf, &other.lasf, epsilon) { return false; }
-        if f64::abs_diff_ne(&self.wavtkr, &other.wavtkr, epsilon) { return false; }
-        if f64::abs_diff_ne(&self.aipl, &other.aipl, epsilon) { return false; }
+        if self.commented != other.commented {
+            return false;
+        }
+        if self.spectrum_name != other.spectrum_name {
+            return false;
+        }
+        if self.year != other.year {
+            return false;
+        }
+        if self.day != other.day {
+            return false;
+        }
+        if f64::abs_diff_ne(&self.hour, &other.hour, epsilon) {
+            return false;
+        }
+        if f64::abs_diff_ne(&self.obs_lat, &other.obs_lat, epsilon) {
+            return false;
+        }
+        if f64::abs_diff_ne(&self.obs_lon, &other.obs_lon, epsilon) {
+            return false;
+        }
+        if f64::abs_diff_ne(&self.obs_alt, &other.obs_alt, epsilon) {
+            return false;
+        }
+        if f64::abs_diff_ne(&self.hour, &other.hour, epsilon) {
+            return false;
+        }
+        if f64::abs_diff_ne(&self.asza, &other.asza, epsilon) {
+            return false;
+        }
+        if f64::abs_diff_ne(&self.poff, &other.poff, epsilon) {
+            return false;
+        }
+        if f64::abs_diff_ne(&self.azim, &other.azim, epsilon) {
+            return false;
+        }
+        if f64::abs_diff_ne(&self.osds, &other.osds, epsilon) {
+            return false;
+        }
+        if f64::abs_diff_ne(&self.opd, &other.opd, epsilon) {
+            return false;
+        }
+        if f64::abs_diff_ne(&self.fovi, &other.fovi, epsilon) {
+            return false;
+        }
+        if f64::abs_diff_ne(&self.fovo, &other.fovo, epsilon) {
+            return false;
+        }
+        if f64::abs_diff_ne(&self.amal, &other.amal, epsilon) {
+            return false;
+        }
+        if self.ifirst != other.ifirst {
+            return false;
+        }
+        if self.ilast != other.ilast {
+            return false;
+        }
+        if f64::abs_diff_ne(&self.delta_nu, &other.delta_nu, epsilon) {
+            return false;
+        }
+        if self.pointer != other.pointer {
+            return false;
+        }
+        if self.bpw != other.bpw {
+            return false;
+        }
+        if self.snr != other.snr {
+            return false;
+        }
+        if self.apf != other.apf {
+            return false;
+        }
+        if f64::abs_diff_ne(&self.tins, &other.tins, epsilon) {
+            return false;
+        }
+        if f64::abs_diff_ne(&self.pins, &other.pins, epsilon) {
+            return false;
+        }
+        if f64::abs_diff_ne(&self.hins, &other.hins, epsilon) {
+            return false;
+        }
+        if f64::abs_diff_ne(&self.tout, &other.tout, epsilon) {
+            return false;
+        }
+        if f64::abs_diff_ne(&self.pout, &other.pout, epsilon) {
+            return false;
+        }
+        if f64::abs_diff_ne(&self.hout, &other.hout, epsilon) {
+            return false;
+        }
+        if f64::abs_diff_ne(&self.sia, &other.sia, epsilon) {
+            return false;
+        }
+        if f64::abs_diff_ne(&self.fvsi, &other.fvsi, epsilon) {
+            return false;
+        }
+        if f64::abs_diff_ne(&self.wspd, &other.wspd, epsilon) {
+            return false;
+        }
+        if f64::abs_diff_ne(&self.wdir, &other.wdir, epsilon) {
+            return false;
+        }
+        if f64::abs_diff_ne(&self.lasf, &other.lasf, epsilon) {
+            return false;
+        }
+        if f64::abs_diff_ne(&self.wavtkr, &other.wavtkr, epsilon) {
+            return false;
+        }
+        if f64::abs_diff_ne(&self.aipl, &other.aipl, epsilon) {
+            return false;
+        }
         true
     }
 }
 
 fn deser_comment<'de, D>(deserializer: D) -> Result<bool, D::Error>
-where D: Deserializer<'de>
+where
+    D: Deserializer<'de>,
 {
     let s = String::deserialize(deserializer)?;
     Ok(s == ":")
 }
 
 fn ser_comment<S>(value: &bool, serializer: S) -> Result<S::Ok, S::Error>
-where S: Serializer
+where
+    S: Serializer,
 {
     if *value {
         serializer.serialize_char(':')
@@ -208,13 +291,13 @@ where S: Serializer
 }
 
 /// An iterator over lines in a runlog.
-/// 
+///
 /// Use the `open` method to create an instance of this struct. The common
 /// header information will be stored in the `header` field. You can then
 /// access each line of the runlog in sequence either by converting this
 /// into an iterator with `into_iter` or using the `next_data_record` method.
 /// The former would look like:
-/// 
+///
 /// ```no_run
 /// use std::path::PathBuf;
 /// use ggg_rs::readers::runlogs::Runlog;
@@ -224,11 +307,11 @@ where S: Serializer
 ///     // do things with the data record
 /// }
 /// ```
-/// 
+///
 /// This is the most convenient way to deal with runlogs, but has the disadvantage that
 /// if parsing a line of the runlog fails, it will cause the program to panic. If you
 /// need the ability to recover from errors, use `next_data_record` instead:
-/// 
+///
 /// ```no_run
 /// use std::path::PathBuf;
 /// use ggg_rs::readers::runlogs::Runlog;
@@ -242,7 +325,7 @@ where S: Serializer
 ///         println!("Error reading line {} of the runlog, skipping", runlog.curr_line());
 ///         continue
 ///     };
-/// 
+///
 ///     // If not, we also have to check that we actually have a data record
 ///     let data_rec = if let Some(rec) = opt_data_rec {
 ///         rec
@@ -253,24 +336,24 @@ where S: Serializer
 ///     };
 /// }
 /// ```
-/// 
+///
 /// Alternatively, use a [`FallibleRunlog`] instead.
 pub struct Runlog {
     pub header: utils::CommonHeader,
     rl_handle: utils::FileBuf<BufReader<File>>,
-    data_line_index: usize
+    data_line_index: usize,
 }
 
 impl Runlog {
     /// Open a runlog file as a `Runlog` instance.
-    /// 
+    ///
     /// # Parameters
     /// * `runlog` - the path to the runlog file.
-    /// 
+    ///
     /// # Returns
     /// A [`Result`] containing runlog instance with the header lines parsed and ready to iterate over data records.
     /// An `Err` can be returned if:
-    /// 
+    ///
     /// * the file could not be opened,
     /// * the header could not be parsed,
     /// * the number of columns specified in the header does not match the expected number, [`NUM_RUNLOG_COLS`]
@@ -287,17 +370,21 @@ impl Runlog {
 
         if header.fformat.is_none() {
             return Err(GggError::HeaderError(HeaderError::ParseError {
-                location: runlog.into(), 
-                cause: "No format line found in the header".to_string() 
+                location: runlog.into(),
+                cause: "No format line found in the header".to_string(),
             }));
         }
-    
+
         // At this point, the file handle will be pointing to the first line of data in the runlog
-        Ok(Runlog{ rl_handle: rl, header, data_line_index: 0 })
+        Ok(Runlog {
+            rl_handle: rl,
+            header,
+            data_line_index: 0,
+        })
     }
 
     /// Return which line in the file was last read.
-    /// 
+    ///
     /// This is 1-based, and counts from the top of the file (including the header). It is meant
     /// for error messages to help the user identify where their runlog is ill-formatted.
     pub fn curr_line(&self) -> usize {
@@ -305,21 +392,31 @@ impl Runlog {
     }
 
     /// Get the next data record from the runlog, if one exists.
-    /// 
+    ///
     /// # Returns
     /// A [`Result`] containing an `Option<RunlogDataRec>`. If the end of the file has been reached, then
     /// this will be `None`. An `Err` is returned in several cases:
-    /// 
+    ///
     /// * the next data line could not be read,
     /// * the number of elements in the line does not match the number of columns,
     /// * any of the elements in the line could not be converted to the proper Rust type
-    pub fn next_data_record(&mut self, keep_commented: bool) -> Result<Option<RunlogDataRec>, GggError> {
-        let fformat = self.header.fformat.as_ref().expect("Runlog must have a valid fortran format line in the header.");
-        let mut fields = self.header.column_names.iter()
+    pub fn next_data_record(
+        &mut self,
+        keep_commented: bool,
+    ) -> Result<Option<RunlogDataRec>, GggError> {
+        let fformat = self
+            .header
+            .fformat
+            .as_ref()
+            .expect("Runlog must have a valid fortran format line in the header.");
+        let mut fields = self
+            .header
+            .column_names
+            .iter()
             .map(|s| s.as_str())
             .collect_vec();
 
-        // GGG runlogs don't include a header for the comment marker column, 
+        // GGG runlogs don't include a header for the comment marker column,
         // but we need it for proper deserialization.
         fields.insert(0, "commented");
 
@@ -329,20 +426,20 @@ impl Runlog {
 
             if line.len() == 0 {
                 // End of file
-                return Ok(None)
+                return Ok(None);
             }
 
             if line.chars().nth(0) == Some(':') && !keep_commented {
                 continue;
             }
 
-            let mut data_rec: RunlogDataRec = from_str_with_fields(&line,fformat, &fields)
-                .map_err(|e| GggError::DataError { 
+            let mut data_rec: RunlogDataRec = from_str_with_fields(&line, fformat, &fields)
+                .map_err(|e| GggError::DataError {
                     path: self.rl_handle.path.to_path_buf(),
-                    cause: format!("Error deserializing line #{}: {e}", self.curr_line())
+                    cause: format!("Error deserializing line #{}: {e}", self.curr_line()),
                 })?;
             data_rec.file_line_num = self.curr_line();
-            
+
             return Ok(Some(data_rec));
         }
     }
@@ -353,23 +450,24 @@ impl Iterator for Runlog {
 
     fn next(&mut self) -> Option<Self::Item> {
         // I don't like this, but because iterators use None to represent the end of iteration,
-        // if we hit an error while iterating over the runlog, 
+        // if we hit an error while iterating over the runlog,
         match self.next_data_record(false) {
             Ok(rec) => rec,
             Err(e) => panic!(
-                "Error while reading line {} of runlog at {}: {e}", 
-                self.header.nhead + self.data_line_index, 
-                self.rl_handle.path.display())
+                "Error while reading line {} of runlog at {}: {e}",
+                self.header.nhead + self.data_line_index,
+                self.rl_handle.path.display()
+            ),
         }
     }
 }
 
 /// A alternative iterator for runlogs that will not panic if an error occurs.
-/// 
+///
 /// When this is used as an iterator, it returns a `Result` instead of the [`RunlogDataRec`]
 /// directly. This means that if an error occurs while reading the data line, the program can
 /// recover:
-/// 
+///
 /// ```no_run
 /// use std::path::PathBuf;
 /// use ggg_rs::readers::runlogs::FallibleRunlog;
@@ -381,18 +479,18 @@ impl Iterator for Runlog {
 ///             println!("Error reading data line {irec} of the runlog, skipping. Error was: {e}")
 ///         },
 ///         Ok(rec) => {
-///             // process the data record 
+///             // process the data record
 ///         }
 ///     }
 /// }
 /// ```
 pub struct FallibleRunlog {
-    runlog: Runlog
+    runlog: Runlog,
 }
 
 impl FallibleRunlog {
     /// Open a runlog file as a `FallibleRunlog` iterator.
-    /// 
+    ///
     /// # Returns
     /// A [`Result`] containing the `FallibleRunlog` iterator. An error is returned for the same
     /// reasons as [`Runlog::open`].
@@ -406,7 +504,9 @@ impl FallibleRunlog {
     }
 
     pub fn into_line_iter(self) -> FallibleRunlogLineIter {
-        FallibleRunlogLineIter { runlog: self.runlog }
+        FallibleRunlogLineIter {
+            runlog: self.runlog,
+        }
     }
 }
 
@@ -425,7 +525,7 @@ impl Iterator for FallibleRunlog {
 }
 
 pub struct FallibleRunlogLineIter {
-    runlog: Runlog
+    runlog: Runlog,
 }
 
 impl Iterator for FallibleRunlogLineIter {
@@ -441,10 +541,10 @@ impl Iterator for FallibleRunlogLineIter {
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
-    use rstest::{rstest, fixture};
-    use crate::test_utils::test_data_dir;
     use super::*;
+    use crate::test_utils::test_data_dir;
+    use rstest::{fixture, rstest};
+    use std::path::PathBuf;
 
     #[fixture]
     fn benchmark_rl_path() -> PathBuf {
@@ -457,11 +557,44 @@ mod tests {
     #[rstest]
     fn test_runlog_data(benchmark_rl_path: PathBuf) {
         let data_rec_1a = RunlogDataRec {
-            file_line_num: 0, commented: false,
-            spectrum_name: "pa20040721saaaaa.043".to_string(), year: 2004, day: 203, hour: 20.5956, obs_lat: 45.945, obs_lon: -90.273, obs_alt: 0.442,
-            asza: 39.684, poff: 0.0, azim: 242.281, osds: 0.138, opd: 45.02, fovi: 0.0024, fovo: 0.0024, amal: 0.0, ifirst: 530991, ilast: 1460226,
-            delta_nu: 0.00753308262, pointer: 108232, bpw: -4, zoff: 0.000, snr: 117, apf: utils::ApodizationFxn::BoxCar, tins: 30.3, pins: 0.9, hins: 99.9,
-            tout: 29.1, pout: 950.70, hout: 62.8, sia: 207.5, fvsi: 0.0072, wspd: 1.7, wdir: 125., lasf: 15798.014, wavtkr: 9900., aipl: 0.002
+            file_line_num: 0,
+            commented: false,
+            spectrum_name: "pa20040721saaaaa.043".to_string(),
+            year: 2004,
+            day: 203,
+            hour: 20.5956,
+            obs_lat: 45.945,
+            obs_lon: -90.273,
+            obs_alt: 0.442,
+            asza: 39.684,
+            poff: 0.0,
+            azim: 242.281,
+            osds: 0.138,
+            opd: 45.02,
+            fovi: 0.0024,
+            fovo: 0.0024,
+            amal: 0.0,
+            ifirst: 530991,
+            ilast: 1460226,
+            delta_nu: 0.00753308262,
+            pointer: 108232,
+            bpw: -4,
+            zoff: 0.000,
+            snr: 117,
+            apf: utils::ApodizationFxn::BoxCar,
+            tins: 30.3,
+            pins: 0.9,
+            hins: 99.9,
+            tout: 29.1,
+            pout: 950.70,
+            hout: 62.8,
+            sia: 207.5,
+            fvsi: 0.0072,
+            wspd: 1.7,
+            wdir: 125.,
+            lasf: 15798.014,
+            wavtkr: 9900.,
+            aipl: 0.002,
         };
 
         let mut data_rec_1b = data_rec_1a.clone();
@@ -473,12 +606,14 @@ mod tests {
 
         let mut rl = Runlog::open(&benchmark_rl_path).unwrap();
 
-        let test_rec = rl.next_data_record(false)
+        let test_rec = rl
+            .next_data_record(false)
             .expect("Reading first data line should not error")
             .expect("First data line should not return None");
         approx::assert_abs_diff_eq!(test_rec, data_rec_1a);
 
-        let test_rec = rl.next_data_record(false)
+        let test_rec = rl
+            .next_data_record(false)
             .expect("Reading first data line should not error")
             .expect("First data line should not return None");
         approx::assert_abs_diff_eq!(test_rec, data_rec_1b);
@@ -487,11 +622,44 @@ mod tests {
     #[rstest]
     fn test_zpd_time_conversion() {
         let mut data_rec = RunlogDataRec {
-            commented: false, file_line_num: 1,
-            spectrum_name: "pa20040721saaaaa.043".to_string(), year: 2004, day: 203, hour: 20.5956, obs_lat: 45.945, obs_lon: -90.273, obs_alt: 0.442,
-            asza: 39.684, poff: 0.0, azim: 242.281, osds: 0.138, opd: 45.02, fovi: 0.0024, fovo: 0.0024, amal: 0.0, ifirst: 530991, ilast: 1460226,
-            delta_nu: 0.00753308262, pointer: 108232, bpw: -4, zoff: 0.000, snr: 117, apf: utils::ApodizationFxn::BoxCar, tins: 30.3, pins: 0.9, hins: 99.9,
-            tout: 29.1, pout: 950.70, hout: 62.8, sia: 207.5, fvsi: 0.0072, wspd: 1.7, wdir: 125., lasf: 15798.014, wavtkr: 9900., aipl: 0.002
+            commented: false,
+            file_line_num: 1,
+            spectrum_name: "pa20040721saaaaa.043".to_string(),
+            year: 2004,
+            day: 203,
+            hour: 20.5956,
+            obs_lat: 45.945,
+            obs_lon: -90.273,
+            obs_alt: 0.442,
+            asza: 39.684,
+            poff: 0.0,
+            azim: 242.281,
+            osds: 0.138,
+            opd: 45.02,
+            fovi: 0.0024,
+            fovo: 0.0024,
+            amal: 0.0,
+            ifirst: 530991,
+            ilast: 1460226,
+            delta_nu: 0.00753308262,
+            pointer: 108232,
+            bpw: -4,
+            zoff: 0.000,
+            snr: 117,
+            apf: utils::ApodizationFxn::BoxCar,
+            tins: 30.3,
+            pins: 0.9,
+            hins: 99.9,
+            tout: 29.1,
+            pout: 950.70,
+            hout: 62.8,
+            sia: 207.5,
+            fvsi: 0.0072,
+            wspd: 1.7,
+            wdir: 125.,
+            lasf: 15798.014,
+            wavtkr: 9900.,
+            aipl: 0.002,
         };
 
         let exp_dt = make_dt(2004, 7, 21, 20, 35, 44, 160_000_000);
@@ -508,23 +676,41 @@ mod tests {
         data_rec.hour = -6.0;
         let exp_dt = make_dt(2003, 12, 30, 18, 0, 0, 0);
         assert_eq!(data_rec.zpd_time().unwrap(), exp_dt, "Hour < 24 failed");
-        
+
         data_rec.year = 2004;
         data_rec.day = 1;
         data_rec.hour = -6.0;
         let exp_dt = make_dt(2003, 12, 31, 18, 0, 0, 0);
-        assert_eq!(data_rec.zpd_time().unwrap(), exp_dt, "Hour < 24 on Jan 1 failed");
-        
+        assert_eq!(
+            data_rec.zpd_time().unwrap(),
+            exp_dt,
+            "Hour < 24 on Jan 1 failed"
+        );
+
         data_rec.year = 2003;
         data_rec.day = 365;
         data_rec.hour = 25.0;
         let exp_dt = make_dt(2004, 1, 1, 1, 0, 0, 0);
-        assert_eq!(data_rec.zpd_time().unwrap(), exp_dt, "Hour > 24 on Dec 31 failed");
+        assert_eq!(
+            data_rec.zpd_time().unwrap(),
+            exp_dt,
+            "Hour > 24 on Dec 31 failed"
+        );
     }
 
-    fn make_dt(year: i32, month: u32, day: u32, hour: u32, minute: u32, second: u32, nanos: u32) -> chrono::DateTime<chrono::Utc> {
-        chrono::NaiveDate::from_ymd_opt(year, month, day).unwrap()
-            .and_hms_nano_opt(hour, minute, second, nanos).unwrap()
+    fn make_dt(
+        year: i32,
+        month: u32,
+        day: u32,
+        hour: u32,
+        minute: u32,
+        second: u32,
+        nanos: u32,
+    ) -> chrono::DateTime<chrono::Utc> {
+        chrono::NaiveDate::from_ymd_opt(year, month, day)
+            .unwrap()
+            .and_hms_nano_opt(hour, minute, second, nanos)
+            .unwrap()
             .and_utc()
     }
 }

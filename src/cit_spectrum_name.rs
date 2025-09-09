@@ -1,4 +1,4 @@
-use std::{str::FromStr, fmt::Display, hash::Hash};
+use std::{fmt::Display, hash::Hash, str::FromStr};
 
 use itertools::Itertools;
 use log::warn;
@@ -10,12 +10,19 @@ pub struct CitFormatError {
     not_numbers: Vec<usize>,
     missing_period: Option<usize>,
     bad_date: bool,
-    too_short: bool
+    too_short: bool,
 }
 
 impl CitFormatError {
     fn new(specname: String) -> Self {
-        Self { specname, not_letters: vec![], not_numbers: vec![], missing_period: None, bad_date: false, too_short: false }
+        Self {
+            specname,
+            not_letters: vec![],
+            not_numbers: vec![],
+            missing_period: None,
+            bad_date: false,
+            too_short: false,
+        }
     }
 
     fn spec_too_short(specname: String) -> Self {
@@ -41,23 +48,29 @@ impl Display for CitFormatError {
 
         let mut causes: Vec<String> = vec![];
         if !self.not_letters.is_empty() {
-            let pos = self.not_letters
+            let pos = self
+                .not_letters
                 .iter()
-                .map(|i| (i+1).to_string())
+                .map(|i| (i + 1).to_string())
                 .join(", ");
-            causes.push(format!("Character(s) at position(s) {pos} must be ASCII letters"));
+            causes.push(format!(
+                "Character(s) at position(s) {pos} must be ASCII letters"
+            ));
         }
 
         if !self.not_numbers.is_empty() {
-            let pos = self.not_numbers
+            let pos = self
+                .not_numbers
                 .iter()
-                .map(|i| (i+1).to_string())
+                .map(|i| (i + 1).to_string())
                 .join(", ");
-            causes.push(format!("Character(s) at position(s) {pos} must be ASCII numbers"));
+            causes.push(format!(
+                "Character(s) at position(s) {pos} must be ASCII numbers"
+            ));
         }
 
         if let Some(i) = self.missing_period {
-            causes.push(format!("Character at position {} must be a period", i+1));
+            causes.push(format!("Character at position {} must be a period", i + 1));
         }
 
         if self.bad_date {
@@ -65,7 +78,11 @@ impl Display for CitFormatError {
             causes.push(format!("Substring '{dstr}' is not a valid date"));
         }
 
-        write!(f, "Spectrum name '{}' does not follow the CIT naming convention: ", self.specname)?;
+        write!(
+            f,
+            "Spectrum name '{}' does not follow the CIT naming convention: ",
+            self.specname
+        )?;
         let multiple_causes = causes.len() > 1;
         for (idx, cause) in causes.into_iter().enumerate() {
             if multiple_causes && idx == 0 {
@@ -77,8 +94,6 @@ impl Display for CitFormatError {
             write!(f, "{cause}")?;
         }
 
-
-
         Ok(())
     }
 }
@@ -87,7 +102,7 @@ impl std::error::Error for CitFormatError {}
 
 #[derive(Debug)]
 pub struct CitUnknownDetectorError {
-    detector: String
+    detector: String,
 }
 
 impl Display for CitUnknownDetectorError {
@@ -98,14 +113,13 @@ impl Display for CitUnknownDetectorError {
 
 impl std::error::Error for CitUnknownDetectorError {}
 
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CitSource {
     Sun,
     Moon,
     Lamp,
     ScatteredSky,
-    Other(char)
+    Other(char),
 }
 
 impl From<char> for CitSource {
@@ -115,7 +129,7 @@ impl From<char> for CitSource {
             'm' => Self::Moon,
             'l' => Self::Lamp,
             'a' => Self::ScatteredSky,
-            _ => Self::Other(value)
+            _ => Self::Other(value),
         }
     }
 }
@@ -127,7 +141,7 @@ pub enum CitInternalCell {
     AdditionalHCl10cm,
     NdaccHBr5cm,
     N2O20cm,
-    Other(char)
+    Other(char),
 }
 
 impl From<char> for CitInternalCell {
@@ -138,7 +152,7 @@ impl From<char> for CitInternalCell {
             'g' => Self::AdditionalHCl10cm,
             'h' => Self::NdaccHBr5cm,
             'i' => Self::N2O20cm,
-            _ => Self::Other(value)
+            _ => Self::Other(value),
         }
     }
 }
@@ -149,7 +163,7 @@ pub enum CitBeamsplitter {
     LauderCaF2,
     DarwinCaF2,
     LamontCaF2,
-    Other(char)
+    Other(char),
 }
 
 impl From<char> for CitBeamsplitter {
@@ -159,7 +173,7 @@ impl From<char> for CitBeamsplitter {
             'b' => Self::LauderCaF2,
             'c' => Self::DarwinCaF2,
             'd' => Self::LamontCaF2,
-            _ => Self::Other(value)
+            _ => Self::Other(value),
         }
     }
 }
@@ -171,7 +185,7 @@ pub enum CitDichroic {
     Lauder,
     Darwin,
     Lamont,
-    Other(char)
+    Other(char),
 }
 
 impl From<char> for CitDichroic {
@@ -182,7 +196,7 @@ impl From<char> for CitDichroic {
             'b' => Self::Lauder,
             'c' => Self::Darwin,
             'd' => Self::Lamont,
-            _ => Self::Other(value)
+            _ => Self::Other(value),
         }
     }
 }
@@ -192,7 +206,7 @@ pub enum CitOpticalFilter {
     RedGlass,
     Germanium,
     TcconGhostFilter,
-    Other(char)
+    Other(char),
 }
 
 impl From<char> for CitOpticalFilter {
@@ -202,7 +216,7 @@ impl From<char> for CitOpticalFilter {
             'a' => Self::RedGlass,
             'b' => Self::Germanium,
             'g' => Self::TcconGhostFilter,
-            _ => Self::Other(value)
+            _ => Self::Other(value),
         }
     }
 }
@@ -211,7 +225,7 @@ impl From<char> for CitOpticalFilter {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CitDetector {
     /// The typical NIR detector for TCCON, represented by "a"
-    /// in spectrum names. Recognized long names when parsing 
+    /// in spectrum names. Recognized long names when parsing
     /// a string are "ingaas" and "InGaAs".
     InGaAs,
 
@@ -225,7 +239,7 @@ pub enum CitDetector {
     InSb,
 
     /// A secondary detector in EM27s used to cover the CO bands.
-    /// Represented by "d" in spectrum names, long names are 
+    /// Represented by "d" in spectrum names, long names are
     /// "em27ext", "Em27Ext", or "EM27Ext".
     Em27Ext,
 
@@ -233,8 +247,8 @@ pub enum CitDetector {
     /// Long names are "dual", "Dual", "dualchannel", or "DualChannel".
     DualChannel,
 
-    /// Any other single-character detector representation. 
-    Other(char)
+    /// Any other single-character detector representation.
+    Other(char),
 }
 
 impl From<char> for CitDetector {
@@ -245,7 +259,7 @@ impl From<char> for CitDetector {
             'c' => Self::InSb,
             'd' => Self::Em27Ext,
             'x' | 'X' => Self::DualChannel,
-            _ => Self::Other(value)
+            _ => Self::Other(value),
         }
     }
 }
@@ -261,7 +275,9 @@ impl FromStr for CitDetector {
             "d" | "em27ext" | "Em27Ext" | "EM27Ext" => Ok(Self::Em27Ext),
             "x" | "X" | "dual" | "Dual" | "dualchannel" | "DualChannel" => Ok(Self::DualChannel),
             _ => {
-                let c: char = s.parse().map_err(|_| CitUnknownDetectorError { detector: s.to_string() })?;
+                let c: char = s.parse().map_err(|_| CitUnknownDetectorError {
+                    detector: s.to_string(),
+                })?;
                 Ok(Self::Other(c))
             }
         }
@@ -311,37 +327,55 @@ impl CitSpectrumName {
     // For these, since from_str verifies the length, we know we can
     // get these characters
     pub fn source(&self) -> CitSource {
-        let c = self.spectrum_name.chars().nth(10)
+        let c = self
+            .spectrum_name
+            .chars()
+            .nth(10)
             .expect("Spectrum name had no 11th character");
         CitSource::from(c)
     }
 
     pub fn internal_cell(&self) -> CitInternalCell {
-        let c: char = self.spectrum_name.chars().nth(11)
+        let c: char = self
+            .spectrum_name
+            .chars()
+            .nth(11)
             .expect("Spectrum name had no 12th character");
         CitInternalCell::from(c)
     }
 
     pub fn beamsplitter(&self) -> CitBeamsplitter {
-        let c = self.spectrum_name.chars().nth(12)
+        let c = self
+            .spectrum_name
+            .chars()
+            .nth(12)
             .expect("Spectrum name had no 13th character");
         CitBeamsplitter::from(c)
     }
 
     pub fn dichroic(&self) -> CitDichroic {
-        let c = self.spectrum_name.chars().nth(13)
+        let c = self
+            .spectrum_name
+            .chars()
+            .nth(13)
             .expect("Spectrum name had no 14th character");
         CitDichroic::from(c)
     }
 
     pub fn optical_filter(&self) -> CitOpticalFilter {
-        let c = self.spectrum_name.chars().nth(14)
+        let c = self
+            .spectrum_name
+            .chars()
+            .nth(14)
             .expect("Spectrum name had no 15th character");
         CitOpticalFilter::from(c)
     }
 
     pub fn detector(&self) -> CitDetector {
-        let c = self.spectrum_name.chars().nth(15)
+        let c = self
+            .spectrum_name
+            .chars()
+            .nth(15)
             .expect("Spectrum name had no 16th character");
         CitDetector::from(c)
     }
@@ -370,7 +404,7 @@ impl FromStr for CitSpectrumName {
                     if !c.is_ascii_alphabetic() {
                         err.not_letters.push(i);
                     }
-                },
+                }
                 2..=9 => {
                     // This is the date, we'll check that it's a valid date later
                     if !c.is_ascii_digit() {
@@ -380,14 +414,14 @@ impl FromStr for CitSpectrumName {
                 10..=15 => {
                     // These represent instrument characteristics, we'll allow them
                     // to be anything, since their enums have wildcard variants
-                },
+                }
                 16 => {
                     // This is the period separating the spectrum number from the rest
                     // of the name
                     if c != '.' {
                         err.missing_period = Some(i);
                     }
-                },
+                }
                 _ => {
                     // The extension after the period must be numbers
                     if !c.is_ascii_digit() {
@@ -409,10 +443,15 @@ impl FromStr for CitSpectrumName {
         };
 
         // Since we checked that the extension was all digits, this should not fail
-        let spec_num: u64 = (&s[17..]).parse()
+        let spec_num: u64 = (&s[17..])
+            .parse()
             .expect("Tried to parse a non-numeric spectrum extension");
 
-        Ok(Self { spectrum_name: s.to_string(), date, spec_num })
+        Ok(Self {
+            spectrum_name: s.to_string(),
+            date,
+            spec_num,
+        })
     }
 }
 
@@ -428,9 +467,8 @@ impl Hash for CitSpectrumName {
     }
 }
 
-
 /// A wrapper around a spectrum that implements hashing and equality checks that ignore the detector.
-/// 
+///
 /// This type should be used whenever you want to identify if two things are measurments from the same
 /// time, regardless of detector.
 #[derive(Debug, Clone)]
@@ -470,7 +508,6 @@ impl PartialEq for NoDetectorSpecName {
 }
 
 impl Eq for NoDetectorSpecName {}
-
 
 /// Split a CIT spectrum name into two substrings: the parts before and after the detector character
 pub fn split_specname_around_detector(specname: &str) -> (&str, &str) {

@@ -244,4 +244,3 @@ mod tests {
         compare_output_text_files(&expected_dir, &output_dir, "pa_ggg_benchmark.vav.ada.aia");
     }
 }
-

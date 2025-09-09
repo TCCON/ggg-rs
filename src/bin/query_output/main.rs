@@ -11,7 +11,6 @@ fn main() -> ExitCode {
     } else {
         ExitCode::SUCCESS
     }
-
 }
 
 fn main_inner() -> error_stack::Result<(), CliError> {
@@ -23,10 +22,12 @@ fn main_inner() -> error_stack::Result<(), CliError> {
         print!("{col:15}");
     }
     println!("");
-    
+
     let mut missing_cols: Vec<&str> = vec![];
     for (irow, row) in it.enumerate() {
-        let row = row.change_context_lazy(|| format!("Error reading data row {} from file", irow+1).into())?;
+        let row = row.change_context_lazy(|| {
+            format!("Error reading data row {} from file", irow + 1).into()
+        })?;
         for col in clargs.columns.iter() {
             if let Some(val) = row.get_numeric_field(col) {
                 if val.abs() < 1e-3 || val.abs() > 1e4 {
@@ -51,7 +52,11 @@ fn main_inner() -> error_stack::Result<(), CliError> {
     }
 
     if !missing_cols.is_empty() {
-        eprintln!("Warning: {} columns were absent from the header: {}", missing_cols.len(), missing_cols.join(", "));
+        eprintln!(
+            "Warning: {} columns were absent from the header: {}",
+            missing_cols.len(),
+            missing_cols.join(", ")
+        );
     }
 
     Ok(())

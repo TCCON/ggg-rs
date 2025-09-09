@@ -79,19 +79,19 @@ impl Display for CliError {
             CliError::UsageError(msg) => {
                 let typestr = "Usage error";
                 (typestr, msg)
-            },
+            }
             CliError::InputError(msg) => {
                 let typestr = "Input error";
                 (typestr, msg)
-            },
+            }
             CliError::RuntimeError(msg) => {
                 let typestr = "Runtime error";
                 (typestr, msg)
-            },
+            }
             CliError::InternalError(msg) => {
                 let typestr = "Internal error";
                 (typestr, msg)
-            },
+            }
         };
 
         writeln!(f, "{type_str}: {err_msg}")
@@ -134,7 +134,6 @@ impl IntoCliReport for InputError {
     }
 }
 
-
 /// Errors that occur when writing a netCDF variable.
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum WriteError {
@@ -157,8 +156,13 @@ pub(crate) enum WriteError {
     DetailedReadError(PathBuf, String),
 
     /// Error to use if a dimension required by a provider was not created in the netCDF file
-    #[error("Dimension '{dimname}', required by the {requiring_file} file, was not created properly")]
-    MissingDimError{requiring_file: String, dimname: &'static str},
+    #[error(
+        "Dimension '{dimname}', required by the {requiring_file} file, was not created properly"
+    )]
+    MissingDimError {
+        requiring_file: String,
+        dimname: &'static str,
+    },
 
     /// Error to use if trying to get information back out of the netCDF file to calculate
     /// new quantities failed.
@@ -180,7 +184,10 @@ impl WriteError {
     }
 
     pub(crate) fn missing_dim_error<S: ToString>(req_file: S, dimname: &'static str) -> Self {
-        Self::MissingDimError { requiring_file: req_file.to_string(), dimname }
+        Self::MissingDimError {
+            requiring_file: req_file.to_string(),
+            dimname,
+        }
     }
 
     pub(crate) fn custom<S: ToString>(msg: S) -> Self {
@@ -197,7 +204,7 @@ pub enum ReadError {
 
     /// The requested variable was not found in the expected group.
     #[error("Variable '{name}' not found in group '{group_name}'")]
-    VarNotFound{name: String, group_name: String},
+    VarNotFound { name: String, group_name: String },
 
     /// The requested dimension was not found in the root of the file.
     #[error("Dimension '{0}' not found")]
@@ -206,7 +213,10 @@ pub enum ReadError {
 
 impl ReadError {
     pub(crate) fn var_not_found<N: ToString, G: ToString>(name: N, group_name: G) -> Self {
-        Self::VarNotFound { name: name.to_string(), group_name: group_name.to_string() }
+        Self::VarNotFound {
+            name: name.to_string(),
+            group_name: group_name.to_string(),
+        }
     }
 
     pub(crate) fn dim_not_found<N: ToString>(name: N) -> Self {
@@ -214,19 +224,26 @@ impl ReadError {
     }
 }
 
-
 /// An error representing problems creating a variable to be
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum VarError {
     /// Used if the number of dimension names given does not match the number of dimensions of the data array
     #[error("Variable {name}: array has {array_ndim} dimensions, {n_dim_names} dimension names were supplied")]
-    DimMismatch{name: String, array_ndim: usize, n_dim_names: usize},
+    DimMismatch {
+        name: String,
+        array_ndim: usize,
+        n_dim_names: usize,
+    },
 
     /// Used if the source file does not exist on disk
     #[error("Variable {name}: source file {} is missing", .path.display())]
-    SourceFileMissing{name: String, path: PathBuf},
+    SourceFileMissing { name: String, path: PathBuf },
 
     /// Used for miscellaneous problems accessing the source file (e.g. to compute the checksum)
     #[error("Variable {name}, source file {}: {problem}", .path.display())]
-    SourceFileError{name: String, path: PathBuf, problem: String}
+    SourceFileError {
+        name: String,
+        path: PathBuf,
+        problem: String,
+    },
 }

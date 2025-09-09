@@ -6,11 +6,17 @@ use indicatif::ProgressBar;
 use itertools::Itertools;
 use ndarray::{Array1, Ix1};
 
-use crate::{dimensions::TIME_DIM_NAME, errors::{CliError, WriteError}, interface::{ConcreteVarToBe, DataCalculator, GroupAccessor, GroupSelector, StrVarToBe}, progress, qc::{load_qc_file, QcRow}};
+use crate::{
+    dimensions::TIME_DIM_NAME,
+    errors::{CliError, WriteError},
+    interface::{ConcreteVarToBe, DataCalculator, GroupAccessor, GroupSelector, StrVarToBe},
+    progress,
+    qc::{load_qc_file, QcRow},
+};
 
 /// Data calculator for the flag variables (e.g. flag and flagged_var_name)
 pub(crate) struct FlagCalculator {
-    qc_limits: Vec<QcRow>
+    qc_limits: Vec<QcRow>,
 }
 
 impl FlagCalculator {
@@ -23,10 +29,14 @@ impl FlagCalculator {
     }
 
     /// Returns a hash map of the data variables from which we will determine the flags.
-    /// 
+    ///
     /// Only variables listed in the qc.dat file _and_ which are configured for output are returned.
     /// The intention is that if a variable is not being output then it should not be flagged on.
-    fn load_vars_to_flag_on(&self, accessor: &dyn GroupAccessor, group_selector: &dyn GroupSelector) -> error_stack::Result<HashMap<String, Array1<f32>>, WriteError> {
+    fn load_vars_to_flag_on(
+        &self,
+        accessor: &dyn GroupAccessor,
+        group_selector: &dyn GroupSelector,
+    ) -> error_stack::Result<HashMap<String, Array1<f32>>, WriteError> {
         let mut vars = HashMap::new();
         for qc_row in self.qc_limits.iter() {
             if !qc_row.do_output() {
@@ -40,12 +50,14 @@ impl FlagCalculator {
             if let Some(group) = group_opt {
                 // If the selector returns `None` for the group, then it should mean that this variable was not one of the
                 // .col files we found, so it is not a variable we should flag on.
-                let data = accessor.read_f32_variable(&varname, group)
+                let data = accessor
+                    .read_f32_variable(&varname, group)
                     .map_err(|e| WriteError::NcReadError(e))?;
-                let arr = data.data.into_dimensionality::<Ix1>()
-                    .map_err(|e| WriteError::custom(format!(
+                let arr = data.data.into_dimensionality::<Ix1>().map_err(|e| {
+                    WriteError::custom(format!(
                         "expected variable '{varname}' to be a 1D array, but was not ({e})"
-                    )))?;
+                    ))
+                })?;
                 vars.insert(varname, arr);
             }
         }
@@ -54,10 +66,15 @@ impl FlagCalculator {
 
     /// Construct the arrays of flags and flagged variable names along with a map of the
     /// number of times each flag appeared, which can be used to print the summary table.
-    /// The first array will contain the 1-based index of the row in the qc.dat file for 
+    /// The first array will contain the 1-based index of the row in the qc.dat file for
     /// the variable most out of range. The second array will include that variable's name.
     /// The values will be 0 and an empty, respectively, when no variable is out of range.
-    fn make_flag_arrays(&self, ntime: usize, flag_vars: &HashMap<String, Array1<f32>>, pb: ProgressBar) -> (Array1<u32>, Array1<&str>, HashMap<&str, FlagCount>) {
+    fn make_flag_arrays(
+        &self,
+        ntime: usize,
+        flag_vars: &HashMap<String, Array1<f32>>,
+        pb: ProgressBar,
+    ) -> (Array1<u32>, Array1<&str>, HashMap<&str, FlagCount>) {
         let mut flags = Array1::from_elem(ntime, 0);
         let mut flag_var_names = Array1::from_elem(ntime, "");
         let mut flag_var_counts = HashMap::new();
@@ -81,15 +98,19 @@ impl FlagCalculator {
     }
 
     /// Determine which variable is most out of range (if any) for a given spectrum.
-    /// 
+    ///
     /// Returns 0 and an empty string if none of `flag_vars` is outside its allowed
     /// range from the qc.dat file. Otherwise, returns the 1-based index and name of
     /// the variable most outside its allowed range (normalized to the width of said range).
-    /// 
+    ///
     /// # Panics
     /// Will panic if any of the variables needed by the qc.dat file (i.e. file listed and does
     /// not have output set to 0) is not in `flag_vars`.
-    fn get_flag_for_spectrum<'a>(&'a self, flag_vars: &HashMap<String, Array1<f32>>, spec_index: usize) -> (u32, &'a str) {
+    fn get_flag_for_spectrum<'a>(
+        &'a self,
+        flag_vars: &HashMap<String, Array1<f32>>,
+        spec_index: usize,
+    ) -> (u32, &'a str) {
         let mut i_max_var = 0;
         let mut max_var_name = "";
         let mut max_deviation = 0.0;
@@ -99,8 +120,10 @@ impl FlagCalculator {
             }
 
             let varname = &qc_row.variable;
-            let value = flag_vars.get(varname)
-                .expect("All variables required for flagged should have been loaded")[spec_index] as f64;
+            let value = flag_vars
+                .get(varname)
+                .expect("All variables required for flagged should have been loaded")[spec_index]
+                as f64;
 
             if ggg_rs::readers::postproc_files::is_postproc_fill(value as f64) {
                 // don't flag on fill values
@@ -131,29 +154,42 @@ impl FlagCalculator {
     fn print_flag_table(flag_var_counts: HashMap<&str, FlagCount>, ntime: usize) {
         let mut flag_var_counts = flag_var_counts.into_values().collect_vec();
         flag_var_counts.sort_by_key(|count| count.flag_index);
-        
+
         // Construct the table as a string so that we can ensure it is written as a unit
         let n = ntime as f64;
         let mut table = "  #  Parameter              N_flag      %\n".to_string();
         let mut total_num_flagged = 0;
         for flags in flag_var_counts {
             let percent = (flags.flag_count as f64) / n * 100.0;
-            let line = format!("{:>3}  {:<20} {:>6}   {:>8.3}\n", flags.flag_index, flags.flag_name, flags.flag_count, percent);
+            let line = format!(
+                "{:>3}  {:<20} {:>6}   {:>8.3}\n",
+                flags.flag_index, flags.flag_name, flags.flag_count, percent
+            );
             table.push_str(&line);
             total_num_flagged += flags.flag_count;
         }
         let total_percent = (total_num_flagged as f64) / n * 100.0;
-        let line = format!("     {:<20} {:>6}   {:>8.3}", "TOTAL", total_num_flagged, total_percent);
+        let line = format!(
+            "     {:<20} {:>6}   {:>8.3}",
+            "TOTAL", total_num_flagged, total_percent
+        );
         table.push_str(&line);
         tracing::info!("Report on number of spectra flagged followes:\n{table}");
     }
 }
 
 impl DataCalculator for FlagCalculator {
-    fn write_data_to_nc(&self, _spec_indexer: &crate::interface::SpectrumIndexer, accessor: &dyn GroupAccessor, group_selector: &dyn GroupSelector, pb: ProgressBar) -> error_stack::Result<(), WriteError> {
+    fn write_data_to_nc(
+        &self,
+        _spec_indexer: &crate::interface::SpectrumIndexer,
+        accessor: &dyn GroupAccessor,
+        group_selector: &dyn GroupSelector,
+        pb: ProgressBar,
+    ) -> error_stack::Result<(), WriteError> {
         let flag_vars = self.load_vars_to_flag_on(accessor, group_selector)?;
 
-        let ntime = accessor.get_dim_length(TIME_DIM_NAME)
+        let ntime = accessor
+            .get_dim_length(TIME_DIM_NAME)
             .ok_or_else(|| WriteError::missing_dim_error("FlagCalculator", TIME_DIM_NAME))?;
 
         let (flags, flag_var_names, flag_var_counts) = self.make_flag_arrays(ntime, &flag_vars, pb);
@@ -167,7 +203,7 @@ impl DataCalculator for FlagCalculator {
             flags.into_dyn(),
             "flag",
             "",
-            std::any::type_name::<Self>()
+            std::any::type_name::<Self>(),
         );
 
         let flag_name_var = StrVarToBe::new_calculated(
@@ -177,7 +213,7 @@ impl DataCalculator for FlagCalculator {
             flag_var_names,
             "flagged variable name",
             "",
-            std::any::type_name::<Self>()
+            std::any::type_name::<Self>(),
         );
 
         accessor.write_variable(&flag_var)?;
@@ -199,7 +235,11 @@ struct FlagCount<'a> {
 
 impl<'a> FlagCount<'a> {
     fn new(flag_index: u32, flag_name: &'a str) -> Self {
-        Self { flag_index, flag_name, flag_count: 0 }
+        Self {
+            flag_index,
+            flag_name,
+            flag_count: 0,
+        }
     }
 
     fn incr(&mut self) {

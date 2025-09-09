@@ -1,10 +1,10 @@
 use std::fmt::Display;
 use std::io::Write;
-use std::path::{PathBuf, Path};
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use error_stack::ResultExt;
-use ggg_rs::i2s::{I2SVersion, iter_i2s_header_params_with_number, iter_i2s_lines};
+use ggg_rs::i2s::{iter_i2s_header_params_with_number, iter_i2s_lines, I2SVersion};
 use ggg_rs::utils::OptInplaceWriter;
 use itertools::Itertools;
 
@@ -14,13 +14,15 @@ pub(crate) fn driver(
     input_files: &[PathBuf],
     output_file: &Path,
     i2s_version: I2SVersion,
-    whitespace_method: ParamWhitespaceEq, 
+    whitespace_method: ParamWhitespaceEq,
     mut skip_check_params: Vec<usize>,
     edits_json: Option<&Path>,
     cli_edits: Vec<crate::modify_input::HeaderEditCli>,
 ) -> error_stack::Result<(), CliError> {
     let edits = crate::modify_input::edits_from_json_and_cli(edits_json, cli_edits)
-        .change_context_lazy(|| CliError::BadInput("Could not set up input file edits".to_string()))?;
+        .change_context_lazy(|| {
+            CliError::BadInput("Could not set up input file edits".to_string())
+        })?;
 
     // Add any parameters to be edited to the list to skip checking - since they'll be modified at the end anyway,
     // they don't need to be the same across all the original inputs.
@@ -31,7 +33,12 @@ pub(crate) fn driver(
     }
 
     // Verify that all the input files have the same top parameters, except those we've said are okay to differ
-    check_inputs_match(input_files, i2s_version, whitespace_method, &skip_check_params)?;
+    check_inputs_match(
+        input_files,
+        i2s_version,
+        whitespace_method,
+        &skip_check_params,
+    )?;
 
     // Copy the header from the first file and the catalogs from all the files
     let mut outf = std::fs::File::create(output_file)
@@ -42,15 +49,18 @@ pub(crate) fn driver(
             .change_context_lazy(|| CliError::ReadError(input_path.to_path_buf()))?;
 
         for line in line_iter {
-            let (line_type, line) = line.change_context_lazy(|| CliError::ReadError(input_path.to_path_buf()))?;
+            let (line_type, line) =
+                line.change_context_lazy(|| CliError::ReadError(input_path.to_path_buf()))?;
             if !line_type.is_header_line() || ifile == 0 {
-                write!(outf, "{line}").change_context_lazy(|| CliError::WriteError(output_file.to_path_buf()))?;
+                write!(outf, "{line}")
+                    .change_context_lazy(|| CliError::WriteError(output_file.to_path_buf()))?;
             }
         }
     }
 
     // If edits were requested, make them now.
-    outf.flush().change_context_lazy(|| CliError::WriteError(output_file.to_path_buf()))?;
+    outf.flush()
+        .change_context_lazy(|| CliError::WriteError(output_file.to_path_buf()))?;
 
     if edits.has_changes() {
         let writer = OptInplaceWriter::new_in_place(output_file.to_path_buf())
@@ -63,11 +73,11 @@ pub(crate) fn driver(
 fn check_inputs_match(
     input_files: &[PathBuf],
     i2s_version: I2SVersion,
-    whitespace_method: ParamWhitespaceEq, 
-    skip_params: &[usize]
+    whitespace_method: ParamWhitespaceEq,
+    skip_params: &[usize],
 ) -> error_stack::Result<(), CliError> {
     if input_files.len() < 2 {
-        return Ok(())
+        return Ok(());
     }
 
     for i in 1..input_files.len() {
@@ -79,39 +89,48 @@ fn check_inputs_match(
         for value_pair in first_file_it.zip_longest(other_file_it) {
             match value_pair {
                 itertools::EitherOrBoth::Both(value1, value2) => {
-                    let (num1, val1) = value1.change_context_lazy(|| CliError::ReadError(input_files[0].clone()))?;
-                    let (_, val2) = value2.change_context_lazy(|| CliError::ReadError(input_files[i].clone()))?;
+                    let (num1, val1) = value1
+                        .change_context_lazy(|| CliError::ReadError(input_files[0].clone()))?;
+                    let (_, val2) = value2
+                        .change_context_lazy(|| CliError::ReadError(input_files[i].clone()))?;
 
-                    if !skip_params.contains(&num1) && !whitespace_method.params_eq(&val1, &val2, num1, i2s_version) {
-                        return Err(CliError::ParamMismatch { 
+                    if !skip_params.contains(&num1)
+                        && !whitespace_method.params_eq(&val1, &val2, num1, i2s_version)
+                    {
+                        return Err(CliError::ParamMismatch {
                             f1: input_files[0].clone(),
                             v1: val1,
                             f2: input_files[1].clone(),
                             v2: val2,
-                            param: num1
-                        }.into())
+                            param: num1,
+                        }
+                        .into());
                     }
-                },
+                }
                 itertools::EitherOrBoth::Left(value) => {
-                    let (num, val) = value.change_context_lazy(|| CliError::ReadError(input_files[0].clone()))?;
-                    return Err(CliError::ParamMismatch { 
+                    let (num, val) = value
+                        .change_context_lazy(|| CliError::ReadError(input_files[0].clone()))?;
+                    return Err(CliError::ParamMismatch {
                         f1: input_files[0].clone(),
                         v1: val,
                         f2: input_files[i].clone(),
                         v2: "--MISSING--".to_string(),
-                        param: num
-                    }.into())
-                },
+                        param: num,
+                    }
+                    .into());
+                }
                 itertools::EitherOrBoth::Right(value) => {
-                    let (num, val) = value.change_context_lazy(|| CliError::ReadError(input_files[i].clone()))?;
-                    return Err(CliError::ParamMismatch { 
+                    let (num, val) = value
+                        .change_context_lazy(|| CliError::ReadError(input_files[i].clone()))?;
+                    return Err(CliError::ParamMismatch {
                         f1: input_files[0].clone(),
                         v1: "--MISSING--".to_string(),
                         f2: input_files[i].clone(),
                         v2: val,
-                        param: num
-                    }.into())
-                },
+                        param: num,
+                    }
+                    .into());
+                }
             }
         }
     }
@@ -120,7 +139,7 @@ fn check_inputs_match(
 }
 
 /// Parameter equality check
-/// 
+///
 /// The different modes control how it determines equality:
 /// - `MatchAll` will require that all parameters be exactly
 ///   the same, including whitespace.
@@ -130,7 +149,7 @@ fn check_inputs_match(
 ///   version.
 /// - `IgnoreAll` will ignore whitespace differences in all
 ///   parameters.
-/// 
+///
 /// To compare values, call the `params_eq` method on an instance.
 /// **NOTE: any inline comments must be removed from the values before
 /// passing them for comparison.**
@@ -138,7 +157,7 @@ fn check_inputs_match(
 pub(crate) enum ParamWhitespaceEq {
     MatchAll,
     Default,
-    IgnoreAll
+    IgnoreAll,
 }
 
 impl Default for ParamWhitespaceEq {
@@ -173,7 +192,13 @@ impl FromStr for ParamWhitespaceEq {
 }
 
 impl ParamWhitespaceEq {
-    pub(crate) fn params_eq(&self, value1: &str, value2: &str, param_num: usize, i2s_version: I2SVersion) -> bool {
+    pub(crate) fn params_eq(
+        &self,
+        value1: &str,
+        value2: &str,
+        param_num: usize,
+        i2s_version: I2SVersion,
+    ) -> bool {
         let ignore_whitespace = match self {
             ParamWhitespaceEq::MatchAll => false,
             ParamWhitespaceEq::Default => Self::param_ignore_whitespace(param_num, i2s_version),
@@ -205,7 +230,7 @@ impl ParamWhitespaceEq {
                     if subv1 != subv2 {
                         return false;
                     }
-                },
+                }
             }
         }
     }
@@ -216,7 +241,6 @@ impl ParamWhitespaceEq {
             I2SVersion::I2S2020 => [1, 2, 4, 6, 8, 14].as_slice(),
         };
 
-        return !unsafe_param_nums.contains(&param_num)
+        return !unsafe_param_nums.contains(&param_num);
     }
 }
-

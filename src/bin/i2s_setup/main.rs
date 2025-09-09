@@ -1,12 +1,12 @@
 use std::{path::PathBuf, process::ExitCode};
 
-use clap::{Parser, Subcommand, Args};
+use clap::{Args, Parser, Subcommand};
 use ggg_rs::{i2s, i2s::I2SVersion, utils};
 use merge_inputs::ParamWhitespaceEq;
 
+mod copy_inputs;
 mod merge_inputs;
 mod modify_input;
-mod copy_inputs;
 
 fn main() -> ExitCode {
     let clargs = Cli::parse();
@@ -18,34 +18,34 @@ fn main() -> ExitCode {
             args.whitespace_eq,
             args.skip_param_check,
             args.edits_json.as_deref(),
-            args.top_edit
+            args.top_edit,
         ),
 
-        Commands::ModifyInput(args) => {
-            modify_input::driver(
-                args.input_file,
-                args.edits_json,
-                args.top_edit,
-                args.outputs,
-                args.i2s_version
-            )
-        },
+        Commands::ModifyInput(args) => modify_input::driver(
+            args.input_file,
+            args.edits_json,
+            args.top_edit,
+            args.outputs,
+            args.i2s_version,
+        ),
 
         Commands::CopyInputs(args) => {
             if args.top_param.is_empty() {
-                eprintln!("Warning: --top-param never specified. Output will be an unchanged DEST_FILE.");
+                eprintln!(
+                    "Warning: --top-param never specified. Output will be an unchanged DEST_FILE."
+                );
             }
 
             copy_inputs::driver(
                 &args.src_file,
-                &args.dest_file, 
-                args.outputs, 
-                &args.top_param, 
+                &args.dest_file,
+                args.outputs,
+                &args.top_param,
                 args.src_i2s_version,
                 args.dest_i2s_version,
-                args.copy_catalog
+                args.copy_catalog,
             )
-        },
+        }
 
         Commands::EditJsonExample => {
             println!("Here is an example of an I2S edit JSON:\n");
@@ -65,7 +65,7 @@ fn main() -> ExitCode {
 #[derive(Debug, Parser)]
 struct Cli {
     #[clap(subcommand)]
-    command: Commands
+    command: Commands,
 }
 
 #[derive(Debug, Subcommand)]
@@ -113,7 +113,7 @@ struct MergeInputsCli {
     edits_json: Option<PathBuf>,
 
     /// An alternate way to specify edits, give the parameter number
-    /// and value as a comma-separated pair, e.g. "1,./igms". 
+    /// and value as a comma-separated pair, e.g. "1,./igms".
     /// Repeat this argument to specify multiple edits. These will
     /// take precedence over the JSON values from --edits-json.
     #[clap(long, action=clap::ArgAction::Append)]
@@ -141,7 +141,7 @@ struct ModifyInputCli {
     edits_json: Option<PathBuf>,
 
     /// An alternate way to specify edits, give the parameter number
-    /// and value as a comma-separated pair, e.g. "1,./igms". 
+    /// and value as a comma-separated pair, e.g. "1,./igms".
     /// Repeat this argument to specify multiple edits. These will
     /// take precedence over the JSON values from --edits-json.
     #[clap(long, action=clap::ArgAction::Append)]
@@ -195,7 +195,13 @@ enum CliError {
     #[error("Could not set up I/O")]
     IoError,
     #[error("Parameter #{param} differs between {} and {}; ('{v1}' vs. '{v2}'). Note that later files/parameters may also differ.", f1.display(), f2.display())]
-    ParamMismatch{f1: PathBuf, v1: String, f2: PathBuf, v2: String, param: usize},
+    ParamMismatch {
+        f1: PathBuf,
+        v1: String,
+        f2: PathBuf,
+        v2: String,
+        param: usize,
+    },
     #[error("Error in arguments: {0}")]
     BadInput(String),
 }

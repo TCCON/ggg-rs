@@ -2,14 +2,13 @@ use std::{fmt::Display, str::FromStr, sync::OnceLock};
 
 use crate::error::HeaderError;
 
-pub mod runlogs;
-pub mod mav_files;
 pub mod col_files;
+pub mod mav_files;
 pub mod postproc_files;
+pub mod runlogs;
 
 pub const POSTPROC_FILL_VALUE: f64 = 9.8765e35;
 static PROGRAM_VERSION_REGEX: OnceLock<regex::Regex> = OnceLock::new();
-
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProgramVersion {
@@ -25,7 +24,11 @@ pub struct ProgramVersion {
 
 impl Display for ProgramVersion {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:24} {:15} {:10} {}", self.program, self.version, self.date, self.authors)
+        write!(
+            f,
+            "{:24} {:15} {:10} {}",
+            self.program, self.version, self.date, self.authors
+        )
     }
 }
 
@@ -40,11 +43,11 @@ impl FromStr for ProgramVersion {
 
         let s = s.trim();
 
-        let caps = re.captures(s)
-            .ok_or_else(|| HeaderError::ParseError { 
-                location: s.into(), 
-                cause: "Did not match expected format of program name, version, date, and authors".to_string()
-            })?;
+        let caps = re.captures(s).ok_or_else(|| HeaderError::ParseError {
+            location: s.into(),
+            cause: "Did not match expected format of program name, version, date, and authors"
+                .to_string(),
+        })?;
 
         // JLL: I allow authors to be missing because it was in one of the program lines for
         // the AICF work. Might revert to this being required in the future.
@@ -55,12 +58,12 @@ impl FromStr for ProgramVersion {
             log::warn!("authors not found in the {program} program version line");
             "".to_string()
         };
-        
-        Ok(Self { 
+
+        Ok(Self {
             program,
-            version: caps["version"].to_owned(), 
+            version: caps["version"].to_owned(),
             date: caps["date"].to_string(),
-            authors
+            authors,
         })
     }
 }

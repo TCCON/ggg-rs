@@ -1,12 +1,24 @@
-use std::{collections::HashMap, fmt::Display, path::{Path, PathBuf}, str::FromStr};
+use std::{
+    collections::HashMap,
+    fmt::Display,
+    path::{Path, PathBuf},
+    str::FromStr,
+};
 
 use chrono::{DateTime, Utc};
 use error_stack::ResultExt;
-use ggg_rs::{cit_spectrum_name::{CitSpectrumName, NoDetectorSpecName}, readers::runlogs::FallibleRunlog};
+use ggg_rs::{
+    cit_spectrum_name::{CitSpectrumName, NoDetectorSpecName},
+    readers::runlogs::FallibleRunlog,
+};
 use indicatif::ProgressBar;
 use ndarray::Array1;
 
-use crate::{dimensions::TIME_DIM_NAME, errors::{InputError, WriteError}, interface::{ConcreteVarToBe, DataProvider, GroupSelector, SpectrumIndexer, StdDataGroup}};
+use crate::{
+    dimensions::TIME_DIM_NAME,
+    errors::{InputError, WriteError},
+    interface::{ConcreteVarToBe, DataProvider, GroupSelector, SpectrumIndexer, StdDataGroup},
+};
 
 static DIMS_REQ: [&'static str; 1] = [TIME_DIM_NAME];
 
@@ -18,14 +30,22 @@ pub(crate) struct RunlogProvider {
 impl RunlogProvider {
     pub(crate) fn new(runlog: PathBuf) -> error_stack::Result<(Self, SpectrumIndexer), InputError> {
         if !runlog.exists() {
-            return Err(InputError::file_not_found(runlog).into())
+            return Err(InputError::file_not_found(runlog).into());
         }
 
         let (spectrum_indexer, times) = Self::get_times_and_indexer(&runlog)?;
-        Ok((Self{ runlog_path: runlog, times }, spectrum_indexer))
+        Ok((
+            Self {
+                runlog_path: runlog,
+                times,
+            },
+            spectrum_indexer,
+        ))
     }
 
-    fn get_times_and_indexer(runlog: &Path) -> error_stack::Result<(SpectrumIndexer, Array1<DateTime<Utc>>), InputError> {
+    fn get_times_and_indexer(
+        runlog: &Path,
+    ) -> error_stack::Result<(SpectrumIndexer, Array1<DateTime<Utc>>), InputError> {
         let runlog_handle = FallibleRunlog::open(runlog)
             .change_context_lazy(|| InputError::error_reading_file(runlog))?;
 
@@ -41,7 +61,8 @@ impl RunlogProvider {
             let line_num = i_data_line + nhead + 1; // want line number in reports to be 1-based
 
             // Handle the case where reading & parsing the next line of the runlog fails
-            let rl_rec = res.change_context_lazy(|| InputError::error_reading_at_line(runlog, line_num))?;
+            let rl_rec =
+                res.change_context_lazy(|| InputError::error_reading_at_line(runlog, line_num))?;
 
             // If the spectrum was already encountered, this is an invalid runlog. Spectrum names must be unique.
             if spec_inds.contains_key(&rl_rec.spectrum_name) {
@@ -49,7 +70,7 @@ impl RunlogProvider {
                     "Spectrum '{}' at line {line_num} of runlog {} is a duplicate of a spectrum earlier in the file. Duplicate spectra are not allowed.",
                     rl_rec.spectrum_name,
                     runlog.display()
-                )).into())
+                )).into());
             }
 
             // We need information about the spectrum and ZPD time - make sure we can get that successfully
@@ -57,14 +78,19 @@ impl RunlogProvider {
                 .map(NoDetectorSpecName::from)
                 .change_context_lazy(|| InputError::error_reading_at_line(runlog, line_num))?;
 
-            let zpd_time = rl_rec.zpd_time()
-                .ok_or_else(|| InputError::custom(format!(
-                    "Invalid ZPD time on line {line_num} of runlog {}", runlog.display()
-                )))?;
+            let zpd_time = rl_rec.zpd_time().ok_or_else(|| {
+                InputError::custom(format!(
+                    "Invalid ZPD time on line {line_num} of runlog {}",
+                    runlog.display()
+                ))
+            })?;
 
             // We need to increment the spectrum index if this is a new observation. For TCCON, that means the
             // spectrum name differs from the previous, ignoring the detector character.
-            if last_nodet_spec.as_ref().is_some_and(|last| last != &nodet_spectrum) {
+            if last_nodet_spec
+                .as_ref()
+                .is_some_and(|last| last != &nodet_spectrum)
+            {
                 curr_spec_index += 1;
                 last_nodet_spec = Some(nodet_spectrum);
                 times.push(zpd_time);
@@ -77,7 +103,7 @@ impl RunlogProvider {
             // spectrum name and don't have to create no-detector spectrum names in the rest of the providers.
             spec_inds.insert(rl_rec.spectrum_name, curr_spec_index);
         }
-        
+
         let indexer = SpectrumIndexer::new(spec_inds);
         let times = Array1::from_iter(times);
         Ok((indexer, times))
@@ -93,8 +119,14 @@ impl DataProvider for RunlogProvider {
     fn dimensions_required(&self) -> std::borrow::Cow<[&'static str]> {
         std::borrow::Cow::Borrowed(&DIMS_REQ)
     }
-    
-    fn write_data_to_nc(&self, _spec_indexer: &SpectrumIndexer, writer: &dyn crate::interface::GroupWriter, group_selector: &dyn GroupSelector, _pb: ProgressBar) -> error_stack::Result<(), WriteError> {
+
+    fn write_data_to_nc(
+        &self,
+        _spec_indexer: &SpectrumIndexer,
+        writer: &dyn crate::interface::GroupWriter,
+        group_selector: &dyn GroupSelector,
+        _pb: ProgressBar,
+    ) -> error_stack::Result<(), WriteError> {
         // Unlike other providers, since the runlog sets the order of data, it doesn't need to use the
         // spectrum indexer to make sure the data are in the correct order.
         // Also, since we only have one variable, there's no benefit to using the "write multiple vars" writer method.
@@ -106,8 +138,9 @@ impl DataProvider for RunlogProvider {
             data,
             "time",
             "seconds since 1970-01-01 00:00:00",
-            &self.runlog_path
-        ).map_err(|e| WriteError::from(e))?;
+            &self.runlog_path,
+        )
+        .map_err(|e| WriteError::from(e))?;
         times_var.add_attribute("calendar", "gregorian");
         writer.write_variable(&times_var)?;
         Ok(())

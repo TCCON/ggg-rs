@@ -1,5 +1,9 @@
 //! Common errors across the ggg-rs crate
-use std::{path::{PathBuf, Path}, fmt::Display, error::Error};
+use std::{
+    error::Error,
+    fmt::Display,
+    path::{Path, PathBuf},
+};
 
 /// Errors related to working with datetimes
 #[derive(Debug, thiserror::Error)]
@@ -7,7 +11,12 @@ pub enum DateTimeError {
     #[error("Year {0}, month {1}, day {2} is not a valid date")]
     InvalidYearMonthDay(i32, u32, u32),
     #[error("Year {year} month {month} does not have {n} {weekday}s")]
-    NoNthWeekday{year: i32, month: u32, n: u8, weekday: chrono::Weekday},
+    NoNthWeekday {
+        year: i32,
+        month: u32,
+        n: u8,
+        weekday: chrono::Weekday,
+    },
     #[error("{0} falls in the repeated hour of the DST -> standard transition, cannot determine the timezone")]
     AmbiguousDst(chrono::NaiveDateTime),
     #[error("Error adding timezone to naive datetime: {0}")]
@@ -22,15 +31,18 @@ pub struct FileLocation {
 }
 
 impl FileLocation {
-    pub fn new<P: AsRef<Path>, S: AsRef<str>>(path: Option<P>, line_num: Option<usize>, line_value: Option<S>) -> Self {
-        Self { 
-            path: path.map(|p| p.as_ref().to_owned()), 
+    pub fn new<P: AsRef<Path>, S: AsRef<str>>(
+        path: Option<P>,
+        line_num: Option<usize>,
+        line_value: Option<S>,
+    ) -> Self {
+        Self {
+            path: path.map(|p| p.as_ref().to_owned()),
             line_num,
-            line_value: line_value.map(|s| s.as_ref().to_owned()) 
+            line_value: line_value.map(|s| s.as_ref().to_owned()),
         }
     }
 }
-
 
 impl From<&Path> for FileLocation {
     fn from(value: &Path) -> Self {
@@ -78,13 +90,25 @@ impl Display for FileLocation {
     }
 }
 
-
 #[derive(Debug, Clone)]
 pub enum HeaderError {
-    ParseError{location: FileLocation, cause: String},
-    NumLinesMismatch{expected: usize, got: usize},
-    NumColMismatch{location: FileLocation, expected: usize, got: usize},
-    CouldNotRead{location: FileLocation, cause: String},
+    ParseError {
+        location: FileLocation,
+        cause: String,
+    },
+    NumLinesMismatch {
+        expected: usize,
+        got: usize,
+    },
+    NumColMismatch {
+        location: FileLocation,
+        expected: usize,
+        got: usize,
+    },
+    CouldNotRead {
+        location: FileLocation,
+        cause: String,
+    },
     Custom(String),
 }
 
@@ -99,16 +123,20 @@ impl Display for HeaderError {
         match self {
             Self::ParseError { location, cause } => {
                 write!(f, "Could not parse header line {location}: {cause}")
-            },
+            }
             Self::NumLinesMismatch { expected, got } => {
                 write!(f, "Expected {expected} header lines, nhead indicates {got}")
-            },
-            Self::NumColMismatch { location, expected, got } => {
+            }
+            Self::NumColMismatch {
+                location,
+                expected,
+                got,
+            } => {
                 write!(f, "Number of data columns ({got}) does not match that defined in the first line ({expected}) {location}")
-            },
-            Self::CouldNotRead{location, cause} => {
+            }
+            Self::CouldNotRead { location, cause } => {
                 write!(f, "Could not read {location}: {cause}")
-            },
+            }
             Self::Custom(msg) => {
                 write!(f, "{msg}")
             }
@@ -121,7 +149,7 @@ impl Error for HeaderError {}
 /// Errors related to reading the body of a file (not the header, though
 /// functions that read the header to interpret the body may convert header
 /// errors to body errors).
-/// 
+///
 /// Each variant has a similarly named function that uses generics to make
 /// it more convenient for construction.
 #[derive(Debug, thiserror::Error)]
@@ -131,29 +159,47 @@ pub enum BodyError {
     /// that necessary information could not be obtained from the header
     /// to continue reading.
     #[error("Error reading {loc}: {reason}")]
-    CouldNotRead{loc: FileLocation, reason: String},
+    CouldNotRead { loc: FileLocation, reason: String },
 
     /// Some value in the file is formatted incorrectly, and therefore
     /// cannot be interpreted.
     #[error("Unexpected format in {loc}: {reason}")]
-    UnexpectedFormat{loc: FileLocation, reason: String},
+    UnexpectedFormat { loc: FileLocation, reason: String },
 
     #[error("{0}")]
     Custom(String),
 }
 
 impl BodyError {
-    pub fn could_not_read<R: Into<String>>(reason: R, path: Option<PathBuf>, line_num: Option<usize>, line_value: Option<String>) -> Self {
+    pub fn could_not_read<R: Into<String>>(
+        reason: R,
+        path: Option<PathBuf>,
+        line_num: Option<usize>,
+        line_value: Option<String>,
+    ) -> Self {
         Self::CouldNotRead {
-            loc: FileLocation { path, line_num, line_value },
-            reason: reason.into()
+            loc: FileLocation {
+                path,
+                line_num,
+                line_value,
+            },
+            reason: reason.into(),
         }
     }
 
-    pub fn unexpected_format<R: Into<String>>(reason: R, path: Option<PathBuf>, line_num: Option<usize>, line_value: Option<String>) -> Self {
+    pub fn unexpected_format<R: Into<String>>(
+        reason: R,
+        path: Option<PathBuf>,
+        line_num: Option<usize>,
+        line_value: Option<String>,
+    ) -> Self {
         Self::UnexpectedFormat {
-            loc: FileLocation { path, line_num, line_value },
-            reason: reason.into()
+            loc: FileLocation {
+                path,
+                line_num,
+                line_value,
+            },
+            reason: reason.into(),
         }
     }
 
@@ -162,9 +208,8 @@ impl BodyError {
     }
 }
 
-
 /// Errors related to writing an output file.
-/// 
+///
 /// Each variant that requires an inner value has a similarly named
 /// function that uses generics to make it more convenient for construction.
 #[derive(Debug, thiserror::Error)]

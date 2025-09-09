@@ -1,7 +1,7 @@
 pub mod bruker {
     use std::fmt::Display;
 
-    use crate::opus::{OpusResult, OpusTypeError, OpusError};
+    use crate::opus::{OpusError, OpusResult, OpusTypeError};
 
     /// Maximum number of directory blocks
     pub const MDB: i32 = 32;
@@ -95,7 +95,7 @@ pub mod bruker {
         IgramSecondaryStatus,
         SpectrumPrimaryStatus,
         SpectrumSecondaryStatus,
-        Unknown(i32)
+        Unknown(i32),
     }
 
     impl From<i32> for BrukerBlockType {
@@ -119,8 +119,8 @@ pub mod bruker {
                 DER_SPEC_SEC_DATA => Self::SpectrumSecondaryData,
                 DER_SPEC_PRI_STAT => Self::SpectrumPrimaryStatus,
                 DER_SPEC_SEC_STAT => Self::SpectrumSecondaryStatus,
-                
-                _ => Self::Unknown(value)
+
+                _ => Self::Unknown(value),
             }
         }
     }
@@ -140,7 +140,7 @@ pub mod bruker {
                 Self::IgramSecondaryData => true,
                 Self::SpectrumPrimaryData => true,
                 Self::SpectrumSecondaryData => true,
-                _ => false
+                _ => false,
             }
         }
 
@@ -159,16 +159,22 @@ pub mod bruker {
         String,
         Enum,
         Senum,
-        Unknown(i32)
+        Unknown(i32),
     }
 
     impl BrukerParType {
         pub fn check_par_length(&self, nbytes: usize) -> OpusResult<()> {
             match (self, nbytes) {
                 (BrukerParType::Integer, 4) => Ok(()),
-                (BrukerParType::Integer, _) => Err(OpusError::ParamLengthMismatch { expected: 4, actual: nbytes }),
+                (BrukerParType::Integer, _) => Err(OpusError::ParamLengthMismatch {
+                    expected: 4,
+                    actual: nbytes,
+                }),
                 (BrukerParType::Float, 8) => Ok(()),
-                (BrukerParType::Float, _) => Err(OpusError::ParamLengthMismatch { expected: 8, actual: nbytes }),
+                (BrukerParType::Float, _) => Err(OpusError::ParamLengthMismatch {
+                    expected: 8,
+                    actual: nbytes,
+                }),
                 (BrukerParType::String, _) => Ok(()),
                 (BrukerParType::Enum, _) => Ok(()),
                 (BrukerParType::Senum, _) => Ok(()),
@@ -191,9 +197,8 @@ pub mod bruker {
                 TYPE_STRING => Self::String,
                 TYPE_ENUM => Self::Enum,
                 TYPE_SENUM => Self::Senum,
-                _ => Self::Unknown(value)
+                _ => Self::Unknown(value),
             }
-
         }
     }
 
@@ -225,7 +230,10 @@ pub mod bruker {
             if let Self::Integer(i) = self {
                 Ok(*i)
             } else {
-                Err(OpusTypeError::ValueIntoError { expected: BrukerParType::Integer.to_string(), actual: self.opus_type().to_string() })
+                Err(OpusTypeError::ValueIntoError {
+                    expected: BrukerParType::Integer.to_string(),
+                    actual: self.opus_type().to_string(),
+                })
             }
         }
 
@@ -233,7 +241,10 @@ pub mod bruker {
             if let Self::Float(f) = self {
                 Ok(*f)
             } else {
-                Err(OpusTypeError::ValueIntoError { expected: BrukerParType::Float.to_string(), actual: self.opus_type().to_string() })
+                Err(OpusTypeError::ValueIntoError {
+                    expected: BrukerParType::Float.to_string(),
+                    actual: self.opus_type().to_string(),
+                })
             }
         }
 
@@ -241,7 +252,10 @@ pub mod bruker {
             if let Self::String(s) = self {
                 Ok(s)
             } else {
-                Err(OpusTypeError::ValueIntoError { expected: BrukerParType::String.to_string(), actual: self.opus_type().to_string() })
+                Err(OpusTypeError::ValueIntoError {
+                    expected: BrukerParType::String.to_string(),
+                    actual: self.opus_type().to_string(),
+                })
             }
         }
 
@@ -249,21 +263,29 @@ pub mod bruker {
             if let Self::String(s) = self {
                 Ok(s)
             } else {
-                Err(OpusTypeError::ValueIntoError { expected: BrukerParType::String.to_string(), actual: self.opus_type().to_string() })
+                Err(OpusTypeError::ValueIntoError {
+                    expected: BrukerParType::String.to_string(),
+                    actual: self.opus_type().to_string(),
+                })
             }
         }
 
         pub fn into_bytes(self) -> Result<Vec<u8>, OpusTypeError> {
             match self {
-                BrukerParValue::Integer(_) => Err(OpusTypeError::ValueIntoError { expected: "String, Enum, or Senum".to_string(), actual: self.opus_type().to_string() }),
-                BrukerParValue::Float(_) => Err(OpusTypeError::ValueIntoError { expected: "String, Enum, or Senum".to_string(), actual: self.opus_type().to_string() }),
+                BrukerParValue::Integer(_) => Err(OpusTypeError::ValueIntoError {
+                    expected: "String, Enum, or Senum".to_string(),
+                    actual: self.opus_type().to_string(),
+                }),
+                BrukerParValue::Float(_) => Err(OpusTypeError::ValueIntoError {
+                    expected: "String, Enum, or Senum".to_string(),
+                    actual: self.opus_type().to_string(),
+                }),
                 BrukerParValue::String(s) => Ok(s.into_bytes()),
                 BrukerParValue::Enum(b) => Ok(b),
                 BrukerParValue::Senum(b) => Ok(b),
-                BrukerParValue::Unknown(b, _) => Ok(b)
+                BrukerParValue::Unknown(b, _) => Ok(b),
             }
         }
-
 
         pub fn opus_type(&self) -> BrukerParType {
             match self {
@@ -272,7 +294,7 @@ pub mod bruker {
                 BrukerParValue::String(_) => BrukerParType::String,
                 BrukerParValue::Enum(_) => BrukerParType::Enum,
                 BrukerParValue::Senum(_) => BrukerParType::Senum,
-                BrukerParValue::Unknown(_, i) => BrukerParType::Unknown(*i)
+                BrukerParValue::Unknown(_, i) => BrukerParType::Unknown(*i),
             }
         }
     }
@@ -289,7 +311,7 @@ pub mod i2s {
         AqPar,
         Instr,
         Data,
-        Unknown(i32)
+        Unknown(i32),
     }
 
     impl From<i32> for I2sSpectrumHeaderBlockType {

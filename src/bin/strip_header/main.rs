@@ -1,4 +1,8 @@
-use std::{io::{BufRead, Seek}, path::PathBuf, process::ExitCode};
+use std::{
+    io::{BufRead, Seek},
+    path::PathBuf,
+    process::ExitCode,
+};
 
 use clap::Parser;
 use error_stack::ResultExt;
@@ -15,10 +19,10 @@ fn main() -> ExitCode {
 }
 
 fn driver(file: PathBuf, invert: bool) -> error_stack::Result<(), CliError> {
-    let mut fh = utils::FileBuf::open(&file)
-        .change_context_lazy(|| CliError::ReadError(file.clone()))?;
-    let nhead = utils::get_nhead(&mut fh)
-        .change_context_lazy(|| CliError::ReadError(file.clone()))?;
+    let mut fh =
+        utils::FileBuf::open(&file).change_context_lazy(|| CliError::ReadError(file.clone()))?;
+    let nhead =
+        utils::get_nhead(&mut fh).change_context_lazy(|| CliError::ReadError(file.clone()))?;
 
     if invert {
         let mut rdr = fh.into_reader();
@@ -64,5 +68,5 @@ struct Cli {
 #[derive(Debug, thiserror::Error)]
 enum CliError {
     #[error("Error opening/reading file: {0}")]
-    ReadError(PathBuf)
+    ReadError(PathBuf),
 }

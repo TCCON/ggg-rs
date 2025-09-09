@@ -8,7 +8,6 @@ use serde::Deserialize;
 
 use crate::errors::WriteError;
 
-
 /// Represents one row in a qc.dat file
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
@@ -32,7 +31,9 @@ impl QcRow {
 
 /// Load a qc.dat file. The returned HashMap will have the variable names as its keys
 /// (which will match) the variable name in the [`QcRow`]).
-pub(crate) fn load_qc_file_hashmap(qc_file_path: &Path) -> error_stack::Result<HashMap<String, QcRow>, WriteError> {
+pub(crate) fn load_qc_file_hashmap(
+    qc_file_path: &Path,
+) -> error_stack::Result<HashMap<String, QcRow>, WriteError> {
     let mut hm = HashMap::new();
     for row in load_qc_file(qc_file_path)? {
         let key = row.variable.clone();
@@ -49,29 +50,33 @@ pub(crate) fn load_qc_file(qc_file_path: &Path) -> error_stack::Result<Vec<QcRow
         .change_context_lazy(|| WriteError::file_read_error(qc_file_path))?;
     let (nhead, _) = get_nhead_ncol(&mut rdr)
         .change_context_lazy(|| WriteError::file_read_error(qc_file_path))?;
-    
+
     // We've read the first header line, and we want to get the column names from the last header line
-    for _ in 1..nhead-1 {
-        rdr.read_header_line().change_context_lazy(|| WriteError::file_read_error(qc_file_path))?;
+    for _ in 1..nhead - 1 {
+        rdr.read_header_line()
+            .change_context_lazy(|| WriteError::file_read_error(qc_file_path))?;
     }
 
-    let colnames = rdr.read_header_line()
+    let colnames = rdr
+        .read_header_line()
         .change_context_lazy(|| WriteError::file_read_error(qc_file_path))?;
-    let colnames = colnames.split_ascii_whitespace()
-        .collect_vec();
+    let colnames = colnames.split_ascii_whitespace().collect_vec();
 
     let mut qc_rows = vec![];
     let ff = fortformat::FortFormat::ListDirected;
     for (iline, line) in rdr.lines().enumerate() {
         let line_num = iline + nhead + 1;
-        let line = line.change_context_lazy(|| 
+        let line = line.change_context_lazy(|| {
             WriteError::detailed_read_error(qc_file_path, format!("failed to read line {line_num}"))
-        )?;
+        })?;
 
         let this_row: QcRow = fortformat::from_str_with_fields(&line, &ff, &colnames)
-            .change_context_lazy(|| WriteError::detailed_read_error(
-                qc_file_path, format!("error deserializing line {line_num}")
-            ))?;
+            .change_context_lazy(|| {
+                WriteError::detailed_read_error(
+                    qc_file_path,
+                    format!("error deserializing line {line_num}"),
+                )
+            })?;
         qc_rows.push(this_row);
     }
 

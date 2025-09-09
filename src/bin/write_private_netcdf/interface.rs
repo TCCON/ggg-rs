@@ -1,19 +1,30 @@
-use std::{borrow::Cow, cell::RefCell, collections::HashMap, fmt::Display, hash::Hash, path::Path, sync::{Arc, Mutex}};
+use std::{
+    borrow::Cow,
+    cell::RefCell,
+    collections::HashMap,
+    fmt::Display,
+    hash::Hash,
+    path::Path,
+    sync::{Arc, Mutex},
+};
 
+use crate::errors::{CliError, ReadError, VarError, WriteError};
 use error_stack::ResultExt;
-use ggg_rs::{collation::get_window_from_col_file, tccon::input_config::TcconWindowPrefixes, utils::parse_window_name};
+use ggg_rs::{
+    collation::get_window_from_col_file, tccon::input_config::TcconWindowPrefixes,
+    utils::parse_window_name,
+};
 use indicatif::ProgressBar;
 use ndarray::{Array, Array1, ArrayD};
 use netcdf::{AttributeValue, GroupMut, NcTypeDescriptor};
-use crate::errors::{CliError, ReadError, VarError, WriteError};
 
 /// The general trait representing a source of data (usually a GGG output file)
-/// 
+///
 /// Types implementing this must be [`Send`] so that loading data can be parallelized.
 /// This likely means that the netCDF dataset handle will need to be stored in an
 /// `Arc<Mutex<RefCell<>>>` to ensure each provider can get exclusive access to the
 /// dataset handle while actually writing.
-/// 
+///
 /// These types must also implement [`Display`], and should do so by printing a simple
 /// description of what type of file this provider represents (e.g. "runlog"), not a
 /// long path to said file. This will be used in error messages to indicate that conditions
@@ -24,7 +35,7 @@ pub(crate) trait DataProvider: Display + Send {
     /// it must return a list of dimension names and their required lengths. These will
     /// be gotten before any variables are written, and if two providers give different
     /// lengths for the same dimension, the writer will throw an error.
-    /// 
+    ///
     /// If a dimension should have an associated variable, then the provider must
     /// write that variable in its `write_data_to_nc` method.
     fn dimension_lengths(&self) -> Cow<[(&'static str, usize)]>;
@@ -35,50 +46,61 @@ pub(crate) trait DataProvider: Display + Send {
     fn dimensions_required(&self) -> Cow<[&'static str]>;
 
     /// Write all the data for this source to the netCDF file.
-    /// 
+    ///
     /// Generally, this function should load the data itself, then use `writer` to actually
     /// write it. Loading in this function can allow multiple providers to operate in parallel
     /// to load and only block each other when they need to write to the netCDF file. Using
     /// a [`GroupWriter`] to write the variable instead of directly accessing the netCDF file
     /// allows `writer` to handle putting variables in the correct groups.
-    /// 
+    ///
     /// This will also receive a progress bar instance that it can use to indicate the progress
     /// of reading and writing. See the [`crate::progress`] module for helper functions to set up
     /// the progress bar consistently.
-    /// 
+    ///
     /// Providers that write along the "time" dimension must ensure that they use `spec_indexer`
     /// to put their data at the right index for its spectrum.
-    fn write_data_to_nc(&self, spec_indexer: &SpectrumIndexer, writer: &dyn GroupWriter, group_selector: &dyn GroupSelector, pb: ProgressBar) -> error_stack::Result<(), WriteError>;
+    fn write_data_to_nc(
+        &self,
+        spec_indexer: &SpectrumIndexer,
+        writer: &dyn GroupWriter,
+        group_selector: &dyn GroupSelector,
+        pb: ProgressBar,
+    ) -> error_stack::Result<(), WriteError>;
 }
 
-
 /// The general trait for types that calculate new variables based on data already written to the netCDF file.
-/// 
+///
 /// In most cases, we prefer to have [`DataProvider`] types only copy data from an existing file over to the
 /// netCDF file, and [`DataCalculator`] types handle computing any derived variables. This helps keep the overall
 /// program structure more cleanly separated. However, if there is a case where a derived variable needs information
 /// from an output file that won't get written to the netCDF file, it is acceptable to have a provider calculate
 /// a derived value.
-/// 
+///
 /// Currently, this trait does not require the dimensions methods that [`DataProvider`] does, since we expect that
 /// any derived variables will have the same dimensions as their inputs. However, this may change in the future if
 /// we find a case where a derived variable needs to create new dimension.
 pub(crate) trait DataCalculator: Send {
     /// Write all the data for this source to the netCDF file.
-    /// 
+    ///
     /// Generally, this will load the data it needs from the netCDF file, compute the derived variable,
     /// and write the new variable(s). It can access existing variables and dimensions through the `accessor`.
-    fn write_data_to_nc(&self, spec_indexer: &SpectrumIndexer, accessor: &dyn GroupAccessor, group_selector: &dyn GroupSelector, pb: ProgressBar) -> error_stack::Result<(), WriteError>;
+    fn write_data_to_nc(
+        &self,
+        spec_indexer: &SpectrumIndexer,
+        accessor: &dyn GroupAccessor,
+        group_selector: &dyn GroupSelector,
+        pb: ProgressBar,
+    ) -> error_stack::Result<(), WriteError>;
 }
 
 /// A type that maps spectrum names to indices along the "time" dimension.
 pub(crate) struct SpectrumIndexer {
-    spectrum_indices: HashMap<String, usize>
+    spectrum_indices: HashMap<String, usize>,
 }
 
 impl SpectrumIndexer {
     /// Create a new indexer from a hash map of spectrum names to time indices.
-    /// 
+    ///
     /// For multi-detector runlogs, all spectra taken simultaneously should have the same
     /// index. It is expected that any values produced from different detector's spectra for
     /// the same index will have different variable names (i.e., if both spectra all retrieving
@@ -115,7 +137,7 @@ pub(crate) enum StdDataGroup {
     /// Standard, well-validated variables retrieved from near-IR InGaAs spectra should go in the main group.
     Main,
     /// Less well-validated data should be indicated as such, either by a suffix or by being in a subordinate group.
-    Experimental{group: String, suffix: String},
+    Experimental { group: String, suffix: String },
 }
 
 impl Display for StdDataGroup {
@@ -131,8 +153,11 @@ impl VarGroup for StdDataGroup {
     fn is_main_group(&self) -> bool {
         match self {
             StdDataGroup::Main => true,
-            StdDataGroup::Experimental { group: _, suffix: _ } => false,
-        }    
+            StdDataGroup::Experimental {
+                group: _,
+                suffix: _,
+            } => false,
+        }
     }
 
     fn group_name(&self) -> &str {
@@ -145,7 +170,7 @@ impl VarGroup for StdDataGroup {
     fn suffix(&self) -> &str {
         match self {
             Self::Main => "",
-            Self::Experimental { group: _, suffix } => &suffix
+            Self::Experimental { group: _, suffix } => &suffix,
         }
     }
 }
@@ -166,10 +191,10 @@ pub(crate) trait VarToBe {
 }
 
 /// A structure holding the data to be written to a netCDF variable.
-/// 
+///
 /// Because of lifetime limitations, [`GroupWriter`]s cannot return a variable
 /// from a group if they have to get the group out of the file within their functions.
-/// To get around this, [`GroupWriter`] methods taken instances of this struct and 
+/// To get around this, [`GroupWriter`] methods taken instances of this struct and
 /// write to the variable directly in their functions.
 pub(crate) struct ConcreteVarToBe<T: NcTypeDescriptor> {
     name: String,
@@ -180,18 +205,18 @@ pub(crate) struct ConcreteVarToBe<T: NcTypeDescriptor> {
     units: String,
     source_file_name: String,
     source_file_sha256: String,
-    extra_attrs: Vec<(String, AttributeValue)>
+    extra_attrs: Vec<(String, AttributeValue)>,
 }
 
 impl<T: NcTypeDescriptor> ConcreteVarToBe<T> {
     /// Create a new `ConcreteVarToBe`, computing the source file checksum automatically.
-    /// 
+    ///
     /// If you are creating multiple variables from the same source file, it will be
     /// more efficient to compute the SHA256 checksum once yourself (with the
     /// [`ggg_rs::utils::file_sha256_hexdigest`] function) and use the
     /// [`VarToBe::new_with_checksum`] constructor instead. Otherwise the checksum
     /// will be computed each time this function is called.
-    /// 
+    ///
     /// # Parameters
     /// - `name`: the desired variable name.
     /// - `dimensions`: the dimension names for this variable; they must give the
@@ -200,11 +225,11 @@ impl<T: NcTypeDescriptor> ConcreteVarToBe<T> {
     /// - `long_name`: a human-readable name for this variable, created as an attribute
     /// - `units`: the units that `data` are in
     /// - `source_file`: path to the original GGG output file that this data came from.
-    /// 
+    ///
     /// To include additional attributes beyond "long_name", "units", "source_file_name",
     /// and "source_file_path" (with the last two determined from `source_file`), use the
     /// [`VarToBe::add_attribute`] method.
-    /// 
+    ///
     /// # Errors
     /// Returns an error if:
     /// - `source_file` does not exist,
@@ -217,23 +242,31 @@ impl<T: NcTypeDescriptor> ConcreteVarToBe<T> {
         data: Array<T, D>,
         long_name: L,
         units: U,
-        source_file: &Path
+        source_file: &Path,
     ) -> Result<Self, VarError> {
         if !source_file.exists() {
-            return Err(VarError::SourceFileMissing { name: name.to_string(), path: source_file.to_path_buf() });
+            return Err(VarError::SourceFileMissing {
+                name: name.to_string(),
+                path: source_file.to_path_buf(),
+            });
         }
 
-        let source_file_name = source_file.file_name()
-            .ok_or_else(|| VarError::SourceFileError { 
+        let source_file_name = source_file
+            .file_name()
+            .ok_or_else(|| VarError::SourceFileError {
                 name: name.to_string(),
                 path: source_file.to_path_buf(),
-                problem: "could not get file base name".to_string()
-            })?.to_string_lossy().to_string();
-        let source_file_sha256 = ggg_rs::utils::file_sha256_hexdigest(source_file)
-            .map_err(|e| VarError::SourceFileError {
-                name: name.to_string(),
-                path: source_file.to_path_buf(),
-                problem: format!("error occurred calculating checksum ({e})")
+                problem: "could not get file base name".to_string(),
+            })?
+            .to_string_lossy()
+            .to_string();
+        let source_file_sha256 =
+            ggg_rs::utils::file_sha256_hexdigest(source_file).map_err(|e| {
+                VarError::SourceFileError {
+                    name: name.to_string(),
+                    path: source_file.to_path_buf(),
+                    problem: format!("error occurred calculating checksum ({e})"),
+                }
             })?;
         Ok(Self {
             name: name.to_string(),
@@ -244,13 +277,13 @@ impl<T: NcTypeDescriptor> ConcreteVarToBe<T> {
             units: units.to_string(),
             source_file_name,
             source_file_sha256,
-            extra_attrs: vec![]
+            extra_attrs: vec![],
         })
     }
 
     /// An alternate constructor that is more efficient if you have already calculated the checksum
     /// for the source file.
-    /// 
+    ///
     /// All parameters are the same as `new`, except `source_file_name` (now the base name of the
     /// original GGG source file) and `source_file_sha256` (the SHA256 checksum of the source file
     /// as a hex string).
@@ -262,7 +295,7 @@ impl<T: NcTypeDescriptor> ConcreteVarToBe<T> {
         long_name: L,
         units: U,
         source_file_name: String,
-        source_file_sha256: String
+        source_file_sha256: String,
     ) -> Self {
         Self {
             name: name.to_string(),
@@ -273,12 +306,12 @@ impl<T: NcTypeDescriptor> ConcreteVarToBe<T> {
             units: units.to_string(),
             source_file_name,
             source_file_sha256,
-            extra_attrs: vec![]
+            extra_attrs: vec![],
         }
     }
 
     /// A constructor for variables calculated/derived from existing variables.
-    /// 
+    ///
     /// This will put "N/A" for the source checksum and make the source attribute
     /// indicate that it is a calculated variable. The `calculator` value should
     /// generally be the name of the type that calculated it, to make it easy
@@ -293,7 +326,7 @@ impl<T: NcTypeDescriptor> ConcreteVarToBe<T> {
         data: ArrayD<T>,
         long_name: L,
         units: U,
-        calculator: S
+        calculator: S,
     ) -> Self {
         Self {
             name: name.to_string(),
@@ -304,15 +337,19 @@ impl<T: NcTypeDescriptor> ConcreteVarToBe<T> {
             units: units.to_string(),
             source_file_name: format!("calculated by {calculator}"),
             source_file_sha256: "N/A".to_string(),
-            extra_attrs: vec![]
+            extra_attrs: vec![],
         }
     }
 
     /// Add an additional attribute to the variable to be.
-    /// 
+    ///
     /// `attname` will be the attribute name and `attvalue` its value. Note that "long_name", "units",
     /// "source_file_name", and "source_file_sha256" attributes will always be added.
-    pub(crate) fn add_attribute<N: ToString, V: Into<AttributeValue>>(&mut self, attname: N, attvalue: V) {
+    pub(crate) fn add_attribute<N: ToString, V: Into<AttributeValue>>(
+        &mut self,
+        attname: N,
+        attvalue: V,
+    ) {
         let attname = attname.to_string();
         let attvalue = attvalue.into();
         self.extra_attrs.push((attname, attvalue));
@@ -349,10 +386,10 @@ impl<T: NcTypeDescriptor> VarToBe for ConcreteVarToBe<T> {
 }
 
 /// Another [`VarToBe`] implementor for string data.
-/// 
+///
 /// Currently this assumes (1) that your string data will be 1D
 /// (excluding the string length as a dimension) and (2) you want
-/// the variable written as strings, not a character array. 
+/// the variable written as strings, not a character array.
 pub(crate) struct StrVarToBe<S: AsRef<str>> {
     name: String,
     group: Box<dyn VarGroup>,
@@ -362,12 +399,12 @@ pub(crate) struct StrVarToBe<S: AsRef<str>> {
     units: String,
     source_file_name: String,
     source_file_sha256: String,
-    extra_attrs: Vec<(String, AttributeValue)>
+    extra_attrs: Vec<(String, AttributeValue)>,
 }
 
-impl <S: AsRef<str>> StrVarToBe<S> {
+impl<S: AsRef<str>> StrVarToBe<S> {
     /// A constructor for variables calculated/derived from existing variables.
-    /// 
+    ///
     /// This will put "N/A" for the source checksum and make the source attribute
     /// indicate that it is a calculated variable. The `calculator` value should
     /// generally be the name of the type that calculated it, to make it easy
@@ -382,7 +419,7 @@ impl <S: AsRef<str>> StrVarToBe<S> {
         data: Array1<S>,
         long_name: L,
         units: U,
-        calculator: C
+        calculator: C,
     ) -> Self {
         Self {
             name: name.to_string(),
@@ -393,15 +430,19 @@ impl <S: AsRef<str>> StrVarToBe<S> {
             units: units.to_string(),
             source_file_name: format!("calculated by {calculator}"),
             source_file_sha256: "N/A".to_string(),
-            extra_attrs: vec![]
+            extra_attrs: vec![],
         }
     }
 
     /// Add an additional attribute to the variable to be.
-    /// 
+    ///
     /// `attname` will be the attribute name and `attvalue` its value. Note that "long_name", "units",
     /// "source_file_name", and "source_file_sha256" attributes will always be added.
-    pub(crate) fn add_attribute<N: ToString, V: Into<AttributeValue>>(&mut self, attname: N, attvalue: V) {
+    pub(crate) fn add_attribute<N: ToString, V: Into<AttributeValue>>(
+        &mut self,
+        attname: N,
+        attvalue: V,
+    ) {
         let attname = attname.to_string();
         let attvalue = attvalue.into();
         self.extra_attrs.push((attname, attvalue));
@@ -420,11 +461,9 @@ impl<S: AsRef<str>> VarToBe for StrVarToBe<S> {
     fn write(&self, ncgrp: &mut GroupMut, var_suffix: &str) -> netcdf::Result<()> {
         let full_name = format!("{}{var_suffix}", self.name);
         let mut ncvar = ncgrp.add_string_variable(&full_name, &[self.dimension])?;
-        
+
         for (i, s) in self.data.iter().enumerate() {
-            let ex = netcdf::Extents::Extent(
-                vec![netcdf::Extent::Index(i)]
-            );
+            let ex = netcdf::Extents::Extent(vec![netcdf::Extent::Index(i)]);
             ncvar.put_string(s.as_ref(), ex)?;
         }
 
@@ -440,13 +479,13 @@ impl<S: AsRef<str>> VarToBe for StrVarToBe<S> {
 }
 
 /// An interface to the underlying netCDF file.
-/// 
+///
 /// GGG netCDF files can either be written "flat" (with all variables in the root group,
 /// possibly with a suffix to distinguish secondary detector or experimental variables)
 /// or "hierarchical" (with secondary detector or experimental variables in child groups).
 /// This type will handle writing variables to the appropriate location and with the
 /// appropriate name depending on which option is selected.
-/// 
+///
 /// Any implementors will need to have internal state that keeps track of which file format
 /// was requested. [`DataGroup`] provides methods to get the correct suffix or group name
 /// for data in that group; see the its documentation for details.
@@ -458,12 +497,16 @@ pub(crate) trait GroupWriter: Send + Sync {
     fn write_variable(&self, variable: &dyn VarToBe) -> Result<(), WriteError>;
 
     /// Write a list of variables to the netCDF file.
-    /// 
+    ///
     /// Implementors should ensure that these variables will be written together in the netCDF file
     /// even if different data providers are running in parallel and calling this. If it received
     /// a progress bar instance, it should increment the bar for each variable written and set the
     /// message to the name of the variable being written.
-    fn write_many_variables(&self, variables: &[&dyn VarToBe], pb: Option<&ProgressBar>) -> Result<(), WriteError> {
+    fn write_many_variables(
+        &self,
+        variables: &[&dyn VarToBe],
+        pb: Option<&ProgressBar>,
+    ) -> Result<(), WriteError> {
         for &variable in variables {
             if let Some(pb) = pb {
                 pb.inc(1);
@@ -475,22 +518,24 @@ pub(crate) trait GroupWriter: Send + Sync {
     }
 }
 
-
 /// An implementation of [`GroupWriter`] for TCCON and EM27/SUN data.
 #[derive(Debug, Clone)]
 pub(crate) struct StdGroupWriter {
     nc_dset: Arc<Mutex<RefCell<netcdf::FileMut>>>,
     dim_lengths: HashMap<String, usize>,
-    use_groups: bool
+    use_groups: bool,
 }
 
 impl StdGroupWriter {
     pub(crate) fn new(nc_dset: netcdf::FileMut, use_groups: bool) -> Self {
-        let dim_iter = nc_dset.dimensions()
-            .map(|dim| (dim.name(), dim.len()));
+        let dim_iter = nc_dset.dimensions().map(|dim| (dim.name(), dim.len()));
         let dim_lengths = HashMap::from_iter(dim_iter);
         let nc_dset = Arc::new(Mutex::new(RefCell::new(nc_dset)));
-        Self { nc_dset, dim_lengths, use_groups }
+        Self {
+            nc_dset,
+            dim_lengths,
+            use_groups,
+        }
     }
 }
 
@@ -500,21 +545,23 @@ impl GroupWriter for StdGroupWriter {
     }
 
     fn write_variable(&self, variable: &dyn VarToBe) -> Result<(), WriteError> {
-        let nc_lock = self.nc_dset.lock()
-            .expect("NetCDF mutex was poisoned");
+        let nc_lock = self.nc_dset.lock().expect("NetCDF mutex was poisoned");
         let mut nc_dset = nc_lock.borrow_mut();
         Self::write_variable_inner(&mut nc_dset, variable, self.use_groups)
     }
-    
+
     /// Write multiple variables to the netCDF file sequentially.
-    /// 
+    ///
     /// This version of the method ensures that all the variables given are written
     /// one after the other, with no opportunity for other data providers to intersperse
     /// their own variables, so prefer this function if you want to keep variables from
     /// the same source grouped together in the netCDF file.
-    fn write_many_variables(&self, variables: &[&dyn VarToBe], pb: Option<&ProgressBar>) -> Result<(), WriteError> {
-        let nc_lock = self.nc_dset.lock()
-            .expect("NetCDF mutex was poisoned");
+    fn write_many_variables(
+        &self,
+        variables: &[&dyn VarToBe],
+        pb: Option<&ProgressBar>,
+    ) -> Result<(), WriteError> {
+        let nc_lock = self.nc_dset.lock().expect("NetCDF mutex was poisoned");
         let mut nc_dset = nc_lock.borrow_mut();
         for &variable in variables {
             if let Some(pb) = pb {
@@ -525,16 +572,20 @@ impl GroupWriter for StdGroupWriter {
         }
         Ok(())
     }
-
-    
 }
 
 impl StdGroupWriter {
-    fn write_variable_inner(nc_dset: &mut netcdf::FileMut, variable: &dyn VarToBe, use_groups: bool) -> Result<(), WriteError> {
+    fn write_variable_inner(
+        nc_dset: &mut netcdf::FileMut,
+        variable: &dyn VarToBe,
+        use_groups: bool,
+    ) -> Result<(), WriteError> {
         if use_groups {
             let grp_name = variable.group().group_name();
             let mut grp = if grp_name == "/" {
-                nc_dset.root_mut().expect("Should be able to access the root group")
+                nc_dset
+                    .root_mut()
+                    .expect("Should be able to access the root group")
             } else if nc_dset.group(grp_name)?.is_some() {
                 nc_dset.group_mut(grp_name)?.unwrap()
             } else {
@@ -544,7 +595,9 @@ impl StdGroupWriter {
             variable.write(&mut grp, "")?;
         } else {
             let suffix = variable.group().suffix();
-            let mut grp = nc_dset.root_mut().expect("Should be able to access the root group");
+            let mut grp = nc_dset
+                .root_mut()
+                .expect("Should be able to access the root group");
             variable.write(&mut grp, suffix)?;
         };
 
@@ -553,7 +606,7 @@ impl StdGroupWriter {
 }
 
 /// A struct representing data returned from the netCDF file.
-/// 
+///
 /// If a `units` attribute was not found, then the `units` field will be `None`.
 pub(crate) struct VarData<T: NcTypeDescriptor> {
     pub(crate) data: ArrayD<T>,
@@ -561,98 +614,155 @@ pub(crate) struct VarData<T: NcTypeDescriptor> {
 }
 
 /// A trait that allows callers to get a variable back from the netCDF file.
-/// 
+///
 /// This is used when we need to compute variables separately from where their
 /// inputs are read. Generally, it is preferred to have a data provider only
 /// copy data from one of GGG's files (possibly with some reindexing) and leave
 /// any computation of new data to a separate type.
 pub(crate) trait GroupAccessor: GroupWriter {
     /// Return the data and units of a given variable.
-    fn read_f32_variable(&self, varname: &str, group: &dyn VarGroup) -> Result<VarData<f32>, ReadError>;
+    fn read_f32_variable(
+        &self,
+        varname: &str,
+        group: &dyn VarGroup,
+    ) -> Result<VarData<f32>, ReadError>;
 }
 
 impl GroupAccessor for StdGroupWriter {
-    fn read_f32_variable(&self, varname: &str, group: &dyn VarGroup) -> Result<VarData<f32>, ReadError> {
+    fn read_f32_variable(
+        &self,
+        varname: &str,
+        group: &dyn VarGroup,
+    ) -> Result<VarData<f32>, ReadError> {
         self.read_variable::<f32>(varname, group)
     }
 }
 
 impl StdGroupWriter {
-    fn read_variable<T: NcTypeDescriptor + Copy>(&self, varname: &str, group: &dyn VarGroup) -> Result<VarData<T>, ReadError> {
-        let nc_lock = self.nc_dset.lock()
-            .expect("NetCDF mutex was poisoned");
+    fn read_variable<T: NcTypeDescriptor + Copy>(
+        &self,
+        varname: &str,
+        group: &dyn VarGroup,
+    ) -> Result<VarData<T>, ReadError> {
+        let nc_lock = self.nc_dset.lock().expect("NetCDF mutex was poisoned");
         let nc_dset = nc_lock.borrow();
 
         if self.use_groups {
             let grp_name = group.group_name();
             let grp = if grp_name == "/" {
-                nc_dset.root().expect("Should be able to access the root group")
+                nc_dset
+                    .root()
+                    .expect("Should be able to access the root group")
             } else {
-                nc_dset.group(grp_name)?.ok_or_else(|| ReadError::var_not_found(varname, grp_name))?
+                nc_dset
+                    .group(grp_name)?
+                    .ok_or_else(|| ReadError::var_not_found(varname, grp_name))?
             };
 
-            let var = grp.variable(varname).ok_or_else(|| ReadError::var_not_found(varname, grp_name))?;
+            let var = grp
+                .variable(varname)
+                .ok_or_else(|| ReadError::var_not_found(varname, grp_name))?;
             let data = var.get::<T, _>(netcdf::Extents::All)?;
-            let units = var.attribute_value("units")
+            let units = var
+                .attribute_value("units")
                 .transpose()?
-                .map(|v| if let AttributeValue::Str(s) = v {
-                    Some(s)
-                } else {
-                    None
-                }).flatten();
-            Ok(VarData{ data, units })
+                .map(|v| {
+                    if let AttributeValue::Str(s) = v {
+                        Some(s)
+                    } else {
+                        None
+                    }
+                })
+                .flatten();
+            Ok(VarData { data, units })
         } else {
             let suffix = group.suffix();
-            let grp = nc_dset.root().expect("Should be able to access the root group");
+            let grp = nc_dset
+                .root()
+                .expect("Should be able to access the root group");
             let varname = format!("{varname}{suffix}");
-            let var = grp.variable(&varname).ok_or_else(|| ReadError::var_not_found(varname, "/"))?;
+            let var = grp
+                .variable(&varname)
+                .ok_or_else(|| ReadError::var_not_found(varname, "/"))?;
             let data = var.get::<T, _>(netcdf::Extents::All)?;
-            let units = var.attribute_value("units")
+            let units = var
+                .attribute_value("units")
                 .transpose()?
-                .map(|v| if let AttributeValue::Str(s) = v {
-                    Some(s)
-                } else {
-                    None
-                }).flatten();
+                .map(|v| {
+                    if let AttributeValue::Str(s) = v {
+                        Some(s)
+                    } else {
+                        None
+                    }
+                })
+                .flatten();
             Ok(VarData { data, units })
         }
     }
 }
 
-
 pub(crate) trait GroupSelector: Send + Sync {
     fn get_main_group(&self) -> &dyn VarGroup;
     fn boxed_main_group(&self) -> Box<dyn VarGroup>;
-    fn get_group_for_var(&self, nc_varname: &str, orig_varname: Option<&str>) -> Option<&dyn VarGroup>;
-    fn boxed_group_for_var(&self, nc_varname: &str, orig_varname: Option<&str>) -> Option<Box<dyn VarGroup>>;
+    fn get_group_for_var(
+        &self,
+        nc_varname: &str,
+        orig_varname: Option<&str>,
+    ) -> Option<&dyn VarGroup>;
+    fn boxed_group_for_var(
+        &self,
+        nc_varname: &str,
+        orig_varname: Option<&str>,
+    ) -> Option<Box<dyn VarGroup>>;
 }
 
-
 pub(crate) struct StdGroupSelector {
-    gas_groups: HashMap<String, StdDataGroup>
+    gas_groups: HashMap<String, StdDataGroup>,
 }
 
 impl StdGroupSelector {
-    pub(crate) fn new<P: AsRef<Path>>(prefix_file: &Path, col_files: &[P]) -> error_stack::Result<Self, CliError> {
-        let prefixer = TcconWindowPrefixes::new(prefix_file)
-            .change_context_lazy(|| CliError::input_error("Failed to read the file defining prefixes for given frequency ranges"))?;
+    pub(crate) fn new<P: AsRef<Path>>(
+        prefix_file: &Path,
+        col_files: &[P],
+    ) -> error_stack::Result<Self, CliError> {
+        let prefixer = TcconWindowPrefixes::new(prefix_file).change_context_lazy(|| {
+            CliError::input_error(
+                "Failed to read the file defining prefixes for given frequency ranges",
+            )
+        })?;
 
         // Take each of the .col files and create a map of gas names to groups. This assumes that ALL gases from a secondary detector
         // get the prefixes, not just those that would conflict with the same gas from another detector.
         let mut gas_groups = HashMap::new();
         for col_file in col_files {
             let col_file = col_file.as_ref();
-            let window = get_window_from_col_file(col_file)
-                .change_context_lazy(|| CliError::input_error(format!("error getting window from .col file name ({})", col_file.display())))?;
-            let prefix_info = prefixer.get_entry(window)
-                .change_context_lazy(|| CliError::input_error(format!("error getting group prefix for window '{window}'")))?;
-            let (gas, _) = parse_window_name(window)
-                .change_context_lazy(|| CliError::input_error(format!("could not extract the gas name from window '{window}'")))?;
+            let window = get_window_from_col_file(col_file).change_context_lazy(|| {
+                CliError::input_error(format!(
+                    "error getting window from .col file name ({})",
+                    col_file.display()
+                ))
+            })?;
+            let prefix_info = prefixer.get_entry(window).change_context_lazy(|| {
+                CliError::input_error(format!("error getting group prefix for window '{window}'"))
+            })?;
+            let (gas, _) = parse_window_name(window).change_context_lazy(|| {
+                CliError::input_error(format!(
+                    "could not extract the gas name from window '{window}'"
+                ))
+            })?;
             let gas = format!("{}{gas}", prefix_info.prefix.as_deref().unwrap_or(""));
-            
+
             let gas_group = if prefix_info.prefix.is_some() {
-                let suffix = prefix_info.nc_suffix.as_deref().unwrap_or_else(|| "").to_string();
-                let group = prefix_info.nc_group.as_deref().unwrap_or_else(|| "/").to_string();
+                let suffix = prefix_info
+                    .nc_suffix
+                    .as_deref()
+                    .unwrap_or_else(|| "")
+                    .to_string();
+                let group = prefix_info
+                    .nc_group
+                    .as_deref()
+                    .unwrap_or_else(|| "/")
+                    .to_string();
                 tracing::debug!("{gas} will go into the {group} group");
                 StdDataGroup::Experimental { group, suffix }
             } else {
@@ -667,20 +777,21 @@ impl StdGroupSelector {
                         gas_groups.get(&gas).unwrap(),
                         gas_group,
                         prefix_file.display()
-                    )).into())
+                    )).into());
                 }
             } else {
                 gas_groups.insert(gas, gas_group);
             }
-            
         }
         Ok(Self { gas_groups })
     }
 
-    fn get_group_inner(&self, nc_varname: &str, orig_varname: Option<&str>) -> Option<&StdDataGroup> {
-        let varname = orig_varname
-            .unwrap_or(nc_varname)
-            .trim_start_matches('x');
+    fn get_group_inner(
+        &self,
+        nc_varname: &str,
+        orig_varname: Option<&str>,
+    ) -> Option<&StdDataGroup> {
+        let varname = orig_varname.unwrap_or(nc_varname).trim_start_matches('x');
 
         if varname.ends_with("_error") {
             let tmp = varname.replace("_error", "");
@@ -688,7 +799,6 @@ impl StdGroupSelector {
         } else {
             self.gas_groups.get(varname)
         }
-
     }
 }
 
@@ -701,12 +811,22 @@ impl GroupSelector for StdGroupSelector {
         Box::new(StdDataGroup::Main)
     }
 
-    fn get_group_for_var(&self, nc_varname: &str, orig_varname: Option<&str>) -> Option<&dyn VarGroup> {
-        self.get_group_inner(nc_varname, orig_varname).map(|g| g as &dyn VarGroup)
+    fn get_group_for_var(
+        &self,
+        nc_varname: &str,
+        orig_varname: Option<&str>,
+    ) -> Option<&dyn VarGroup> {
+        self.get_group_inner(nc_varname, orig_varname)
+            .map(|g| g as &dyn VarGroup)
     }
 
-    fn boxed_group_for_var(&self, nc_varname: &str, orig_varname: Option<&str>) -> Option<Box<dyn VarGroup>> {
+    fn boxed_group_for_var(
+        &self,
+        nc_varname: &str,
+        orig_varname: Option<&str>,
+    ) -> Option<Box<dyn VarGroup>> {
         // Box::new(self.get_group_inner(nc_varname, orig_varname).to_owned())
-        self.get_group_inner(nc_varname, orig_varname).map(|g| Box::new(g.to_owned()) as Box<dyn VarGroup>)
+        self.get_group_inner(nc_varname, orig_varname)
+            .map(|g| Box::new(g.to_owned()) as Box<dyn VarGroup>)
     }
 }

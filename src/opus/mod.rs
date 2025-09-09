@@ -1,10 +1,22 @@
-use std::{path::{Path, PathBuf}, fs::File, io::{Seek, Read}, str::FromStr, slice::ChunksExact, fmt::{Debug, Display}, collections::HashMap};
+use std::{
+    collections::HashMap,
+    fmt::{Debug, Display},
+    fs::File,
+    io::{Read, Seek},
+    path::{Path, PathBuf},
+    slice::ChunksExact,
+    str::FromStr,
+};
 
+use crate::{
+    opus::constants::bruker::BrukerParType,
+    readers::runlogs,
+    utils::{self, GggError},
+};
 use itertools::Itertools;
 use ndarray::Array1;
-use crate::{opus::constants::bruker::BrukerParType, readers::runlogs, utils::{self,GggError}};
 
-use self::constants::bruker::{BrukerParValue, BrukerBlockType};
+use self::constants::bruker::{BrukerBlockType, BrukerParValue};
 
 pub mod constants;
 
@@ -15,13 +27,22 @@ pub enum OpusError {
     #[error("Error reading from Opus file: {0}")]
     ReadError(#[from] std::io::Error),
     #[error("{descr} value did not match expected: expected {expected}, got {actual}")]
-    StaticValueMismatch{descr: &'static str, expected: f64, actual: f64},
+    StaticValueMismatch {
+        descr: &'static str,
+        expected: f64,
+        actual: f64,
+    },
     #[error("Invalid {pointer_descr} pointer: {inner}")]
-    InvalidPointer{pointer_descr: &'static str, inner: OpusPointerError},
+    InvalidPointer {
+        pointer_descr: &'static str,
+        inner: OpusPointerError,
+    },
     #[error("Could not decode bytes as a UTF-8/ASCII string: {0}")]
     InvalidUtf8(#[from] std::string::FromUtf8Error),
-    #[error("Length of header parameter ({actual}) does not match expected for the type ({expected})")]
-    ParamLengthMismatch{expected: usize, actual: usize},
+    #[error(
+        "Length of header parameter ({actual}) does not match expected for the type ({expected})"
+    )]
+    ParamLengthMismatch { expected: usize, actual: usize },
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -31,28 +52,36 @@ pub enum OpusPointerError {
     #[error("directory pointer overlaps header")]
     OverlapsHeader,
     #[error("directory pointer is not on a word boundary")]
-    NotOnWord
+    NotOnWord,
 }
 
 #[derive(Debug, thiserror::Error)]
 pub enum OpusTypeError {
     #[error("Could not convert Opus generic value into {expected}, was {actual}")]
-    ValueIntoError{expected: String, actual: String}
+    ValueIntoError { expected: String, actual: String },
 }
 
 #[derive(Debug)]
 pub struct MissingOpusParameterError {
     block: BrukerBlockType,
     parameter: String,
-    block_missing: bool
+    block_missing: bool,
 }
 
 impl Display for MissingOpusParameterError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if self.block_missing {
-            write!(f, "Requested block {:?} missing from Opus header", self.block)
+            write!(
+                f,
+                "Requested block {:?} missing from Opus header",
+                self.block
+            )
         } else {
-            write!(f, "Requested parameter {} from block {:?} missing from Opus header", self.parameter, self.block)
+            write!(
+                f,
+                "Requested parameter {} from block {:?} missing from Opus header",
+                self.parameter, self.block
+            )
         }
     }
 }
@@ -62,17 +91,22 @@ impl std::error::Error for MissingOpusParameterError {}
 #[derive(Debug)]
 pub enum OpusParameterSearchError {
     NotFound(String),
-    MultipleFound(String, Vec<BrukerBlockType>)
+    MultipleFound(String, Vec<BrukerBlockType>),
 }
 
 impl Display for OpusParameterSearchError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            OpusParameterSearchError::NotFound(param_name) => write!(f, "Parameter '{param_name}' not present in any block"),
+            OpusParameterSearchError::NotFound(param_name) => {
+                write!(f, "Parameter '{param_name}' not present in any block")
+            }
             OpusParameterSearchError::MultipleFound(param_name, blocks) => {
                 let n = blocks.len();
                 let bstr = blocks.iter().map(|b| b.to_string()).join(", ");
-                write!(f, "Parameter '{param_name}' was found in {n} blocks: {bstr}")
+                write!(
+                    f,
+                    "Parameter '{param_name}' was found in {n} blocks: {bstr}"
+                )
             }
         }
     }
@@ -85,7 +119,10 @@ impl OpusParameterSearchError {
         Self::NotFound(parameter.to_string())
     }
 
-    pub fn multiple_found<S: ToString, B: IntoIterator<Item = BrukerBlockType>>(parameter: S, blocks: B) -> Self {
+    pub fn multiple_found<S: ToString, B: IntoIterator<Item = BrukerBlockType>>(
+        parameter: S,
+        blocks: B,
+    ) -> Self {
         let blocks = blocks.into_iter().collect_vec();
         Self::MultipleFound(parameter.to_string(), blocks)
     }
@@ -94,101 +131,129 @@ impl OpusParameterSearchError {
 pub struct Spectrum {
     pub path: PathBuf,
     pub freq: Array1<f32>,
-    pub spec: Array1<f32>
+    pub spec: Array1<f32>,
 }
 
 /// Read the spectrum pointed to by a runlog data record
-/// 
+///
 /// Aside from the input types, this differs from [`read_spectrum`] in that this uses [`utils::find_spectrum`]
 /// to search for the spectrum named in the data record, rather than requiring the exact path to the spectrum
 /// to be given.
-/// 
+///
 /// In addition to the `Err` cases for [`read_spectrum`], this function will return an `Err` if:
-/// 
+///
 /// * reading the `$GGGPATH/config/data_part.lst` file fails, or
 /// * the spectrum named cannot be found in any of the directories listed in `$GGGPATH/config/data_part.lst`.
-pub fn read_spectrum_from_runlog_rec(data_rec: &runlogs::RunlogDataRec, data_part: &utils::DataPartition) -> Result<Spectrum, GggError> {
+pub fn read_spectrum_from_runlog_rec(
+    data_rec: &runlogs::RunlogDataRec,
+    data_part: &utils::DataPartition,
+) -> Result<Spectrum, GggError> {
     let spec_file = if let Some(f) = data_part.find_spectrum(&data_rec.spectrum_name) {
         f
-    }else{
-        return Err(GggError::CouldNotOpen { 
-            descr: "spectrum".to_owned(), 
-            path: PathBuf::from_str(&data_rec.spectrum_name).unwrap(), 
-            reason: "spectrum not found".to_owned()
-        })
+    } else {
+        return Err(GggError::CouldNotOpen {
+            descr: "spectrum".to_owned(),
+            path: PathBuf::from_str(&data_rec.spectrum_name).unwrap(),
+            reason: "spectrum not found".to_owned(),
+        });
     };
 
     read_spectrum(
         spec_file,
-        data_rec.bpw, 
-        data_rec.ifirst,  
-        data_rec.delta_nu, 
-        data_rec.pointer
+        data_rec.bpw,
+        data_rec.ifirst,
+        data_rec.delta_nu,
+        data_rec.pointer,
     )
 }
 
 /// Read an Opus-format binary spectrum.
-/// 
+///
 /// # Parameters
 /// * `spec_file` - path to the spectrum file
 /// * `bpw` - the bytes-per-word value from the runlog/spectrum header. Used to interpret how the binary data is converted;
 ///   +/- 2 means it is interpreted as a series of `i16` values, +/- 4 means it is interpreted as a series of `f32` values.
-///   Positive means big endian, negative means little endian. 
+///   Positive means big endian, negative means little endian.
 /// * `ifirst` - the number of spectral points between 0 and the first of the spectrum, i.e. the frequency of the first point
 ///   will be `ifirst * delta_nu`.
 /// * `delta_nu` - the wavenumber spacing between adjacent spectral points.
 /// * `pointer` - the number of bytes that make up the header in the spectrum, i.e. the address of the first spectral data in
 ///   the file.
-/// 
+///
 /// # Returns
 /// A [`Result`] containing the [`Spectrum`] structure with the frequencies and spectral values. An `Err` will be returned if:
-/// 
+///
 /// * the `spec_file` could not be opened,
 /// * moving the file pointer past the header fails,
 /// * reading in the spectral data fails,
 /// * the number of bytes of spectral data is not a multiple of `bpw.abs()`, or
 /// * an unimplemented `bpw` value is passed,
-/// 
+///
 /// # See also
 /// * [`read_spectrum_from_runlog_rec`] - read the spectrum defined by a runlog data record
-pub fn read_spectrum(spec_file: PathBuf, bpw: i8, ifirst: usize, delta_nu: f64, pointer: i32) -> Result<Spectrum, GggError> {
-    let mut spec_h = File::open(&spec_file)
-        .or_else(|e| Err(GggError::CouldNotOpen { descr: "spectrum".to_owned(), path: spec_file.to_owned(), reason: e.to_string() }))?;
+pub fn read_spectrum(
+    spec_file: PathBuf,
+    bpw: i8,
+    ifirst: usize,
+    delta_nu: f64,
+    pointer: i32,
+) -> Result<Spectrum, GggError> {
+    let mut spec_h = File::open(&spec_file).or_else(|e| {
+        Err(GggError::CouldNotOpen {
+            descr: "spectrum".to_owned(),
+            path: spec_file.to_owned(),
+            reason: e.to_string(),
+        })
+    })?;
 
     // For now, just seek past the header because we're not reading it
-    spec_h.seek(std::io::SeekFrom::Start(pointer as u64))
-        .or_else(|e| Err(GggError::CouldNotRead { path: spec_file.to_owned(), reason: format!("{e} (while moving past header)") }))?;
+    spec_h
+        .seek(std::io::SeekFrom::Start(pointer as u64))
+        .or_else(|e| {
+            Err(GggError::CouldNotRead {
+                path: spec_file.to_owned(),
+                reason: format!("{e} (while moving past header)"),
+            })
+        })?;
 
-    // Next just read in the rest of the file 
+    // Next just read in the rest of the file
     let mut buf = vec![];
-    spec_h.read_to_end(&mut buf)
-        .or_else(|e| Err(GggError::CouldNotRead { path: spec_file.to_owned(), reason: format!("{e} (while reading spectrum data)") }))?;
+    spec_h.read_to_end(&mut buf).or_else(|e| {
+        Err(GggError::CouldNotRead {
+            path: spec_file.to_owned(),
+            reason: format!("{e} (while reading spectrum data)"),
+        })
+    })?;
 
     let spec = SpecBytesToFloat::convert_spectrum(&buf, bpw)?;
     let npts = spec.len();
-    
+
     let mut freq = ndarray::Array1::zeros(npts);
-    
-    for i in 0..npts{
+
+    for i in 0..npts {
         freq[i] = (delta_nu as f32) * (i + ifirst) as f32;
     }
 
-    Ok(Spectrum { path: spec_file, freq, spec })
+    Ok(Spectrum {
+        path: spec_file,
+        freq,
+        spec,
+    })
 }
 
 /// A converter that handles the various Opus spectrum formats
-/// 
+///
 /// To use: call `convert_spectrum` with the raw bytes read from the Opus spectrum.
 enum SpecBytesToFloat {
     IntBigEndian,
     IntLittleEndian,
     FloatBigEndian,
-    FloatLittleEndian
+    FloatLittleEndian,
 }
 
 impl SpecBytesToFloat {
     /// Convert spectrum bytes into a float32 array
-    /// 
+    ///
     /// # Parameters
     /// * `buf` - the slice of bytes read from the spectrum
     /// * `bpw` - the number of bytes per spectrum point. Only +/- 2 and +/- 4 currently implemented.
@@ -203,7 +268,6 @@ impl SpecBytesToFloat {
         Ok(spec)
     }
 
-
     /// Create the appropriate variant for the given bytes per word and sets up the correct chunk iterator
     fn new_from_buf<'b>(buf: &'b [u8], bpw: i8) -> Result<(Self, ChunksExact<'b, u8>), GggError> {
         let abs_bpw = bpw.abs() as usize;
@@ -217,58 +281,79 @@ impl SpecBytesToFloat {
             -2 => Self::IntLittleEndian,
             4 => Self::FloatBigEndian,
             -4 => Self::FloatLittleEndian,
-            _ => return Err(GggError::NotImplemented(format!("reading spectra with bpw = {bpw}")))
+            _ => {
+                return Err(GggError::NotImplemented(format!(
+                    "reading spectra with bpw = {bpw}"
+                )))
+            }
         };
 
         let iter = buf.chunks_exact(abs_bpw);
         Ok((me, iter))
     }
-    
+
     /// Convert one set of bytes to an f32 value
-    /// 
+    ///
     /// # Panics
     /// Will panic if given a slice of bytes with a different length than the variant is expecting (2 for the ints and 4 for the floats).
     /// It is not recommended to call this method directly but instead to use `convert_spectrum`, which ensures the correct chunking is done.
     fn convert(&self, bytes: &[u8]) -> f32 {
         match self {
             SpecBytesToFloat::IntBigEndian => {
-                let i = i16::from_be_bytes(bytes.try_into().expect(&format!("Passed the wrong number of bytes to BytesToFloat::convert, expected 2, got {}", bytes.len())));
+                let i = i16::from_be_bytes(bytes.try_into().expect(&format!(
+                    "Passed the wrong number of bytes to BytesToFloat::convert, expected 2, got {}",
+                    bytes.len()
+                )));
                 (i as f32) / 15000.0
-            },
+            }
             SpecBytesToFloat::IntLittleEndian => {
-                let i = i16::from_le_bytes(bytes.try_into().expect(&format!("Passed the wrong number of bytes to BytesToFloat::convert, expected 2, got {}", bytes.len())));
+                let i = i16::from_le_bytes(bytes.try_into().expect(&format!(
+                    "Passed the wrong number of bytes to BytesToFloat::convert, expected 2, got {}",
+                    bytes.len()
+                )));
                 (i as f32) / 15000.0
-            },
+            }
             SpecBytesToFloat::FloatBigEndian => {
-                f32::from_be_bytes(bytes.try_into().expect(&format!("Passed the wrong number of bytes to BytesToFloat::convert, expected 4, got {}", bytes.len())))
-            },
+                f32::from_be_bytes(bytes.try_into().expect(&format!(
+                    "Passed the wrong number of bytes to BytesToFloat::convert, expected 4, got {}",
+                    bytes.len()
+                )))
+            }
             SpecBytesToFloat::FloatLittleEndian => {
-                f32::from_le_bytes(bytes.try_into().expect(&format!("Passed the wrong number of bytes to BytesToFloat::convert, expected 4, got {}", bytes.len())))
-            },
-
+                f32::from_le_bytes(bytes.try_into().expect(&format!(
+                    "Passed the wrong number of bytes to BytesToFloat::convert, expected 4, got {}",
+                    bytes.len()
+                )))
+            }
         }
     }
 }
 
 /// Calculates the number of points in an Opus binary spectrum
-/// 
+///
 /// # Parameters
 /// * `spec_name` - the file name of the spectrum. The path is not needed, the paths
 ///   configued in `$GGGPATH/config/data_part.lst` are searched to find this spectrum.
 /// * `pointer` - the pointer value from the runlog data record for this spectrum.
 /// * `bytes_per_word` - the BPW value from the runlog data record for this spectrum.
-/// 
+///
 /// # Returns
 /// The number of data points expected from the spectrum. It will return an error if:
 /// * it cannot find the spectrum,
 /// * it cannot open the spectrum file, or
 /// * it cannot get the size of the spectrum file.
-pub fn get_spectrum_num_points(spec_name: &str, data_part: &utils::DataPartition, pointer: i32, bytes_per_word: i8) -> Result<u64, std::io::Error> {
-    let p = data_part.find_spectrum(spec_name)
-        .ok_or_else(|| std::io::Error::new(
+pub fn get_spectrum_num_points(
+    spec_name: &str,
+    data_part: &utils::DataPartition,
+    pointer: i32,
+    bytes_per_word: i8,
+) -> Result<u64, std::io::Error> {
+    let p = data_part.find_spectrum(spec_name).ok_or_else(|| {
+        std::io::Error::new(
             std::io::ErrorKind::NotFound,
-            format!("Unable to find spectrum {spec_name}")
-        ))?;
+            format!("Unable to find spectrum {spec_name}"),
+        )
+    })?;
     let f = std::fs::File::open(p)?;
     let meta = f.metadata()?;
     let file_length = meta.len();
@@ -277,11 +362,7 @@ pub fn get_spectrum_num_points(spec_name: &str, data_part: &utils::DataPartition
     Ok((file_length - pointer) / abpw)
 }
 
-
-
-fn read_spectrum_header(spec_name: &str) {
-    
-}
+fn read_spectrum_header(spec_name: &str) {}
 
 struct HeaderByteReader {
     is_big_endian: bool,
@@ -290,7 +371,9 @@ struct HeaderByteReader {
 impl Default for HeaderByteReader {
     fn default() -> Self {
         // It looks like Opus headers always use little-endian?
-        Self { is_big_endian: false }
+        Self {
+            is_big_endian: false,
+        }
     }
 }
 
@@ -332,7 +415,7 @@ impl HeaderByteReader {
     }
 
     /// Read `string_length` bytes and interpret them as a UTF-8 string
-    /// 
+    ///
     /// Note that:
     /// - this may return an error if the bytes are not valid UTF-8 (which includes ASCII as a subset)
     /// - the returned string will have any trailing 0 bytes removed
@@ -344,7 +427,10 @@ impl HeaderByteReader {
         // in the byte. Since we're dealing with 1 byte characters, endianness shouldn't matter.
         // However, these are null-terminated strings so we need to cut them off at the first
         // byte == 0
-        let inull = buf.iter().position(|&b| b == 0).unwrap_or_else(|| buf.len());
+        let inull = buf
+            .iter()
+            .position(|&b| b == 0)
+            .unwrap_or_else(|| buf.len());
         let s = String::from_utf8(buf[..inull].to_vec())?;
         Ok(s.trim_end_matches(char::from(0)).to_string())
     }
@@ -366,58 +452,74 @@ struct HeaderBlockDef<T: Copy + Clone> {
     ipoint: usize,
 }
 
-
 #[derive(Debug, PartialEq)]
 pub struct IgramHeaderMetadata {
     pointer: usize,
     dir_max_size: usize,
     num_dirs: usize,
-    blocks: Vec<HeaderBlockDef<constants::bruker::BrukerBlockType>>
+    blocks: Vec<HeaderBlockDef<constants::bruker::BrukerBlockType>>,
 }
 
 impl IgramHeaderMetadata {
-    fn read_from_file(igram_file: &mut std::fs::File, reader: &HeaderByteReader, include_unknown_blocks: bool) -> OpusResult<Self> {
+    fn read_from_file(
+        igram_file: &mut std::fs::File,
+        reader: &HeaderByteReader,
+        include_unknown_blocks: bool,
+    ) -> OpusResult<Self> {
         // Check the magic value
         let igram_magic = reader.read_i32(igram_file)?;
         if igram_magic != constants::bruker::MAGIC {
-            return Err(OpusError::StaticValueMismatch { descr: "magic", expected: constants::bruker::MAGIC.into(), actual: igram_magic.into() })
+            return Err(OpusError::StaticValueMismatch {
+                descr: "magic",
+                expected: constants::bruker::MAGIC.into(),
+                actual: igram_magic.into(),
+            });
         }
 
         let version = reader.read_f64(igram_file)?;
         if (version - constants::bruker::PRGM_VERS).abs() > 0.01 {
-            return Err(OpusError::StaticValueMismatch { descr: "program_version", expected: constants::bruker::PRGM_VERS, actual: version })
+            return Err(OpusError::StaticValueMismatch {
+                descr: "program_version",
+                expected: constants::bruker::PRGM_VERS,
+                actual: version,
+            });
         }
 
         // Now get the directory pointer and check it is valid
         let dir_pointer = reader.read_i32(igram_file)?;
         if dir_pointer < 0 {
-            return Err(OpusError::InvalidPointer { 
-                pointer_descr: "directory", inner: OpusPointerError::Negative
+            return Err(OpusError::InvalidPointer {
+                pointer_descr: "directory",
+                inner: OpusPointerError::Negative,
             });
         }
         if dir_pointer < 24 {
-            return Err(OpusError::InvalidPointer { 
-                pointer_descr: "directory", inner: OpusPointerError::OverlapsHeader
+            return Err(OpusError::InvalidPointer {
+                pointer_descr: "directory",
+                inner: OpusPointerError::OverlapsHeader,
             });
         }
         if dir_pointer % 4 != 0 {
-            return Err(OpusError::InvalidPointer { 
-                pointer_descr: "directory", inner: OpusPointerError::NotOnWord
+            return Err(OpusError::InvalidPointer {
+                pointer_descr: "directory",
+                inner: OpusPointerError::NotOnWord,
             });
         }
 
         // Next the maximum and actual number of directory entries
         let max_dir_size = reader.read_i32(igram_file)?;
         if max_dir_size < 0 {
-            return Err(OpusError::InvalidPointer { 
-                pointer_descr: "directory max size", inner: OpusPointerError::Negative
-            })
+            return Err(OpusError::InvalidPointer {
+                pointer_descr: "directory max size",
+                inner: OpusPointerError::Negative,
+            });
         }
 
         let curr_num_dir = reader.read_i32(igram_file)?;
         if curr_num_dir < 0 {
-            return Err(OpusError::InvalidPointer { 
-                pointer_descr: "directory current size", inner: OpusPointerError::Negative
+            return Err(OpusError::InvalidPointer {
+                pointer_descr: "directory current size",
+                inner: OpusPointerError::Negative,
             });
         }
 
@@ -429,7 +531,7 @@ impl IgramHeaderMetadata {
             let block_length = reader.read_i32(igram_file)?;
             let block_pointer = reader.read_i32(igram_file)?;
 
-            let block = HeaderBlockDef{
+            let block = HeaderBlockDef {
                 itype: constants::bruker::BrukerBlockType::from(block_type),
                 ilen: block_length as usize,
                 ipoint: block_pointer as usize,
@@ -440,15 +542,19 @@ impl IgramHeaderMetadata {
             }
         }
 
-        Ok(Self { pointer: dir_pointer as usize, dir_max_size: max_dir_size as usize, num_dirs: curr_num_dir as usize, blocks })
+        Ok(Self {
+            pointer: dir_pointer as usize,
+            dir_max_size: max_dir_size as usize,
+            num_dirs: curr_num_dir as usize,
+            blocks,
+        })
     }
 }
-
 
 #[derive(Debug)]
 pub struct IgramHeader {
     metadata: IgramHeaderMetadata,
-    parameter_blocks: HashMap<BrukerBlockType, HashMap<String, BrukerParValue>>
+    parameter_blocks: HashMap<BrukerBlockType, HashMap<String, BrukerParValue>>,
 }
 
 impl IgramHeader {
@@ -456,11 +562,12 @@ impl IgramHeader {
         let mut igm = std::fs::File::open(inteferogram)?;
         // This assumes that Opus igrams are always little endian - need to confirm that.
         let byte_reader = HeaderByteReader::default();
-        let header_metadata = IgramHeaderMetadata::read_from_file(&mut igm, & byte_reader, false)?;
+        let header_metadata = IgramHeaderMetadata::read_from_file(&mut igm, &byte_reader, false)?;
         let mut block_values = HashMap::new();
 
         for block_definition in header_metadata.blocks.iter() {
-            if block_definition.itype.is_data_block() || block_definition.itype.is_directory_block() {
+            if block_definition.itype.is_data_block() || block_definition.itype.is_directory_block()
+            {
                 // skip the data blocks for now, we just want header information
                 // also skip directory block; we don't use it and it's a lot of data that clutters up printing the struct.
                 continue;
@@ -472,11 +579,15 @@ impl IgramHeader {
 
         Ok(IgramHeader {
             metadata: header_metadata,
-            parameter_blocks: block_values
+            parameter_blocks: block_values,
         })
     }
 
-    fn read_param_block(header_def: &HeaderBlockDef<constants::bruker::BrukerBlockType>, reader: &HeaderByteReader, f: &mut std::fs::File) -> OpusResult<HashMap<String, BrukerParValue>> {
+    fn read_param_block(
+        header_def: &HeaderBlockDef<constants::bruker::BrukerBlockType>,
+        reader: &HeaderByteReader,
+        f: &mut std::fs::File,
+    ) -> OpusResult<HashMap<String, BrukerParValue>> {
         let mut parameters = HashMap::new();
         f.seek(std::io::SeekFrom::Start(header_def.ipoint as u64))?;
         loop {
@@ -485,7 +596,9 @@ impl IgramHeader {
             // in fewer parameters from this function than the Perl output. Looking back at i2s, it only stops searching for
             // parameters when the next *parameter length* is 0, so that's what we do here.
             match Self::read_param(reader, f)? {
-                Some((param_key, param_val, _)) => { parameters.insert(param_key, param_val); },
+                Some((param_key, param_val, _)) => {
+                    parameters.insert(param_key, param_val);
+                }
                 None => break,
             }
         }
@@ -494,20 +607,23 @@ impl IgramHeader {
     }
 
     /// Read the next parameter from the Opus header
-    /// 
+    ///
     /// # Inputs
     /// - `reader`: the `HeaderByteReader` configured to correctly interpret the bytes in the header
     /// - `f`: handle to the Opus file/slice, it must be positioned so that the next byte read is the first
     /// byte of the parameter name.
-    /// 
+    ///
     /// # Outputs
     /// - The parameter name (any null characters are trimmed)
     /// - The parameter value
     /// - The number of bytes read
-    /// 
+    ///
     /// If the parameter size was 0, then this returns `Ok(None)` to indicate that we've reached the
     /// end of valid parameters in an Opus header block.
-    fn read_param(reader: &HeaderByteReader, f: &mut std::fs::File) -> OpusResult<Option<(String, BrukerParValue, usize)>> {
+    fn read_param(
+        reader: &HeaderByteReader,
+        f: &mut std::fs::File,
+    ) -> OpusResult<Option<(String, BrukerParValue, usize)>> {
         // Each Bruker parameter should consist of:
         //  - 4 bytes for the parameter name
         //  - 2 bytes for the parameter type
@@ -520,11 +636,11 @@ impl IgramHeader {
         if param_nbytes == 0 {
             // This function may be called on a parameter that doesn't actually exist, which is when the number of bytes = 0.
             // Indicate that by returning a None.
-            return Ok(None)
+            return Ok(None);
         }
 
-        // TODO: Enums might still need debugging; in the IgramSecondaryStatus block, which I think matches up to the 
-        // "Data Parameters IgSm/2.Chn." output of OpusHdr, my code has DXU = WN, but OpusHdr has DXU2 = PNT. Except - 
+        // TODO: Enums might still need debugging; in the IgramSecondaryStatus block, which I think matches up to the
+        // "Data Parameters IgSm/2.Chn." output of OpusHdr, my code has DXU = WN, but OpusHdr has DXU2 = PNT. Except -
         // there's a *second* "Data Parameters IgSm/2.Chn." block output from OpusHdr which *does* have DXU2 = WN - what!?
         let param_type: BrukerParType = param_type.into();
         param_type.check_par_length(param_nbytes)?;
@@ -534,9 +650,11 @@ impl IgramHeader {
             BrukerParType::String => BrukerParValue::String(reader.read_string(f, param_nbytes)?),
             BrukerParType::Enum => BrukerParValue::Enum(reader.read_bytes(f, param_nbytes)?),
             BrukerParType::Senum => BrukerParValue::Senum(reader.read_bytes(f, param_nbytes)?),
-            BrukerParType::Unknown(i) => BrukerParValue::Unknown(reader.read_bytes(f, param_nbytes)?, i),
+            BrukerParType::Unknown(i) => {
+                BrukerParValue::Unknown(reader.read_bytes(f, param_nbytes)?, i)
+            }
         };
-        
+
         Ok(Some((param_key, param_value, 4 + 2 + 2 + param_nbytes)))
     }
 
@@ -552,45 +670,62 @@ impl IgramHeader {
     }
 
     /// Retrieve a value from a given block in this header
-    /// 
+    ///
     /// # Inputs
     /// - `block`: which block the parameter can be found in
     /// - `parameter`: the parameter name, usually a 3-4 character string, $GGGPATH/utils/OpusHdr/OpusHdr
     ///   will show the available parameters grouped by block for an interferogram or spectrum, but note that
     ///   it appends numbers when parameters are present in multiple blocks, so what it prints may not be
     ///   exactly what you give here.
-    /// 
+    ///
     /// # Returns
     /// A reference to the parameter value with a lifetime bounded by the lifetime of this header.
-    /// 
+    ///
     /// # Errors
     /// If the block cannot be found in the header or the parameter is not present in the block.
-    /// 
+    ///
     /// # See also
     /// - [`IgramHeader::get_value_any_block`]: find a parameter across all blocks.
     /// - [`IgramHeader::get_value_any_block_opt`]: convenience version of `get_value_any_block`
-    pub fn get_value(&self, block: constants::bruker::BrukerBlockType, parameter: &str) -> Result<&BrukerParValue, MissingOpusParameterError> {
+    pub fn get_value(
+        &self,
+        block: constants::bruker::BrukerBlockType,
+        parameter: &str,
+    ) -> Result<&BrukerParValue, MissingOpusParameterError> {
         self.parameter_blocks
             .get(&block)
-            .ok_or_else(|| MissingOpusParameterError{ block, parameter: parameter.to_string(), block_missing: true})?
+            .ok_or_else(|| MissingOpusParameterError {
+                block,
+                parameter: parameter.to_string(),
+                block_missing: true,
+            })?
             .get(parameter)
-            .ok_or_else(|| MissingOpusParameterError { block, parameter: parameter.to_string(), block_missing: false })
+            .ok_or_else(|| MissingOpusParameterError {
+                block,
+                parameter: parameter.to_string(),
+                block_missing: false,
+            })
     }
 
     /// Retrieve a value from the header without knowing which block it is in.
-    /// 
+    ///
     /// Takes the parameter name (usually 3 or 4 characters) and searches all blocks for it.
     /// Returns `Ok` if the parameter is present in exactly one block. Returns `Err` if the
     /// parameter is missing or is present more than once.
-    /// 
+    ///
     /// # See also
     /// - [`IgramHeader::get_value`]: find a parameter in a given block. This will be more efficient since it
     ///   does not have to iterate across all blocks to search for the parameter.
     /// - [`IgramHeader::get_value_any_block_opt`]: a convenience version of this function that assumes a
     ///   parameter being present in multiple blocks should cause a panic.
-    pub fn get_value_any_block(&self, parameter: &str) -> Result<&BrukerParValue, OpusParameterSearchError> {
-        let matching_params = self.parameter_blocks.iter()
-            .filter_map(|(key ,block)| block.get(parameter).map(|v| (key, v)))
+    pub fn get_value_any_block(
+        &self,
+        parameter: &str,
+    ) -> Result<&BrukerParValue, OpusParameterSearchError> {
+        let matching_params = self
+            .parameter_blocks
+            .iter()
+            .filter_map(|(key, block)| block.get(parameter).map(|v| (key, v)))
             .collect_vec();
 
         if matching_params.is_empty() {
@@ -610,7 +745,7 @@ impl IgramHeader {
     /// found exactly once and `None` if it is missing. If the parameter occurs in multiple
     /// blocks, this function panics, so if you need to recover from that case, use
     /// [`IgramHeader::get_value_any_block`] instead.
-    /// 
+    ///
     /// # Panics
     /// If the `parameter` exists in multiple blocks.
     pub fn get_value_any_block_opt(&self, parameter: &str) -> Option<&BrukerParValue> {
@@ -631,14 +766,14 @@ struct SpectrumHeaderMetadata {
     pointer: usize,
     max_size: usize,
     curr_size: usize,
-    blocks: Vec<HeaderBlockDef<constants::i2s::I2sSpectrumHeaderBlockType>>
+    blocks: Vec<HeaderBlockDef<constants::i2s::I2sSpectrumHeaderBlockType>>,
 }
 
-
-
-
 impl SpectrumHeaderMetadata {
-    fn read_from_file(f: &mut std::fs::File, byte_reader: &mut HeaderByteReader) -> OpusResult<Self> {
+    fn read_from_file(
+        f: &mut std::fs::File,
+        byte_reader: &mut HeaderByteReader,
+    ) -> OpusResult<Self> {
         // TODO: test with (correct) spectrum instead of (wrong) igram
         let magic = byte_reader.read_i32(f)?;
         let prog = byte_reader.read_f64(f)?; // TODO: this is a 4-byte int in `read_opus_header` but 8 byte float in `get_opusigram_param` - need to handle both cases or check that read_opus_header isn't actually taking 8 bytes
@@ -651,10 +786,21 @@ impl SpectrumHeaderMetadata {
             let itype = byte_reader.read_i32(f)?;
             let ilen = byte_reader.read_i32(f)? as usize;
             let ipoint = byte_reader.read_i32(f)? as usize;
-            blocks.push(HeaderBlockDef{itype: itype.into(), ilen, ipoint});
+            blocks.push(HeaderBlockDef {
+                itype: itype.into(),
+                ilen,
+                ipoint,
+            });
         }
 
-        Ok(Self { magic, prog, pointer, max_size, curr_size, blocks })
+        Ok(Self {
+            magic,
+            prog,
+            pointer,
+            max_size,
+            curr_size,
+            blocks,
+        })
     }
 }
 
@@ -666,7 +812,8 @@ mod tests {
     #[ignore = "This test is not complete yet"]
     fn test_igram_header_metadata() {
         let gggpath = utils::get_ggg_path().unwrap();
-        let mut wg = std::fs::File::open(gggpath.join("src/i2s/raw_data/wg20090206_1640NIR_DC.0")).unwrap();
+        let mut wg =
+            std::fs::File::open(gggpath.join("src/i2s/raw_data/wg20090206_1640NIR_DC.0")).unwrap();
         let mut br = HeaderByteReader::default();
         let meta = IgramHeaderMetadata::read_from_file(&mut wg, &mut br, false).unwrap();
         // TODO: vet this against I2S or something and fill in the actual expected values.
@@ -680,7 +827,8 @@ mod tests {
     fn test_slice_header_metadata() {
         let gggpath = utils::get_ggg_path().unwrap();
         // With slices, all but the last slice have data, the last slice has remaining metadata.
-        let mut slice = std::fs::File::open(gggpath.join("src/i2s/raw_data/040721.1/scan/b211127.0")).unwrap();
+        let mut slice =
+            std::fs::File::open(gggpath.join("src/i2s/raw_data/040721.1/scan/b211127.0")).unwrap();
         // let mut slice = std::fs::File::open(gggpath.join("src/i2s/raw_data/040721.1/scan/b211880.0")).unwrap();
         let mut br = HeaderByteReader::default();
         let meta = IgramHeaderMetadata::read_from_file(&mut slice, &mut br, false).unwrap();
@@ -693,7 +841,7 @@ mod tests {
     fn test_igram_header() {
         let gggpath = utils::get_ggg_path().unwrap();
         let wg = gggpath.join("src/i2s/raw_data/wg20090206_1640NIR_DC.0");
-        // TODO: need context for header errors (which block/parameter). Need to decide if going to use error-stack/eyre 
+        // TODO: need context for header errors (which block/parameter). Need to decide if going to use error-stack/eyre
         //  or build this into the OpusError type. Could do a struct which holds an OpusError plus the block and param name.
         let header = IgramHeader::read_full_igram_header(&wg).unwrap();
         println!("{:#?}", header);
