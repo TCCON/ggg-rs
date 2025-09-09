@@ -1,10 +1,10 @@
 //! Functions for collating output from multiple .col files
-//! 
+//!
 //! GGG writes the results of retrieving individual windows to .col
 //! files. These results are usually then combined into a single file
 //! with a `.Xsw` extension, where the `X` is a single character representing
 //! what quantity is stored in the file:
-//! 
+//!
 //! - "v" = retrieved vertical columns,
 //! - "t" = VMR scale factors,
 //! - "o" = original vertical columns,
@@ -15,16 +15,16 @@
 //! - "m" = continuum tilt,
 //! - "n" = continuum curvature,
 //! - "r" = RMS divided by continuum level.
-//! 
+//!
 //! Note that not all of these options are implemented in this module yet,
 //! see [`CollationMode`] for available options.
-//! 
+//!
 //! The original Fortran implementation of `collate_results` tried to handle
-//! all use cases (MkIV, TCCON, EM27s, etc.), but this was frequently challenging 
+//! all use cases (MkIV, TCCON, EM27s, etc.), but this was frequently challenging
 //! because of the different idiosyncrasies of different instruments. For the Rust
 //! version, we instead factor out the code that needs to be unique to each use
 //! case, while keeping the common code here.
-//! 
+//!
 //! The main function if [`collate_results`]. This handles reading in the `.col`
 //! and `.ray` files and writing out the data. It relies on a type implementing
 //! the [`CollationIndexer`] trait to tell it how to align rows from different
@@ -41,11 +41,14 @@ use log::{info, warn};
 
 use crate::error::FileLocation;
 use crate::o2_dmf::O2DmfProvider;
-use crate::readers::col_files::{get_col_files, get_file_from_col_header, open_and_iter_col_file, read_col_file_header, ColFileHeader, ColRetQuantity};
+use crate::readers::col_files::{
+    get_col_files, get_file_from_col_header, open_and_iter_col_file, read_col_file_header,
+    ColFileHeader, ColRetQuantity,
+};
 use crate::readers::postproc_files::{iter_tabular_file, AuxData, AuxDataBuilder, PostprocRow};
-use crate::readers::{ProgramVersion, POSTPROC_FILL_VALUE};
 use crate::readers::runlogs::RunlogDataRec;
-use crate::utils::{self, FileBuf};
+use crate::readers::{ProgramVersion, POSTPROC_FILL_VALUE};
+use crate::utils::{self, FileBuf, GggCompatibility};
 use crate::writers::postproc_files::write_postproc_header;
 
 pub type CollationResult<T> = Result<T, CollationError>;
@@ -53,7 +56,7 @@ pub type CollationResult<T> = Result<T, CollationError>;
 static WINDOW_SF_REGEX: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
 
 /// Possible errors during data collation.
-/// 
+///
 /// Each error type has a similarly named associated function
 /// that creates it with some generics to make it more convenient
 /// to use.
@@ -65,11 +68,11 @@ pub enum CollationError {
 
     /// One of the necessary inputs could not be read
     #[error("Error reading {loc}: {reason}")]
-    CouldNotRead{loc: FileLocation, reason: String},
+    CouldNotRead { loc: FileLocation, reason: String },
 
     /// The output file could not be written
     #[error("Could not write to {}", .path.display())]
-    CouldNotWrite{path: PathBuf},
+    CouldNotWrite { path: PathBuf },
 
     /// Some path could not be identified, either because something
     /// about the directory structure is odd (i.e. missing parent directory)
@@ -79,15 +82,20 @@ pub enum CollationError {
 
     /// An input value expected to be the same across multiple files was not
     #[error("Value from header of {} ({}) does not match value ({}) from the first file ({})", other_col_file.display(), other_value, first_value, first_col_file.display())]
-    MismatchedInput{first_col_file: PathBuf, other_col_file: PathBuf, first_value: String, other_value: String},
+    MismatchedInput {
+        first_col_file: PathBuf,
+        other_col_file: PathBuf,
+        first_value: String,
+        other_value: String,
+    },
 
     /// A data column in one of the input files was missing.
     #[error("Missing column '{column}' in {path}")]
-    MissingColumn{path: PathBuf, column: String},
+    MissingColumn { path: PathBuf, column: String },
 
     /// A value is provided by two spectra when it should not be.
     #[error("Spectrum {new_spec} is trying to set a value for {column} that is already present")]
-    DuplicateValue{new_spec: String, column: String},
+    DuplicateValue { new_spec: String, column: String },
 
     /// Some value had a different format than expected and could not be parsed.
     #[error("{0}")]
@@ -116,7 +124,7 @@ impl CollationError {
     pub fn could_not_read_file<S: Into<String>, P: AsRef<Path>>(reason: S, path: P) -> Self {
         Self::CouldNotRead {
             loc: FileLocation::new::<_, String>(Some(path), None, None),
-            reason: reason.into()
+            reason: reason.into(),
         }
     }
 
@@ -128,21 +136,32 @@ impl CollationError {
         Self::CouldNotFind(file_descr.into())
     }
 
-    pub fn mismatched_input<P: Into<PathBuf>, S: Into<String>>(first_col_file: P, other_col_file: P, first_value: S, other_value: S) -> Self {
-        Self::MismatchedInput { 
+    pub fn mismatched_input<P: Into<PathBuf>, S: Into<String>>(
+        first_col_file: P,
+        other_col_file: P,
+        first_value: S,
+        other_value: S,
+    ) -> Self {
+        Self::MismatchedInput {
             first_col_file: first_col_file.into(),
             other_col_file: other_col_file.into(),
             first_value: first_value.into(),
-            other_value: other_value.into()
+            other_value: other_value.into(),
         }
     }
 
     pub fn missing_column<S: Into<String>, P: Into<PathBuf>>(path: P, column: S) -> Self {
-        Self::MissingColumn { path: path.into(), column: column.into() }
+        Self::MissingColumn {
+            path: path.into(),
+            column: column.into(),
+        }
     }
 
     pub fn duplicate_value<S: Into<String>>(new_spec: S, column: S) -> Self {
-        Self::DuplicateValue { new_spec: new_spec.into(), column: column.into() }
+        Self::DuplicateValue {
+            new_spec: new_spec.into(),
+            column: column.into(),
+        }
     }
 
     pub fn parsing_error<S: Into<String>>(reason: S) -> Self {
@@ -161,7 +180,7 @@ impl CollationError {
 /// A trait implemented by types that align data from different `.col` files.
 pub trait CollationIndexer: Sized {
     /// Create a new instance of this type given a path to the runlog.
-    /// 
+    ///
     /// Typically this method will iterate through the runlog and store
     /// the index for the row that each spectrum's values should be placed
     /// in in the output file. This will also likely need to store the runlog's
@@ -197,18 +216,18 @@ pub trait CollationIndexer: Sized {
 
     fn get_negative_runlog_timesteps(&self) -> CollationResult<&[(RunlogDataRec, RunlogDataRec)]>;
 
-    /// Controls when previously written values should be overwritten. 
+    /// Controls when previously written values should be overwritten.
     /// Returning `Ok(true)` allows the value in `column_name` of the current
     /// row to be overwritten, while `Ok(false)` keeps the current value. If
     /// trying to overwrite a value is not allowed (i.e. it indicates a mistake),
     /// then return `Err(_)`.
-    /// 
+    ///
     /// The default implementation returns `Ok(false)` for any column name listed
     /// in [`AuxData::postproc_fields_str`], i.e. auxiliary data columns will always
     /// take their value from the first spectrum from the runlog/.ray file matching
     /// this row in the `.Xsw` file. Other columns return an `Err(CollationError::DuplicateValue)`,
     /// as it is usually a mistake to overwrite a retrieved value.
-    /// 
+    ///
     /// Notes for implementors:
     /// - Specific implementations of this function should also return an `Err(CollationError:DuplicateValue)`
     ///   if trying to write a given value twice is a mistake. Other return errors can be used
@@ -221,7 +240,9 @@ pub trait CollationIndexer: Sized {
     ///   must always be taken from the same `.col` file, so it does not make sense to check each one
     ///   separately.
     fn do_replace_value(&self, new_spectrum: &str, column_name: &str) -> CollationResult<bool> {
-        if AuxData::postproc_fields_str().contains(&column_name) {
+        // We use current compatibility here because it doesn't matter if a column is omitted in
+        // previous versions.
+        if AuxData::postproc_fields_str(GggCompatibility::Current).contains(&column_name) {
             Ok(false)
         } else {
             Err(CollationError::duplicate_value(new_spectrum, column_name))
@@ -230,7 +251,7 @@ pub trait CollationIndexer: Sized {
 }
 
 /// A trait to implement for different prefixes to differentiate windows during collation
-/// 
+///
 /// To avoid `average_results` combining data for a specie between different detectors,
 /// we prefix secondary detectors' windows with a letter so that `average_results` sees
 /// them as different species. Implementors of this trait will provide the desired prefix
@@ -270,28 +291,27 @@ impl FromStr for CollationMode {
     type Err = CollationError;
 
     /// Return the [`CollationMode`] that matches the given string.
-    /// 
-    /// For consistency with the original `collate_results`, the 
+    ///
+    /// For consistency with the original `collate_results`, the
     /// single-character representations of these modes are recognized
     /// (i.e. "v" -> `VerticalColumns`, etc.). However, more complete
     /// strings are also recognized:
-    /// 
+    ///
     /// - "v" or "vertical-columns" returns `Self::VerticalColumns`,
     /// - "t" or "vmr-scale-factors" returns `Self::VmrScaleFactors`.
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_ascii_lowercase().as_str() {
             "v" | "vertical-columns" => Ok(Self::VerticalColumns),
             "t" | "vmr-scale-factors" => Ok(Self::VmrScaleFactors),
-            _ => Err(CollationError::UnknownMode(s.to_string()))
+            _ => Err(CollationError::UnknownMode(s.to_string())),
         }
     }
 }
 
-
 /// The primary entry point for this module.
-/// 
+///
 /// Given a path to a multiggg.sh file, i.e. one with a series of calls to `gfit` such as:
-/// 
+///
 /// ```text
 /// /home/jlaugh/GGG/ggg-my-devel/bin/gfit luft_6146.pa_ggg_benchmark.ggg>/dev/null
 /// /home/jlaugh/GGG/ggg-my-devel/bin/gfit hf_4038.pa_ggg_benchmark.ggg>/dev/null
@@ -299,12 +319,12 @@ impl FromStr for CollationMode {
 /// /home/jlaugh/GGG/ggg-my-devel/bin/gfit h2o_4570.pa_ggg_benchmark.ggg>/dev/null
 /// ...
 /// ```
-/// 
+///
 /// this will find the `.col` files for each line of this file *not* beginning with
 /// a colon and combine their data into a single `.Xsw` file. The `.col` files must
 /// be present in the same directory, and must all reference the same `.ray` file
 /// and runlog in their headers (and those files must exist as well). Other inputs:
-/// 
+///
 /// - `indexer` is an instance of a struct that implements [`CollationIndexer`]; this
 ///   controls what row of the `.Xsw` file values from the runlog, `.ray` file, and
 ///   `.col` files go into.
@@ -318,28 +338,34 @@ pub fn collate_results<I: CollationIndexer, P: CollationPrefixer>(
     mode: CollationMode,
     collate_version: ProgramVersion,
     output_dir: Option<&Path>,
-    write_neg_timesteps: bool
+    write_neg_timesteps: bool,
+    compatibility: GggCompatibility,
 ) -> error_stack::Result<(), CollationError> {
-    let run_dir = multiggg_file.parent().ok_or_else(
-        || CollationError::could_not_find(
-            format!("run directory (could not get parent directory of the given multiggg file, {})", multiggg_file.display())
-        ))?;
+    let run_dir = multiggg_file.parent().ok_or_else(|| {
+        CollationError::could_not_find(format!(
+            "run directory (could not get parent directory of the given multiggg file, {})",
+            multiggg_file.display()
+        ))
+    })?;
 
     info!("Collating results in {}", run_dir.display());
     let mut missing = MissingValues::default();
 
     // Make sure we can get all the input files we need
-    let col_files = get_col_files(multiggg_file, run_dir)
-        .change_context_lazy(|| CollationError::missing_input(
-            format!("problem finding all the .col files in {}", run_dir.display())
-        ))?;
+    let col_files = get_col_files(multiggg_file, run_dir).change_context_lazy(|| {
+        CollationError::missing_input(format!(
+            "problem finding all the .col files in {}",
+            run_dir.display()
+        ))
+    })?;
     let runlog = get_file_from_col_header(&col_files, run_dir, |h| h.runlog_file.path)
         .change_context_lazy(|| CollationError::could_not_find("runlog"))?;
     let ray_file = get_file_from_col_header(&col_files, run_dir, |h| h.ray_file.path)
         .change_context_lazy(|| CollationError::could_not_find(".ray file"))?;
-    let runlog_name = runlog.file_stem().ok_or_else(|| CollationError::could_not_find(
-        "file stem of the runlog"
-    ))?.to_string_lossy();
+    let runlog_name = runlog
+        .file_stem()
+        .ok_or_else(|| CollationError::could_not_find("file stem of the runlog"))?
+        .to_string_lossy();
 
     info!("{} .col files will be collated", col_files.len());
     info!("Spectrum order taken from {}", runlog.display());
@@ -354,8 +380,9 @@ pub fn collate_results<I: CollationIndexer, P: CollationPrefixer>(
 
     // Gather the auxiliary data we can from the runlog
     indexer.parse_runlog(&runlog)?;
-    let mut columns = AuxData::postproc_fields_vec();
-    let mut aux_data_builders = indexer.get_runlog_data()?
+    let mut columns = AuxData::postproc_fields_vec(compatibility);
+    let mut aux_data_builders = indexer
+        .get_runlog_data()?
         .iter()
         .map(|rld| AuxData::build_from_runlog_rec(rld))
         .collect_vec();
@@ -384,17 +411,25 @@ pub fn collate_results<I: CollationIndexer, P: CollationPrefixer>(
     let ncol = col_files.len();
     for (idx, cfile) in col_files.into_iter().enumerate() {
         let window = get_window_from_col_file(&cfile)?;
-        info!("Reading .col file {}/{ncol}: {window}", idx+1);
-        
+        info!("Reading .col file {}/{ncol}: {window}", idx + 1);
+
         let (val_colname, val_err_colname) = if let Some(pre) = &prefixer {
             let p = pre.get_prefix(window)?;
             (format!("{p}{window}"), format!("{p}{window}_error"))
         } else {
             (window.to_string(), format!("{window}_error"))
         };
-        
-        add_col_value(&mut rows, &mut indexer, &cfile, mode, &val_colname, &val_err_colname, &mut missing)
-            .change_context_lazy(|| CollationError::col_file_error(&cfile))?;
+
+        add_col_value(
+            &mut rows,
+            &mut indexer,
+            &cfile,
+            mode,
+            &val_colname,
+            &val_err_colname,
+            &mut missing,
+        )
+        .change_context_lazy(|| CollationError::col_file_error(&cfile))?;
         columns.push(val_colname.to_string());
         columns.push(val_err_colname);
     }
@@ -403,37 +438,66 @@ pub fn collate_results<I: CollationIndexer, P: CollationPrefixer>(
     let extra_lines = if let Some(sfs) = window_sfs {
         vec![
             o2_dmf_provider.header_line(),
-            format!("sf=   {}", sfs.join("   "))
+            format!("sf=   {}", sfs.join("   ")),
         ]
     } else {
         vec![o2_dmf_provider.header_line()]
     };
     let output_dir = output_dir.unwrap_or(run_dir);
     let xsw_file = output_dir.join(format!("{runlog_name}.{}sw", mode.ext_char()));
-    let f = std::fs::File::create(&xsw_file).change_context_lazy(|| CollationError::could_not_write(&xsw_file))?;
+    let f = std::fs::File::create(&xsw_file)
+        .change_context_lazy(|| CollationError::could_not_write(&xsw_file))?;
     let mut writer = std::io::BufWriter::new(f);
-    let format_str = format!("(a57,a1,f13.8,{}f13.5,{}(1pe13.5))", naux - 2, columns.len() - naux);
-    write_postproc_header(&mut writer, columns.len(), rows.len(), naux,
-    &[collate_version, gfit_version, gsetup_version], &extra_lines, POSTPROC_FILL_VALUE,
-    &format_str, &columns).change_context_lazy(|| CollationError::could_not_write(&xsw_file))?;
-    
+    let format_str = format!(
+        "(a57,a1,f13.8,{}f13.5,{}(1pe13.5))",
+        naux - 2,
+        columns.len() - naux
+    );
+    write_postproc_header(
+        &mut writer,
+        columns.len(),
+        rows.len(),
+        naux,
+        &[collate_version, gfit_version, gsetup_version],
+        &extra_lines,
+        POSTPROC_FILL_VALUE,
+        &format_str,
+        &columns,
+    )
+    .change_context_lazy(|| CollationError::could_not_write(&xsw_file))?;
+
     // We don't write the "a1" column that has the colon/semicolon
     let writer_format_str = format_str.replace("a1,", "1x");
-    let write_format = fortformat::FortFormat::parse(&writer_format_str)
-        .map_err(|e| CollationError::parsing_error(
-            format!("Could not parse format .xsw format string '{writer_format_str}': {e}")
-        ))?;
-   
-    info!("Writing results to {}...", xsw_file.display()); 
-    let ser_settings = fortformat::ser::SerSettings::default().align_left_str(true);
-    fortformat::ser::many_to_writer_custom(&rows, &write_format, Some(&columns), &ser_settings, &mut writer)
-        .change_context_lazy(|| CollationError::could_not_write(&xsw_file))?;
+    let write_format = fortformat::FortFormat::parse(&writer_format_str).map_err(|e| {
+        CollationError::parsing_error(format!(
+            "Could not parse format .xsw format string '{writer_format_str}': {e}"
+        ))
+    })?;
+
+    info!("Writing results to {}...", xsw_file.display());
+    let ser_settings = fortformat::ser::SerSettings::default()
+        .align_left_str(true)
+        .allow_skipped_fields(true);
+    fortformat::ser::many_to_writer_custom(
+        &rows,
+        &write_format,
+        Some(&columns),
+        &ser_settings,
+        &mut writer,
+    )
+    .change_context_lazy(|| CollationError::could_not_write(&xsw_file))?;
     info!("Results written to {}.", xsw_file.display());
 
-    missing.write_missing_report(&output_dir.join("collate_results.missing"))
-        .unwrap_or_else(|e| log::error!("collate_results.missing may be incomplete due to an error: {e}"));
-    missing.write_missing_summary(std::io::stdout())
-        .unwrap_or_else(|e| log::error!("Writing the percentage of found/missing values to stdout failed: {e}"));
+    missing
+        .write_missing_report(&output_dir.join("collate_results.missing"))
+        .unwrap_or_else(|e| {
+            log::error!("collate_results.missing may be incomplete due to an error: {e}")
+        });
+    missing
+        .write_missing_summary(std::io::stdout())
+        .unwrap_or_else(|e| {
+            log::error!("Writing the percentage of found/missing values to stdout failed: {e}")
+        });
 
     if write_neg_timesteps {
         report_negative_time_steps(&output_dir.join("collate_results.nts"), indexer)
@@ -443,35 +507,51 @@ pub fn collate_results<I: CollationIndexer, P: CollationPrefixer>(
 }
 
 pub fn get_window_from_col_file(col_file: &Path) -> Result<&str, CollationError> {
-    let window = col_file.file_name()
-        .ok_or_else(|| CollationError::parsing_error(
-            format!("Could not get base name of .col file {}", col_file.display())
-        ))?.to_str()
-        .ok_or_else(|| CollationError::parsing_error(
-            format!("Could not convert base name of {} to valid UTF-8", col_file.display())
-        ))?.split('.')
+    let window = col_file
+        .file_name()
+        .ok_or_else(|| {
+            CollationError::parsing_error(format!(
+                "Could not get base name of .col file {}",
+                col_file.display()
+            ))
+        })?
+        .to_str()
+        .ok_or_else(|| {
+            CollationError::parsing_error(format!(
+                "Could not convert base name of {} to valid UTF-8",
+                col_file.display()
+            ))
+        })?
+        .split('.')
         .next()
-        .ok_or_else(|| CollationError::parsing_error(
-            format!("Could not find a '.' in base name of {} to mark the end of the window name", col_file.display())
-        ))?;
+        .ok_or_else(|| {
+            CollationError::parsing_error(format!(
+                "Could not find a '.' in base name of {} to mark the end of the window name",
+                col_file.display()
+            ))
+        })?;
     Ok(window)
 }
 
 /// Return the gsetup and gfit versions, possibly along with a list of window scale factors.
-/// 
+///
 /// The third return value will be `None` if none of the `.col` files recorded an `sf=` entry
 /// in their command lines. In that case, the output file should not write an `sf=` line.
 /// If any `.col` file contains an `sf=` value, then this return will be a `Some(_)` and
 /// any `.col` file without an `sf=` value will use `sf=1.0`.
-fn get_header_info(col_files: &[PathBuf]) -> error_stack::Result<(ProgramVersion, ProgramVersion, Option<Vec<String>>), CollationError> {
+fn get_header_info(
+    col_files: &[PathBuf],
+) -> error_stack::Result<(ProgramVersion, ProgramVersion, Option<Vec<String>>), CollationError> {
     if col_files.is_empty() {
         return Err(CollationError::missing_input("no .col files found").into());
     }
 
-    let mut fbuf = FileBuf::open(&col_files[0])
-        .change_context_lazy(|| CollationError::could_not_read_file("could not open", &col_files[0]))?;
-    let first_header = read_col_file_header(&mut fbuf)
-        .change_context_lazy(|| CollationError::could_not_read_file("error reading header", &col_files[0]))?;
+    let mut fbuf = FileBuf::open(&col_files[0]).change_context_lazy(|| {
+        CollationError::could_not_read_file("could not open", &col_files[0])
+    })?;
+    let first_header = read_col_file_header(&mut fbuf).change_context_lazy(|| {
+        CollationError::could_not_read_file("error reading header", &col_files[0])
+    })?;
 
     let first_sf = get_window_sf(&first_header);
     let mut sf_present = first_sf.is_some();
@@ -480,10 +560,12 @@ fn get_header_info(col_files: &[PathBuf]) -> error_stack::Result<(ProgramVersion
     let mut window_sfs = vec![first_sf.unwrap_or_else(|| "1.000".to_string())];
 
     for cfile in &col_files[1..] {
-        let mut fbuf = FileBuf::open(cfile)
-            .change_context_lazy(|| CollationError::could_not_read_file("could not open", &col_files[0]))?;
-        let new_header = read_col_file_header(&mut fbuf)
-            .change_context_lazy(|| CollationError::could_not_read_file("error reading header", &col_files[0]))?;
+        let mut fbuf = FileBuf::open(cfile).change_context_lazy(|| {
+            CollationError::could_not_read_file("could not open", &col_files[0])
+        })?;
+        let new_header = read_col_file_header(&mut fbuf).change_context_lazy(|| {
+            CollationError::could_not_read_file("error reading header", &col_files[0])
+        })?;
 
         let new_sf = get_window_sf(&new_header);
         sf_present = sf_present || new_sf.is_some();
@@ -491,14 +573,20 @@ fn get_header_info(col_files: &[PathBuf]) -> error_stack::Result<(ProgramVersion
 
         if new_header.gsetup_version != expected_gsetup_version {
             return Err(CollationError::mismatched_input(
-                &col_files[0], cfile, expected_gsetup_version.to_string(), new_header.gsetup_version.to_string()
-            ))?
+                &col_files[0],
+                cfile,
+                expected_gsetup_version.to_string(),
+                new_header.gsetup_version.to_string(),
+            ))?;
         }
 
         if new_header.gfit_version != expected_gfit_version {
             return Err(CollationError::mismatched_input(
-                &col_files[0], cfile, expected_gfit_version.to_string(), new_header.gfit_version.to_string()
-            ))?
+                &col_files[0],
+                cfile,
+                expected_gfit_version.to_string(),
+                new_header.gfit_version.to_string(),
+            ))?;
         }
     }
 
@@ -508,36 +596,46 @@ fn get_header_info(col_files: &[PathBuf]) -> error_stack::Result<(ProgramVersion
 
 /// Get the `sf=` value from a `.col` file's header, if present (`None` returned if not).
 fn get_window_sf(header: &ColFileHeader) -> Option<String> {
-    let re = WINDOW_SF_REGEX.get_or_init(|| 
-        regex::Regex::new(r"sf=([0-9\.]+)")
-            .expect("Could not compile window scale factor regex")
-    );
+    let re = WINDOW_SF_REGEX.get_or_init(|| {
+        regex::Regex::new(r"sf=([0-9\.]+)").expect("Could not compile window scale factor regex")
+    });
 
-    let sf_match = re.captures(&header.command_line)
-        .map(|m| m.get(1).expect("regex should return the SF value as group 1").as_str().to_string());
+    let sf_match = re.captures(&header.command_line).map(|m| {
+        m.get(1)
+            .expect("regex should return the SF value as group 1")
+            .as_str()
+            .to_string()
+    });
     sf_match
 }
 
 /// Add the zmin values from the `.ray` file to the `.Xsw` file rows.
 /// [`PostprocRow`] instances created from runlog data records have
 /// a fill value for `zmin`, so this overwrites that.
-fn add_zmin<I: CollationIndexer>(rows: &mut Vec<AuxDataBuilder>, indexer: &mut I, ray_file: &Path) -> error_stack::Result<(), CollationError> {
-    let it = iter_tabular_file(ray_file)
-        .change_context_lazy(|| CollationError::could_not_read_file("iteration of .ray file failed", ray_file))?;
+fn add_zmin<I: CollationIndexer>(
+    rows: &mut Vec<AuxDataBuilder>,
+    indexer: &mut I,
+    ray_file: &Path,
+) -> error_stack::Result<(), CollationError> {
+    let it = iter_tabular_file(ray_file).change_context_lazy(|| {
+        CollationError::could_not_read_file("iteration of .ray file failed", ray_file)
+    })?;
     for (irow, row) in it.enumerate() {
         let ray_row = row.change_context_lazy(|| {
             CollationError::could_not_read_file(
-                format!("error readling data line {} of .ray file", irow+1), ray_file 
-            )})?;
+                format!("error readling data line {} of .ray file", irow + 1),
+                ray_file,
+            )
+        })?;
 
         let builder_idx = indexer.get_row_index(&ray_row.spectrum())?;
         let builder = rows.get_mut(builder_idx)
             .expect("Index returned by the collation indexer should be a valid index for the rows created from the runlog");
 
         if builder.needs_zmin() && indexer.do_replace_value(&ray_row.spectrum(), "zmin")? {
-            let ray_zmin = ray_row.get("Zmin").ok_or_else(|| 
-                CollationError::missing_column(ray_file, "Zmin")
-            )?;
+            let ray_zmin = ray_row
+                .get("Zmin")
+                .ok_or_else(|| CollationError::missing_column(ray_file, "Zmin"))?;
             builder.set_zmin(ray_zmin);
         }
     }
@@ -553,7 +651,11 @@ fn add_run(builders: &mut Vec<AuxDataBuilder>) {
 
 /// Add the mean O2 atmospheric mole fraction to the aux data.
 /// Note: currently this only does the GGG2020-style 0.2095.
-fn add_o2dmf<I: CollationIndexer>(builders: &mut Vec<AuxDataBuilder>, o2_dmf_provider: &dyn O2DmfProvider, indexer: &I) -> error_stack::Result<(), CollationError> {
+fn add_o2dmf<I: CollationIndexer>(
+    builders: &mut Vec<AuxDataBuilder>,
+    o2_dmf_provider: &dyn O2DmfProvider,
+    indexer: &I,
+) -> error_stack::Result<(), CollationError> {
     // TODO: move the logic from apply_tccon_airmass_correction here.
     for builder in builders.iter_mut() {
         if !builder.needs_o2dmf() {
@@ -564,17 +666,21 @@ fn add_o2dmf<I: CollationIndexer>(builders: &mut Vec<AuxDataBuilder>, o2_dmf_pro
             continue;
         }
 
-        let dmf = o2_dmf_provider.o2_dmf(builder.spectrum())
-            .change_context_lazy(|| CollationError::Custom(format!(
-                "Error getting the mean O2 DMF for the spectrum {}", builder.spectrum()
-            )))?;
+        let dmf = o2_dmf_provider
+            .o2_dmf(builder.spectrum())
+            .change_context_lazy(|| {
+                CollationError::Custom(format!(
+                    "Error getting the mean O2 DMF for the spectrum {}",
+                    builder.spectrum()
+                ))
+            })?;
         builder.set_o2dmf(dmf);
     }
     Ok(())
 }
 
 /// Add the value and its error from the `.col` file to the `.Xsw` file.
-/// 
+///
 /// # Inputs
 /// - `rows`: [`PostprocRow`] instances to modify, will add to the `retrieved` field.
 /// - `indexer: the instance that tells us which index in `rows` to add a given value to.
@@ -582,41 +688,58 @@ fn add_o2dmf<I: CollationIndexer>(builders: &mut Vec<AuxDataBuilder>, o2_dmf_pro
 /// - `mode`: which values and errors to write.
 /// - `val_colname`: the key the values will be under in the [`PostprocRow`] hash maps.
 /// - `val_err_colname`: the key the error values will be under in the [`PostprocRow`] hash maps.
-/// 
+///
 /// Note that `val_colname` and `val_err_colname` need to match their respective values in the list
 /// of field names passed to the serializer.
-fn add_col_value<I: CollationIndexer>(rows: &mut Vec<PostprocRow>, indexer: &mut I, col_file: &Path, mode: CollationMode, 
-                                      val_colname: &str, val_err_colname: &str, missing_values: &mut MissingValues)
--> error_stack::Result<(), CollationError> 
-{
-    let it = open_and_iter_col_file(col_file)
-        .change_context_lazy(|| CollationError::could_not_read_file("error setting up .col file read", col_file))?;
+fn add_col_value<I: CollationIndexer>(
+    rows: &mut Vec<PostprocRow>,
+    indexer: &mut I,
+    col_file: &Path,
+    mode: CollationMode,
+    val_colname: &str,
+    val_err_colname: &str,
+    missing_values: &mut MissingValues,
+) -> error_stack::Result<(), CollationError> {
+    let it = open_and_iter_col_file(col_file).change_context_lazy(|| {
+        CollationError::could_not_read_file("error setting up .col file read", col_file)
+    })?;
 
     // Go through the .col file and assign the values to the postprocessing rows
     for (irow, row) in it.enumerate() {
         let col_row = row.change_context_lazy(|| {
             CollationError::could_not_read_file(
-                format!("error readling data line {} of .col file", irow+1), col_file 
-            )})?;
+                format!("error readling data line {} of .col file", irow + 1),
+                col_file,
+            )
+        })?;
 
         let (val, val_err) = match mode {
             CollationMode::VerticalColumns => {
-                let vsf = col_row.get_primary_gas_quantity(ColRetQuantity::Vsf)
+                let vsf = col_row
+                    .get_primary_gas_quantity(ColRetQuantity::Vsf)
                     .ok_or_else(|| CollationError::missing_column(col_file, "primary gas VSF"))?;
-                let vsf_error = col_row.get_primary_gas_quantity(ColRetQuantity::VsfError)
-                    .ok_or_else(|| CollationError::missing_column(col_file, "primary gas VSF error"))?;
-                let ovc = col_row.get_primary_gas_quantity(ColRetQuantity::Ovc)
+                let vsf_error = col_row
+                    .get_primary_gas_quantity(ColRetQuantity::VsfError)
+                    .ok_or_else(|| {
+                        CollationError::missing_column(col_file, "primary gas VSF error")
+                    })?;
+                let ovc = col_row
+                    .get_primary_gas_quantity(ColRetQuantity::Ovc)
                     .ok_or_else(|| CollationError::missing_column(col_file, "primary gas OVC"))?;
 
                 (vsf * ovc, vsf_error * ovc)
-            },
+            }
             CollationMode::VmrScaleFactors => {
-                let vsf = col_row.get_primary_gas_quantity(ColRetQuantity::Vsf)
+                let vsf = col_row
+                    .get_primary_gas_quantity(ColRetQuantity::Vsf)
                     .ok_or_else(|| CollationError::missing_column(col_file, "primary gas VSF"))?;
-                let vsf_error = col_row.get_primary_gas_quantity(ColRetQuantity::VsfError)
-                    .ok_or_else(|| CollationError::missing_column(col_file, "primary gas VSF error"))?;
+                let vsf_error = col_row
+                    .get_primary_gas_quantity(ColRetQuantity::VsfError)
+                    .ok_or_else(|| {
+                        CollationError::missing_column(col_file, "primary gas VSF error")
+                    })?;
                 (vsf, vsf_error)
-            },
+            }
         };
 
         let sw_idx = indexer.get_row_index(&col_row.spectrum)?;
@@ -631,7 +754,9 @@ fn add_col_value<I: CollationIndexer>(rows: &mut Vec<PostprocRow>, indexer: &mut
 
         if do_insert {
             sw_row.retrieved.insert(val_colname.to_string(), val);
-            sw_row.retrieved.insert(val_err_colname.to_string(), val_err);
+            sw_row
+                .retrieved
+                .insert(val_err_colname.to_string(), val_err);
             missing_values.add_found(1);
         }
     }
@@ -646,18 +771,24 @@ fn add_col_value<I: CollationIndexer>(rows: &mut Vec<PostprocRow>, indexer: &mut
             missing_values.add_missing(val_colname.to_string(), spec.to_string());
 
             if val_missing && !err_missing {
-                warn!("Row for {spec} contains a value for {val_err_colname} but not {val_colname}");
+                warn!(
+                    "Row for {spec} contains a value for {val_err_colname} but not {val_colname}"
+                );
             } else if err_missing && !val_missing {
-                warn!("Row for {spec} contains a value for {val_colname} but not {val_err_colname}");
+                warn!(
+                    "Row for {spec} contains a value for {val_colname} but not {val_err_colname}"
+                );
             }
         }
 
         if val_missing {
-            row.retrieved.insert(val_colname.to_string(), POSTPROC_FILL_VALUE);
+            row.retrieved
+                .insert(val_colname.to_string(), POSTPROC_FILL_VALUE);
         }
 
         if err_missing {
-            row.retrieved.insert(val_err_colname.to_string(), POSTPROC_FILL_VALUE);    
+            row.retrieved
+                .insert(val_err_colname.to_string(), POSTPROC_FILL_VALUE);
         }
     }
 
@@ -667,7 +798,7 @@ fn add_col_value<I: CollationIndexer>(rows: &mut Vec<PostprocRow>, indexer: &mut
 #[derive(Debug, Default)]
 struct MissingValues {
     nfound: usize,
-    missing_window_spec: Vec<(String, String)>
+    missing_window_spec: Vec<(String, String)>,
 }
 
 impl MissingValues {
@@ -704,14 +835,22 @@ impl MissingValues {
     }
 }
 
-fn report_negative_time_steps<I: CollationIndexer>(report_file: &Path, indexer: I) -> error_stack::Result<(), CollationError> {
-    let f = std::fs::File::create(report_file)
-        .change_context_lazy(|| CollationError::CouldNotWrite { path: report_file.to_path_buf() })?;
+fn report_negative_time_steps<I: CollationIndexer>(
+    report_file: &Path,
+    indexer: I,
+) -> error_stack::Result<(), CollationError> {
+    let f = std::fs::File::create(report_file).change_context_lazy(|| {
+        CollationError::CouldNotWrite {
+            path: report_file.to_path_buf(),
+        }
+    })?;
     let mut writer = std::io::BufWriter::new(f);
     for (prev_rec, next_rec) in indexer.get_negative_runlog_timesteps()? {
         let this_spec = &next_rec.spectrum_name;
-        let (prev_dec_year, _, _) = utils::to_decimal_year_day_hour(prev_rec.year, prev_rec.day, prev_rec.hour);
-        let (this_dec_year, _, _) = utils::to_decimal_year_day_hour(next_rec.year, next_rec.day, next_rec.hour);
+        let (prev_dec_year, _, _) =
+            utils::to_decimal_year_day_hour(prev_rec.year, prev_rec.day, prev_rec.hour);
+        let (this_dec_year, _, _) =
+            utils::to_decimal_year_day_hour(next_rec.year, next_rec.day, next_rec.hour);
         writeln!(&mut writer, "  Negative time step (runlog unsorted?) {this_spec} {prev_dec_year:12.6} {this_dec_year:12.6}")
             .change_context_lazy(|| CollationError::CouldNotWrite { path: report_file.to_path_buf() })?;
     }

@@ -1,12 +1,14 @@
 use std::{collections::HashMap, ffi::OsString, path::{Path, PathBuf}, process::ExitCode, sync::Arc};
 
 use calculators::FlagCalculator;
+use clap::Parser;
 use error_stack::ResultExt;
 use errors::{CliError, WriteError};
+use ggg_rs::utils::GggCompatibilityCli;
 use interface::{DataCalculator, DataProvider, GroupSelector, SpectrumIndexer, StdGroupSelector, StdGroupWriter};
 use providers::{AiaFile, MavFile, PostprocFile, RunlogProvider};
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
-use tracing::{error,info,Level};
+use tracing::{error,info};
 
 
 mod logging;
@@ -20,15 +22,15 @@ mod providers;
 mod calculators;
 
 fn main() -> ExitCode {
+    let clargs = WritePrivateCli::parse();
     // We need the multi progress bar before we set up logging, because the logging to
     // stderr will need to interact with the progress bar to avoid comingling the progress
     // bar and log messages.
     let mpbar = Arc::new(indicatif::MultiProgress::new());
-    let run_dir = PathBuf::from(".");
-    logging::init_logging(&run_dir, Level::DEBUG, Arc::clone(&mpbar));
+    logging::init_logging(&clargs.run_dir, clargs.verbosity.log_level_filter(), Arc::clone(&mpbar));
     info!("Logging initialized");
 
-    match driver(run_dir, mpbar) {
+    match driver(clargs, mpbar) {
         Ok(_) => ExitCode::SUCCESS,
         Err(e) => {
             error!("{e}");
@@ -39,8 +41,20 @@ fn main() -> ExitCode {
     }
 }
 
-fn driver(run_dir: PathBuf, mpbar: Arc<indicatif::MultiProgress>) -> error_stack::Result<(), CliError> {
-    let file_paths = setup::InputFiles::from_run_dir(&run_dir)?;
+#[derive(Debug, clap::Parser)]
+struct WritePrivateCli {
+    #[clap(default_value = ".")]
+    run_dir: PathBuf,
+
+    #[command(flatten)]
+    compat: GggCompatibilityCli,
+
+    #[command(flatten)]
+    verbosity: clap_verbosity_flag::Verbosity<clap_verbosity_flag::InfoLevel>,
+}
+
+fn driver(clargs: WritePrivateCli, mpbar: Arc<indicatif::MultiProgress>) -> error_stack::Result<(), CliError> {
+    let file_paths = setup::InputFiles::from_run_dir(&clargs.run_dir)?;
     let runlog_name = file_paths.runlog.file_stem()
         .ok_or_else(|| CliError::input_error(format!(
             "runlog path ({}) does not include a file name", file_paths.runlog.display()
@@ -58,12 +72,12 @@ fn driver(run_dir: PathBuf, mpbar: Arc<indicatif::MultiProgress>) -> error_stack
     let providers: Vec<Box<dyn DataProvider>> = vec![
         Box::new(runlog),
         Box::new(MavFile::new(file_paths.mav_file)?),
-        Box::new(AiaFile::new(file_paths.aia_file, file_paths.qc_file.clone())),
-        Box::new(PostprocFile::new(file_paths.vsw_file)?),
-        Box::new(PostprocFile::new(file_paths.vav_file)?),
-        Box::new(PostprocFile::new(file_paths.tav_file)?),
-        Box::new(PostprocFile::new(vsw_ada_file)?),
-        Box::new(PostprocFile::new(file_paths.vav_ada_file)?),
+        Box::new(AiaFile::new(file_paths.aia_file, file_paths.qc_file.clone(), clargs.compat.into())),
+        Box::new(PostprocFile::new(file_paths.vsw_file, clargs.compat.into())?),
+        Box::new(PostprocFile::new(file_paths.vav_file, clargs.compat.into())?),
+        Box::new(PostprocFile::new(file_paths.tav_file, clargs.compat.into())?),
+        Box::new(PostprocFile::new(vsw_ada_file, clargs.compat.into())?),
+        Box::new(PostprocFile::new(file_paths.vav_ada_file, clargs.compat.into())?),
     ];
 
     // Set up our calculators as well
@@ -72,7 +86,7 @@ fn driver(run_dir: PathBuf, mpbar: Arc<indicatif::MultiProgress>) -> error_stack
     ];
 
     // Initialize the temporary netCDF file with a name that clearly indicates it is not complete.
-    let mut nc_dset = init_nc_file(&run_dir)
+    let mut nc_dset = init_nc_file(&clargs.run_dir)
         .change_context_lazy(|| CliError::runtime_error("error occurred while initializing netCDF file"))?;
 
     // Create all dimensions first
@@ -130,7 +144,7 @@ fn driver(run_dir: PathBuf, mpbar: Arc<indicatif::MultiProgress>) -> error_stack
         return res.change_context(new_context);
     }
 
-    let curr_nc_path = temporary_nc_path(&run_dir);
+    let curr_nc_path = temporary_nc_path(&clargs.run_dir);
     // TODO: compute the file name from the times by default.
     finalize_nc_file(&curr_nc_path, runlog_name)?;
 

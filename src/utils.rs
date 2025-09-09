@@ -23,6 +23,7 @@ use crate::error::{BodyError, DateTimeError};
 
 use crate::error::HeaderError;
 
+const GGG_COMPAT_ENV_VAR: &'static str = "GGGRS_COMPAT";
 static WINDOW_PARSE_REGEX: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
 
 /// Standard error type for all GGG functions
@@ -400,6 +401,117 @@ pub fn get_ggg_path() -> Result<PathBuf, GggError> {
     }
 
     Ok(env_path)
+}
+
+/// Because GGG-RS is currently developed more rapidly than
+/// GGG itself, we may need to retain backwards compatibility
+/// with previous version of GGG output files. This enum
+/// defines the available compatibility settings.
+#[derive(Debug, Clone, Copy)]
+pub enum GggCompatibility {
+    /// Indicates that GGG-RS will make no special effort to be
+    /// compatible with any particular GGG version.
+    Current,
+    /// GGG-RS will maintain compatibility with GGG2020.
+    GGG2020,
+}
+
+impl From<GggCompatibilityInput> for GggCompatibility {
+    fn from(value: GggCompatibilityInput) -> Self {
+        match value {
+            GggCompatibilityInput::Current => Self::Current,
+            GggCompatibilityInput::Stable => Self::GGG2020,
+            GggCompatibilityInput::GGG2020 => Self::GGG2020,
+        }
+    }
+}
+
+impl From<GggCompatibilityCli> for GggCompatibility {
+    fn from(value: GggCompatibilityCli) -> Self {
+        value.compat.into()
+    }
+}
+
+/// Enum defining the permitted inputs for compatibility values.
+/// Programs should use [`GggCompatibility`] rather than this
+/// to change their behavior, but use this to parse user inputs.
+/// This enum allows the "stable" variant, which must map to the
+/// most recent GGG release.
+#[derive(Debug, Clone, Copy, strum::Display, clap::ValueEnum)]
+pub enum GggCompatibilityInput {
+    /// Indicates that GGG-RS will make no special effort to be
+    /// compatible with any particular GGG version.
+    Current,
+
+    /// An alias for the most recent GGG release.
+    Stable,
+
+    /// GGG-RS will maintain compatibility with GGG2020.
+    GGG2020,
+}
+
+impl GggCompatibilityInput {
+    /// If the user has the proper environmental variable set in their shell,
+    /// return the corresponding `GggCompatibility` value. Otherwise, return
+    /// the default. Will return an error if the environmental variable is set,
+    /// but has an invalid value.
+    pub fn try_default_from_env() -> Result<Self, GggError> {
+        if let Some(env_value) = std::env::var_os(GGG_COMPAT_ENV_VAR) {
+            let env_value = env_value.to_string_lossy();
+            Self::from_str(&env_value)
+        } else {
+            Ok(GggCompatibilityInput::default())
+        }
+    }
+
+    /// A panicking version of [`GggCompatibility::try_default_from_env`], intended
+    /// for use in command line interfaces.
+    pub fn default_from_env() -> Self {
+        match Self::try_default_from_env() {
+            Ok(v) => v,
+            Err(e) => panic!("The GGGRS_COMPAT environmental variable must be unset or have one of the allowed values.\n{e}")
+        } //.expect("The GGGRS_COMPAT environmental variable must be unset or have one of the allowed values")
+    }
+}
+
+impl FromStr for GggCompatibilityInput {
+    type Err = GggError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "current" => Ok(Self::Current),
+            "stable" => Ok(Self::Stable),
+            "ggg2020" => Ok(Self::GGG2020),
+            _ => Err(GggError::custom(format!(
+                "Unknown value '{s}' for environmental variable '{GGG_COMPAT_ENV_VAR}'"
+            ))),
+        }
+    }
+}
+
+impl Default for GggCompatibilityInput {
+    fn default() -> Self {
+        Self::Current
+    }
+}
+
+/// Use as a field in a CLI with `#[command(flatten)]` to include the compatibility
+/// argument in that program's CLI.
+#[derive(Debug, clap::Args, Clone, Copy)]
+pub struct GggCompatibilityCli {
+    /// This controls compatibility of output files with previous versions of GGG.
+    /// The default is taken from the GGGRS_COMPAT environmental variable, if set
+    /// in your shell. Using this flag overrides the environmental variable. See
+    /// https://tccon.github.io/ggg-rs/compatibility.html for an explanation of
+    /// the allowed values.
+    #[arg(long = "compat", default_value_t = GggCompatibilityInput::default_from_env())]
+    compat: GggCompatibilityInput,
+}
+
+impl GggCompatibilityCli {
+    pub fn new(compat: GggCompatibilityInput) -> Self {
+        Self { compat }
+    }
 }
 
 /// Compute effective vertical paths used by GFIT for integrating trace gas profiles.

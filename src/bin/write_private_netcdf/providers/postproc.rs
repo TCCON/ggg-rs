@@ -1,7 +1,19 @@
-use std::{borrow::Cow, collections::HashMap, fmt::Display, hash::RandomState, path::{Path, PathBuf}};
+use std::{
+    borrow::Cow,
+    collections::HashMap,
+    fmt::Display,
+    hash::RandomState,
+    path::{Path, PathBuf},
+};
 
 use error_stack::ResultExt;
-use ggg_rs::readers::{postproc_files::{open_and_iter_postproc_file, AuxData, PostprocType}, POSTPROC_FILL_VALUE};
+use ggg_rs::{
+    readers::{
+        postproc_files::{open_and_iter_postproc_file, AuxData, PostprocType},
+        POSTPROC_FILL_VALUE,
+    },
+    utils::GggCompatibility,
+};
 use indexmap::IndexMap;
 use indicatif::ProgressBar;
 use itertools::Itertools;
@@ -11,51 +23,75 @@ use tracing::instrument;
 use crate::{
     dimensions::TIME_DIM_NAME,
     errors::{CliError, WriteError},
-    interface::{ConcreteVarToBe, DataProvider, GroupSelector, GroupWriter, SpectrumIndexer, StdDataGroup, VarToBe},
+    interface::{
+        ConcreteVarToBe, DataProvider, GroupSelector, GroupWriter, SpectrumIndexer, VarToBe,
+    },
     progress::{setup_read_pb, setup_write_pb},
-    qc::{load_qc_file_hashmap, QcRow}
+    qc::{load_qc_file_hashmap, QcRow},
 };
 
 /// Provider for .vav.ada.aia files
-/// 
+///
 /// This is distinct from the other post processing file providers because it needs to
 /// use the qc.dat file to scale and flag its values.
 #[derive(Debug)]
 pub(crate) struct AiaFile {
     aia_path: PathBuf,
     qc_path: PathBuf,
+    compatibility: GggCompatibility,
 }
 
 impl AiaFile {
-    pub(crate) fn new(aia_path: PathBuf, qc_path: PathBuf) -> Self {
-        Self { aia_path, qc_path }
+    pub(crate) fn new(
+        aia_path: PathBuf,
+        qc_path: PathBuf,
+        compatibility: GggCompatibility,
+    ) -> Self {
+        Self {
+            aia_path,
+            qc_path,
+            compatibility,
+        }
     }
 
-    fn read_variables(postproc_file: &Path, ntimes: usize, spec_indexer: &SpectrumIndexer, qc_rows: HashMap<String, QcRow>, group_selector: &dyn GroupSelector, pb: &ProgressBar)
-    -> error_stack::Result<Vec<ConcreteVarToBe<f32>>, WriteError> {
-
+    fn read_variables(
+        postproc_file: &Path,
+        compatibility: GggCompatibility,
+        ntimes: usize,
+        spec_indexer: &SpectrumIndexer,
+        qc_rows: HashMap<String, QcRow>,
+        group_selector: &dyn GroupSelector,
+        pb: &ProgressBar,
+    ) -> error_stack::Result<Vec<ConcreteVarToBe<f32>>, WriteError> {
         let (header, row_iter) = open_and_iter_postproc_file(postproc_file)
             .change_context_lazy(|| WriteError::file_read_error(postproc_file))?;
         setup_read_pb(pb, header.nrec, ".vav.ada.aia");
 
         // Create arrays for all of the numeric variables
-        let it = header.column_names.iter()
-            .filter_map(|colname| {
-                if colname != "spectrum" {
-                    Some((colname.to_string(), Array1::from_elem((ntimes,), POSTPROC_FILL_VALUE as f32)))
-                } else {
-                    None
-                }
-            });
-        let mut data_arrays = IndexMap::<_,_,RandomState>::from_iter(it);
+        let it = header.column_names.iter().filter_map(|colname| {
+            if colname != "spectrum" {
+                Some((
+                    colname.to_string(),
+                    Array1::from_elem((ntimes,), POSTPROC_FILL_VALUE as f32),
+                ))
+            } else {
+                None
+            }
+        });
+        let mut data_arrays = IndexMap::<_, _, RandomState>::from_iter(it);
 
         // Every variable will need the file basename and checksum for the .aia file, so we get those
         // now to save recomputing the checksum every time.
-        let aia_basename = postproc_file.file_name().expect("Couldn't get the basename of the .vav.ada.aia file");
+        let aia_basename = postproc_file
+            .file_name()
+            .expect("Couldn't get the basename of the .vav.ada.aia file");
         let aia_checksum = ggg_rs::utils::file_sha256_hexdigest(postproc_file)
-            .change_context_lazy(|| WriteError::detailed_read_error(
-                postproc_file, "failed to compute the SHA256 checksum"
-            ))?;
+            .change_context_lazy(|| {
+                WriteError::detailed_read_error(
+                    postproc_file,
+                    "failed to compute the SHA256 checksum",
+                )
+            })?;
 
         // For each row, find the correct index along the time dimension given the spectrum name,
         // and apply the scale from the QC file. Since this is the .aia file, we will get the numeric
@@ -64,16 +100,19 @@ impl AiaFile {
             pb.inc(1);
 
             let line_num = header.nhead + irow + 1;
-            let row = row.change_context_lazy(|| WriteError::detailed_read_error(
-                postproc_file, format!("could not read line {line_num}")
-            ))?;
+            let row = row.change_context_lazy(|| {
+                WriteError::detailed_read_error(
+                    postproc_file,
+                    format!("could not read line {line_num}"),
+                )
+            })?;
             let itime = spec_indexer.get_index_for_spectrum(&row.auxiliary.spectrum)
                 .ok_or_else(|| WriteError::detailed_read_error(
                     postproc_file, format!("spectrum {} on line {line_num} of the .aia file was not in the runlog!", row.auxiliary.spectrum)
                 ))?;
 
             // Aux variables first
-            for &varname in AuxData::postproc_fields_str() {
+            for &varname in AuxData::postproc_fields_str(compatibility) {
                 if let Some(value) = row.auxiliary.get_numeric_field(varname) {
                     let arr = data_arrays.get_mut(varname)
                         .ok_or_else(|| WriteError::custom(format!(
@@ -101,7 +140,7 @@ impl AiaFile {
                     .ok_or_else(|| WriteError::custom(format!(
                         "retrieved variable {varname} from the .aia file was not included in the qc.dat file"
                     )))?;
-                
+
                 if !ggg_rs::readers::postproc_files::is_postproc_fill(*value) {
                     arr[itime] = (value * scale) as f32;
                 } else {
@@ -124,7 +163,7 @@ impl AiaFile {
             // xmtco2. Currently, Coleen has "xtco2" in the qc.dat file, because there is no tco2 in the InGaAs range.
             // So, either I need to make the group selector smart enough to check with and without the prefix, or I need
             // to force every gas to have the right prefix.
-            let group = if AuxData::postproc_fields_str().contains(&varname.as_str()) {
+            let group = if AuxData::postproc_fields_str(compatibility).contains(&varname.as_str()) {
                 group_selector.boxed_main_group()
             } else {
                 group_selector.boxed_group_for_var(&varname, Some(&varname))
@@ -140,9 +179,13 @@ impl AiaFile {
                 array.into_dyn(),
                 varname.replace("_", " "),
                 // The qc.dat files by convention often put the units in parentheses, which we don't want.
-                qc_row.unit.trim_start_matches('(').trim_end_matches(')').to_string(),
+                qc_row
+                    .unit
+                    .trim_start_matches('(')
+                    .trim_end_matches(')')
+                    .to_string(),
                 aia_basename.to_string_lossy().to_string(),
-                aia_checksum.clone()
+                aia_checksum.clone(),
             );
             this_var.add_attribute("description", qc_row.description.clone());
             this_var.add_attribute("vmin", qc_row.vmin);
@@ -170,12 +213,27 @@ impl DataProvider for AiaFile {
     }
 
     #[instrument(name = "aia_file_writer", skip_all)]
-    fn write_data_to_nc(&self, spec_indexer: &crate::interface::SpectrumIndexer, writer: &dyn GroupWriter, group_selector: &dyn GroupSelector, pb: ProgressBar) -> error_stack::Result<(), WriteError> {
+    fn write_data_to_nc(
+        &self,
+        spec_indexer: &crate::interface::SpectrumIndexer,
+        writer: &dyn GroupWriter,
+        group_selector: &dyn GroupSelector,
+        pb: ProgressBar,
+    ) -> error_stack::Result<(), WriteError> {
         let qc_rows = load_qc_file_hashmap(&self.qc_path)?;
-        let ntimes = writer.get_dim_length(TIME_DIM_NAME)
+        let ntimes = writer
+            .get_dim_length(TIME_DIM_NAME)
             .ok_or_else(|| WriteError::missing_dim_error(".aia", TIME_DIM_NAME))?;
         // TODO: compute flag variable
-        let variables = Self::read_variables(&self.aia_path, ntimes, spec_indexer, qc_rows, group_selector, &pb)?;
+        let variables = Self::read_variables(
+            &self.aia_path,
+            self.compatibility,
+            ntimes,
+            spec_indexer,
+            qc_rows,
+            group_selector,
+            &pb,
+        )?;
         let nvar = variables.len();
         setup_write_pb(&pb, nvar, ".vav.ada.aia");
         let tmp = variables.iter().map(|v| v as &dyn VarToBe).collect_vec();
@@ -190,11 +248,15 @@ impl DataProvider for AiaFile {
 #[derive(Debug)]
 pub(crate) struct PostprocFile {
     file_path: PathBuf,
-    postproc_type: PostprocType
+    postproc_type: PostprocType,
+    compatibility: GggCompatibility,
 }
 
 impl PostprocFile {
-    pub(crate) fn new(file_path: PathBuf) -> Result<Self, CliError> {
+    pub(crate) fn new(
+        file_path: PathBuf,
+        compatibility: GggCompatibility,
+    ) -> Result<Self, CliError> {
         let postproc_type = PostprocType::from_path(&file_path)
             .ok_or_else(|| CliError::internal_error("Tried to construct a PostprocFile provider with an unrecognized post-processing file"))?;
         if let PostprocType::VavAdaAia = postproc_type {
@@ -202,19 +264,34 @@ impl PostprocFile {
             tracing::warn!("Using a generic PostprocFile provider for a .vav.ada.aia file - normally .vav.ada.aia files are provided with the AiaFile type");
         }
 
-        Ok(Self { file_path, postproc_type })
+        Ok(Self {
+            file_path,
+            postproc_type,
+            compatibility,
+        })
     }
 
-    fn read_variables(&self, ntimes: usize, spec_indexer: &SpectrumIndexer, group_selector: &dyn GroupSelector, pb: &ProgressBar)
-    -> error_stack::Result<Vec<ConcreteVarToBe<f32>>, WriteError> {
+    fn read_variables(
+        &self,
+        ntimes: usize,
+        spec_indexer: &SpectrumIndexer,
+        group_selector: &dyn GroupSelector,
+        pb: &ProgressBar,
+    ) -> error_stack::Result<Vec<ConcreteVarToBe<f32>>, WriteError> {
         // Every variable will need the file basename and checksum for the source file, so we get those
         // now to save recomputing the checksum every time.
-        let file_basename = self.file_path.file_name().expect("Couldn't get the basename of the .vav.ada.aia file");
+        let file_basename = self
+            .file_path
+            .file_name()
+            .expect("Couldn't get the basename of the .vav.ada.aia file");
         let file_checksum = ggg_rs::utils::file_sha256_hexdigest(&self.file_path)
-            .change_context_lazy(|| WriteError::detailed_read_error(
-                &self.file_path, "failed to compute the SHA256 checksum"
-            ))?;
-        
+            .change_context_lazy(|| {
+                WriteError::detailed_read_error(
+                    &self.file_path,
+                    "failed to compute the SHA256 checksum",
+                )
+            })?;
+
         let (header, row_iter) = open_and_iter_postproc_file(&self.file_path)
             .change_context_lazy(|| WriteError::file_read_error(&self.file_path))?;
 
@@ -222,16 +299,19 @@ impl PostprocFile {
 
         // Create arrays for all of the retrieved variables. We deliberately skip the auxiliary
         // variables; those should only be provided by the AiaFile provider.
-        let aux_fields = ggg_rs::readers::postproc_files::AuxData::postproc_fields_str();
-        let it = header.column_names.iter()
-            .filter_map(|colname| {
-                if !aux_fields.contains(&colname.as_str()) {
-                    Some((colname.to_string(), Array1::from_elem((ntimes,), POSTPROC_FILL_VALUE as f32)))
-                } else {
-                    None
-                }
-            });
-        let mut data_arrays = IndexMap::<_,_,RandomState>::from_iter(it);
+        let aux_fields =
+            ggg_rs::readers::postproc_files::AuxData::postproc_fields_str(self.compatibility);
+        let it = header.column_names.iter().filter_map(|colname| {
+            if !aux_fields.contains(&colname.as_str()) {
+                Some((
+                    colname.to_string(),
+                    Array1::from_elem((ntimes,), POSTPROC_FILL_VALUE as f32),
+                ))
+            } else {
+                None
+            }
+        });
+        let mut data_arrays = IndexMap::<_, _, RandomState>::from_iter(it);
 
         // For each row, find the correct index along the time dimension given the spectrum name.
         // Unlike the AiaFile provider, we don't apply any scaling - just keep the values as they are.
@@ -239,9 +319,12 @@ impl PostprocFile {
             pb.inc(1);
 
             let line_num = header.nhead + irow + 1;
-            let row = row.change_context_lazy(|| WriteError::detailed_read_error(
-                &self.file_path, format!("could not read line {line_num}")
-            ))?;
+            let row = row.change_context_lazy(|| {
+                WriteError::detailed_read_error(
+                    &self.file_path,
+                    format!("could not read line {line_num}"),
+                )
+            })?;
             let itime = spec_indexer.get_index_for_spectrum(&row.auxiliary.spectrum)
                 .ok_or_else(|| WriteError::detailed_read_error(
                     &self.file_path, format!("spectrum {} on line {line_num} of the .aia file was not in the runlog!", row.auxiliary.spectrum)
@@ -253,7 +336,7 @@ impl PostprocFile {
                     .ok_or_else(|| WriteError::custom(format!(
                         "in the .aia file, {varname} is in line {line_num} but was not in the column names"
                     )))?;
-                
+
                 arr[itime] = *value as f32;
             }
         }
@@ -281,7 +364,7 @@ impl PostprocFile {
                 long_name,
                 self.ret_var_units().to_string(),
                 file_basename.to_string_lossy().to_string(),
-                file_checksum.clone()
+                file_checksum.clone(),
             );
             this_var.add_attribute("description", self.ret_var_descr(&input_varname));
             variables.push(this_var);
@@ -302,7 +385,7 @@ impl PostprocFile {
             PostprocType::Other(ext) => {
                 let ext = ext.replace(".", "_");
                 format!("{ext}_{gas_or_window}")
-            },
+            }
         }
     }
 
@@ -316,7 +399,8 @@ impl PostprocFile {
     }
 
     fn ret_var_descr(&self, gas_or_window: &str) -> String {
-        let (gas, window) = if let Some((g, w)) = ggg_rs::utils::split_gas_and_window(gas_or_window) {
+        let (gas, window) = if let Some((g, w)) = ggg_rs::utils::split_gas_and_window(gas_or_window)
+        {
             let win = format!("the window centered at {w} cm-1");
             (g, win)
         } else {
@@ -357,7 +441,6 @@ impl PostprocFile {
     }
 }
 
-
 impl Display for PostprocFile {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match &self.postproc_type {
@@ -383,8 +466,15 @@ impl DataProvider for PostprocFile {
     }
 
     #[instrument(name = "postproc_file_writer", skip_all)]
-    fn write_data_to_nc(&self, spec_indexer: &crate::interface::SpectrumIndexer, writer: &dyn GroupWriter, group_selector: &dyn GroupSelector, pb: ProgressBar) -> error_stack::Result<(), WriteError> {
-        let ntimes = writer.get_dim_length(TIME_DIM_NAME)
+    fn write_data_to_nc(
+        &self,
+        spec_indexer: &crate::interface::SpectrumIndexer,
+        writer: &dyn GroupWriter,
+        group_selector: &dyn GroupSelector,
+        pb: ProgressBar,
+    ) -> error_stack::Result<(), WriteError> {
+        let ntimes = writer
+            .get_dim_length(TIME_DIM_NAME)
             .ok_or_else(|| WriteError::missing_dim_error(".aia", TIME_DIM_NAME))?;
         let variables = self.read_variables(ntimes, spec_indexer, group_selector, &pb)?;
         let nvar = variables.len();
@@ -397,18 +487,18 @@ impl DataProvider for PostprocFile {
 }
 
 // TODO: update this to handle ADCFs that may have three or five values, and use it to write the ADCFs
-// fn parse_corr_fac_block<F: BufRead>(file: &mut FileBuf<F>, first_line: String, iline: &mut usize) 
+// fn parse_corr_fac_block<F: BufRead>(file: &mut FileBuf<F>, first_line: String, iline: &mut usize)
 // -> error_stack::Result<(String, HashMap<String, (f64, f64)>), HeaderError> {
-//     
+//
 //     // and AICFs to the netCDF file
 //     let (cf_name, cf_nums) = first_line.split_once(":")
-//         .ok_or_else(|| HeaderError::ParseError { 
-//             location: FileLocation::new(Some(file.path.clone()), Some(*iline+1), Some(first_line.clone())), 
+//         .ok_or_else(|| HeaderError::ParseError {
+//             location: FileLocation::new(Some(file.path.clone()), Some(*iline+1), Some(first_line.clone())),
 //             cause: "Line containing 'Correction Factors' must have a colon in it".to_string()
 //         })?;
 
 //     let s = cf_nums.split_whitespace().nth(0)
-//         .ok_or_else(|| HeaderError::ParseError { 
+//         .ok_or_else(|| HeaderError::ParseError {
 //             location: FileLocation::new(Some(file.path.clone()), Some(*iline+1), Some(first_line.clone())),
 //             cause: "A corrections file line did not have at least one number after the colon".into()
 //         })?;
@@ -425,13 +515,13 @@ impl DataProvider for PostprocFile {
 //         *iline += 1;
 //         if let Some((key, value, uncertainty)) = line.split_whitespace().collect_tuple() {
 //             let value = value.parse::<f64>()
-//             .change_context_lazy(|| HeaderError::ParseError { 
+//             .change_context_lazy(|| HeaderError::ParseError {
 //                 location: FileLocation::new(Some(file.path.clone()), Some(*iline+1), Some(line.clone())),
 //                 cause: format!("Could not parse the {key} value into a float"),
 //             })?;
 
 //             let uncertainty = uncertainty.parse::<f64>()
-//             .change_context_lazy(|| HeaderError::ParseError { 
+//             .change_context_lazy(|| HeaderError::ParseError {
 //                 location: FileLocation::new(Some(file.path.clone()), Some(*iline+1), Some(line.clone())),
 //                 cause: format!("Could not parse the {key} uncertainty into a float"),
 //             })?;

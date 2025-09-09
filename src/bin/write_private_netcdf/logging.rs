@@ -1,20 +1,34 @@
-use std::{path::Path, sync::{Arc, Mutex}};
+use std::{
+    path::Path,
+    sync::{Arc, Mutex},
+};
 
 use indicatif::MultiProgress;
 use tracing::Level;
-use tracing_subscriber::{Registry,fmt::writer::MakeWriterExt,prelude::*};
-
+use tracing_subscriber::{fmt::writer::MakeWriterExt, prelude::*, Registry};
 
 /// Set up logging to both stderr and "write_netcdf.log" in the given run directory.
-/// 
+///
 /// Note that any previous write_netcdf.log is overwritten. Panics if setting up the logger
 /// fails, usually because it cannot write to the log file.
-pub(crate) fn init_logging(run_dir: &Path, level: Level, mpbar: Arc<MultiProgress>) {
+pub(crate) fn init_logging(
+    run_dir: &Path,
+    verbosity_level: clap_verbosity_flag::LevelFilter,
+    mpbar: Arc<MultiProgress>,
+) {
     // TODO: Possibly integrate with indicatif to use its
     // println (https://docs.rs/indicatif/latest/indicatif/struct.ProgressBar.html#method.println)
     // or suspend functions to provide a way to log messages and have a progress bar running.
     // This will probably require creating a custom struct that implements Write and handles suspending
     // a weak progress bar to print the messages.
+
+    let level = if let Some(lev) = verbosity_to_level(verbosity_level) {
+        lev
+    } else {
+        // If the verbosity was such that there should be no logging, return without
+        // setting up any logging.
+        return;
+    };
 
     // Log to the screen with the user-requested verbosity
     // The Mutex is required by tracing_subscriber to make something that implements
@@ -85,5 +99,16 @@ impl std::io::Write for ConsoleLogger {
             res = self.stderr.flush();
         });
         res
+    }
+}
+
+fn verbosity_to_level(verbosity_level: clap_verbosity_flag::LevelFilter) -> Option<Level> {
+    match verbosity_level {
+        log::LevelFilter::Off => None,
+        log::LevelFilter::Error => Some(Level::ERROR),
+        log::LevelFilter::Warn => Some(Level::WARN),
+        log::LevelFilter::Info => Some(Level::INFO),
+        log::LevelFilter::Debug => Some(Level::DEBUG),
+        log::LevelFilter::Trace => Some(Level::TRACE),
     }
 }

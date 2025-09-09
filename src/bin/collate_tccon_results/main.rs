@@ -1,10 +1,21 @@
 use std::{collections::HashMap, path::PathBuf, process::ExitCode};
 
 use clap::Parser;
-use clap_verbosity_flag::{Verbosity, InfoLevel};
+use clap_verbosity_flag::{InfoLevel, Verbosity};
 use error_stack::ResultExt;
 use ggg_rs::{
-    cit_spectrum_name::{CitDetector, CitSpectrumName, NoDetectorSpecName}, collation::{collate_results, CollationError, CollationIndexer, CollationMode, CollationResult}, logging::init_logging, o2_dmf::{make_boxed_o2_dmf_provider, O2DmfCli}, readers::{runlogs::{FallibleRunlog, RunlogDataRec}, ProgramVersion}, tccon::input_config::TcconWindowPrefixes
+    cit_spectrum_name::{CitDetector, CitSpectrumName, NoDetectorSpecName},
+    collation::{
+        collate_results, CollationError, CollationIndexer, CollationMode, CollationResult,
+    },
+    logging::init_logging,
+    o2_dmf::{make_boxed_o2_dmf_provider, O2DmfCli},
+    readers::{
+        runlogs::{FallibleRunlog, RunlogDataRec},
+        ProgramVersion,
+    },
+    tccon::input_config::TcconWindowPrefixes,
+    utils::GggCompatibilityCli,
 };
 
 fn main() -> ExitCode {
@@ -25,32 +36,35 @@ fn main() -> ExitCode {
 
 fn main_inner(clargs: CollateCli) -> error_stack::Result<(), CollationError> {
     let multiggg_file = PathBuf::from(&clargs.multiggg_file);
-    let collate_version = ProgramVersion { 
+    let collate_version = ProgramVersion {
         program: "collate_tccon_results".to_string(),
         version: "Version 1.0".to_string(),
         date: "2024-04-28".to_string(),
-        authors: "JLL".to_string()
+        authors: "JLL".to_string(),
     };
     let indexer = TcconColIndexer::new(clargs.primary_detector);
 
     // I think eventually we will require a prefix file. But for now, I want to be able to use
     // this without needing a prefix file.
     let prefixer = if let Some(p) = clargs.prefix_file {
-        Some(
-            TcconWindowPrefixes::new(&p)
-            .change_context_lazy(|| CollationError::custom("Error getting the detector prefixes"))?
-        )
+        Some(TcconWindowPrefixes::new(&p).change_context_lazy(|| {
+            CollationError::custom("Error getting the detector prefixes")
+        })?)
     } else {
-        TcconWindowPrefixes::new_standard_opt()
-        .change_context_lazy(|| CollationError::custom("Error getting the detector prefixes from the standard file"))?
+        TcconWindowPrefixes::new_standard_opt().change_context_lazy(|| {
+            CollationError::custom("Error getting the detector prefixes from the standard file")
+        })?
     };
 
-    let run_dir = clargs.multiggg_file.parent()
-        .ok_or_else(|| CollationError::CouldNotFind("parent directory of the multiggg.sh file".to_string()))?;
-    let o2_provider = make_boxed_o2_dmf_provider(
-        &clargs.o2_dmf_args,
-        run_dir
-    ).change_context_lazy(|| CollationError::custom("An error occurred while setting up the O2 mean mole fraction provider"))?;
+    let run_dir = clargs.multiggg_file.parent().ok_or_else(|| {
+        CollationError::CouldNotFind("parent directory of the multiggg.sh file".to_string())
+    })?;
+    let o2_provider = make_boxed_o2_dmf_provider(&clargs.o2_dmf_args, run_dir)
+        .change_context_lazy(|| {
+            CollationError::custom(
+                "An error occurred while setting up the O2 mean mole fraction provider",
+            )
+        })?;
 
     collate_results(
         &multiggg_file,
@@ -60,7 +74,8 @@ fn main_inner(clargs: CollateCli) -> error_stack::Result<(), CollationError> {
         clargs.mode,
         collate_version,
         clargs.output_dir.as_deref(),
-        clargs.write_nts
+        clargs.write_nts,
+        clargs.compatibility.into(),
     )
 }
 
@@ -75,7 +90,7 @@ struct CollateCli {
     /// .col files will be read from the same directory as this file,
     /// and any relative paths needed in the .col headers will be interpreted
     /// as relative to that directory
-    #[clap(short='m', long, default_value = "./multiggg.sh")]
+    #[clap(short = 'm', long, default_value = "./multiggg.sh")]
     multiggg_file: PathBuf,
 
     /// Which detector is considered the "primary" detector; this will affect
@@ -94,7 +109,7 @@ struct CollateCli {
     /// Write out "collate_results.nts" listing spectra with a ZPD time earlier than
     /// the preceding spectrum in the runlog. This is not written by default, because
     /// collate_tccon_results does not rely on the runlog to be time-ordered.
-    #[clap(short='n', long)]
+    #[clap(short = 'n', long)]
     write_nts: bool,
 
     /// Path to the file that defines the specie's prefixes for different frequency
@@ -112,6 +127,9 @@ struct CollateCli {
     output_dir: Option<PathBuf>,
 
     #[command(flatten)]
+    compatibility: GggCompatibilityCli,
+
+    #[command(flatten)]
     verbosity: Verbosity<InfoLevel>,
 }
 
@@ -125,7 +143,12 @@ struct TcconColIndexer {
 
 impl TcconColIndexer {
     fn new(primary_detector: CitDetector) -> Self {
-        Self { primary_detector, index_map: HashMap::new(), neg_timesteps: vec![], runlog_data: vec![] }
+        Self {
+            primary_detector,
+            index_map: HashMap::new(),
+            neg_timesteps: vec![],
+            runlog_data: vec![],
+        }
     }
 }
 
@@ -138,11 +161,13 @@ impl CollationIndexer for TcconColIndexer {
         let mut prev_rec: Option<RunlogDataRec> = None;
         let mut idx = 0;
 
-
         for rec in runlog_iter {
-            let rec = rec.map_err(|e| CollationError::could_not_read_file(
-                format!("error occurred while reading one line of the runlog: {e}"), runlog
-            ))?;
+            let rec = rec.map_err(|e| {
+                CollationError::could_not_read_file(
+                    format!("error occurred while reading one line of the runlog: {e}"),
+                    runlog,
+                )
+            })?;
 
             if let Some(was) = prev_rec {
                 let time_was = was.zpd_time();
@@ -160,10 +185,12 @@ impl CollationIndexer for TcconColIndexer {
                 }
             }
 
-            let nd_spec = NoDetectorSpecName::new(&rec.spectrum_name)
-                .map_err(|e| CollationError::custom(
-                    format!("Could not parse spectrum name '{}': {e}", rec.spectrum_name)
-                ))?;
+            let nd_spec = NoDetectorSpecName::new(&rec.spectrum_name).map_err(|e| {
+                CollationError::custom(format!(
+                    "Could not parse spectrum name '{}': {e}",
+                    rec.spectrum_name
+                ))
+            })?;
 
             if Some(&nd_spec) == last_spec.as_ref() {
                 // ignore this spectrum; it's a second detector for the same observation as the last one
@@ -181,19 +208,24 @@ impl CollationIndexer for TcconColIndexer {
 
             prev_rec = Some(rec);
         }
-        
+
         Ok(())
     }
 
     fn get_row_index(&self, spectrum: &str) -> CollationResult<usize> {
-        let nd_spec = NoDetectorSpecName::new(spectrum)
-            .map_err(|e| CollationError::custom(
-                format!("Could not parse spectrum name '{}': {e}", spectrum)
-            ))?;
+        let nd_spec = NoDetectorSpecName::new(spectrum).map_err(|e| {
+            CollationError::custom(format!("Could not parse spectrum name '{}': {e}", spectrum))
+        })?;
 
-        self.index_map.get(&nd_spec).ok_or_else(|| CollationError::custom(
-            format!("Cannot find spectrum '{}' in the runlog (ignoring the detector).", spectrum)
-        )).map(|i| *i)
+        self.index_map
+            .get(&nd_spec)
+            .ok_or_else(|| {
+                CollationError::custom(format!(
+                    "Cannot find spectrum '{}' in the runlog (ignoring the detector).",
+                    spectrum
+                ))
+            })
+            .map(|i| *i)
     }
 
     fn get_runlog_data(&self) -> CollationResult<&[ggg_rs::readers::runlogs::RunlogDataRec]> {
@@ -203,15 +235,23 @@ impl CollationIndexer for TcconColIndexer {
     fn get_negative_runlog_timesteps(&self) -> CollationResult<&[(RunlogDataRec, RunlogDataRec)]> {
         Ok(&self.neg_timesteps)
     }
-    
+
     fn do_replace_value(&self, new_spectrum: &str, column_name: &str) -> CollationResult<bool> {
         // For standard TCCON use, we want auxiliary data like the time, met, zmin, etc. to come from
         // the primary detector (usually InGaAs) because that detector provides the key CO2 and CH4
         // products.
-        if ggg_rs::readers::postproc_files::AuxData::postproc_fields_str().contains(&column_name) {
-            let new_spectrum: CitSpectrumName = new_spectrum.parse().map_err(|e| CollationError::parsing_error(
-                format!("could not parse spectrum name '{new_spectrum}': {e}")
-            ))?;
+        // As in the default implementation, we assume that using the current compatibility is
+        // reasonable; i.e., we want to check against the biggest list of auxiliary fields.
+        if ggg_rs::readers::postproc_files::AuxData::postproc_fields_str(
+            ggg_rs::utils::GggCompatibility::Current,
+        )
+        .contains(&column_name)
+        {
+            let new_spectrum: CitSpectrumName = new_spectrum.parse().map_err(|e| {
+                CollationError::parsing_error(format!(
+                    "could not parse spectrum name '{new_spectrum}': {e}"
+                ))
+            })?;
             if new_spectrum.detector() == self.primary_detector {
                 Ok(true)
             } else {
@@ -223,11 +263,11 @@ impl CollationIndexer for TcconColIndexer {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use ggg_rs::o2_dmf::DEFAULT_O2_DMF;
     use ggg_rs::test_utils::compare_output_text_files;
+    use ggg_rs::utils::GggCompatibilityInput;
 
     use super::*;
 
@@ -242,19 +282,33 @@ mod tests {
     }
 
     fn test_inner(mode: CollationMode, out_file_name: &str) {
+        let tmp = GggCompatibilityInput::default_from_env();
         let crate_root = env!("CARGO_MANIFEST_DIR");
-        let input_dir = PathBuf::from(crate_root).join("test-data").join("inputs").join("collate-tccon-results");
-        let expected_dir = PathBuf::from(crate_root).join("test-data").join("expected").join("collate-tccon-results");
-        let output_dir = PathBuf::from(crate_root).join("test-data").join("outputs").join("collate-tccon-results");
+        let input_dir = PathBuf::from(crate_root)
+            .join("test-data")
+            .join("inputs")
+            .join("collate-tccon-results");
+        let expected_dir = PathBuf::from(crate_root)
+            .join("test-data")
+            .join("expected")
+            .join("collate-tccon-results");
+        let output_dir = PathBuf::from(crate_root)
+            .join("test-data")
+            .join("outputs")
+            .join("collate-tccon-results");
         let clargs = CollateCli {
             mode,
             multiggg_file: input_dir.join("multiggg.sh"),
             primary_detector: CitDetector::InGaAs,
             write_nts: false,
             prefix_file: Some(input_dir.join("secondary_prefixes.dat")),
-            o2_dmf_args: O2DmfCli { fixed_o2_dmf: Some(DEFAULT_O2_DMF), o2_dmf_file: None },
+            o2_dmf_args: O2DmfCli {
+                fixed_o2_dmf: Some(DEFAULT_O2_DMF),
+                o2_dmf_file: None,
+            },
             output_dir: Some(output_dir.clone()),
-            verbosity: Verbosity::new(0, 0), 
+            compatibility: GggCompatibilityCli::new(tmp),
+            verbosity: Verbosity::new(0, 0),
         };
         main_inner(clargs).expect("running collation should succeed");
 
