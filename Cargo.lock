@@ -710,9 +710,9 @@ checksum = "3f9eec918d3f24069decb9af1554cad7c880e2da24a9afd88aca000531ab82c1"
 
 [[package]]
 name = "fortformat"
-version = "0.1.1"
+version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c8501b12c937998d534c02cb8cc822adcc32d797b49f6e557d5e5ffdc46209c6"
+checksum = "1563c3ec36accfbca814ae943f6c2e4056ac4193e1dd2266e2e12235cf63ec93"
 dependencies = [
  "error-stack 0.4.1",
  "itertools 0.11.0",
