@@ -265,6 +265,26 @@ It is built with <a href="https://github.com/rust-lang/mdBook">mdbook</a> with t
 <p>You will see the rendered local copy of the book, and it will automatically update each time you make changes.</p>
 <p>Please do this before submitting any pull requests, as it will slow things down significantly if we have to iterate
 multiple times with you to ensure the book builds correctly.</p>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="compatibility"><a class="header" href="#compatibility">Compatibility</a></h1>
+<p>Some GGG-RS programs can be configured to change their output or expected input to be compatible with previous versions of GGG.
+Programs that support this behavior will have a <code>--compat</code> command line option.
+If that option is not specified, they will take their default from the <code>GGGRS_COMPAT</code> environmental variable.
+If neither the command line option nor the environmental variable are set, then GGG-RS will not make any
+adjustments to ensure compatibility.</p>
+<h2 id="compatibility-options"><a class="header" href="#compatibility-options">Compatibility options</a></h2>
+<ul>
+<li><code>current</code>: no special modifications will be made to I/O.</li>
+<li><code>stable</code>: an alias for the most recent GGG release; currently GGG2020.</li>
+<li><code>ggg2020</code>: post-processing files will be kept compatible with the GGG2020 post-processing Fortran programs.
+Specifically, the O2 global mean dry mole fraction will not be written as a 26th auxiliary data column.</li>
+</ul>
+<h2 id="deprecation-policy"><a class="header" href="#deprecation-policy">Deprecation policy</a></h2>
+<p>GGG-RS will only guarantee compatibility with the last GGG release, major or minor.
+For example, once GGG2020.1 released, support for GGG2020.0 is not guaranteed.</p>
+<p>Compatibility back to the last major release <em>may</em> be supported, if the complexity of
+doing so does not detract from code maintainability.
+For example, support for GGG2020 may be maintained after the GGG2020.1 release, but only
+if doing so does not make maintaining the GGG-RS code unfeasibly complicated.</p>
 <div style="break-before: page; page-break-before: always;"></div><h1 id="setup-helper-programs"><a class="header" href="#setup-helper-programs">Setup helper programs</a></h1>
 <div style="break-before: page; page-break-before: always;"></div><h1 id="change_ggg_files"><a class="header" href="#change_ggg_files">change_ggg_files</a></h1>
 <div style="break-before: page; page-break-before: always;"></div><h1 id="list_spectra"><a class="header" href="#list_spectra">list_spectra</a></h1>
