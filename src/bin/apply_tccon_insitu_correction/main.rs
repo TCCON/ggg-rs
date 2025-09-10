@@ -217,7 +217,7 @@ mod tests {
     use std::path::PathBuf;
 
     use crate::{driver, InsituCorrCli};
-    use ggg_rs::test_utils::compare_output_text_files;
+    use ggg_rs::test_utils::{compare_output_text_files, remove_file_if_exists};
 
     #[test]
     fn test_insitu_correct_pa_benchmark() {
@@ -234,6 +234,7 @@ mod tests {
 
     fn test_insitu_correct_pa_benchmark_inner(subdir: &str) {
         let crate_root = env!("CARGO_MANIFEST_DIR");
+        let out_file_name = "pa_ggg_benchmark.vav.ada.aia";
         let input_dir = PathBuf::from(crate_root)
             .join("test-data")
             .join("inputs")
@@ -246,6 +247,8 @@ mod tests {
             .join("test-data")
             .join("outputs")
             .join(subdir);
+        remove_file_if_exists(&output_dir.join(out_file_name))
+            .expect("Should be able to delete existing output file");
 
         let clargs = InsituCorrCli {
             correction_file: input_dir.join("corrections_insitu_postavg.dat"),
@@ -255,6 +258,6 @@ mod tests {
 
         driver(clargs).expect("Running the airmass correction should not fail.");
 
-        compare_output_text_files(&expected_dir, &output_dir, "pa_ggg_benchmark.vav.ada.aia");
+        compare_output_text_files(&expected_dir, &output_dir, out_file_name);
     }
 }

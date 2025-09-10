@@ -10,6 +10,14 @@ pub(crate) fn test_data_dir() -> PathBuf {
     PathBuf::from(crate_root).join("test-data")
 }
 
+pub fn remove_file_if_exists(file: &Path) -> std::io::Result<()> {
+    if file.exists() {
+        std::fs::remove_file(file)
+    } else {
+        Ok(())
+    }
+}
+
 pub fn compare_output_text_files(expected_dir: &Path, output_dir: &Path, out_file_name: &str) {
     let mut child = Command::new("diff")
         .arg("-q")

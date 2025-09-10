@@ -266,7 +266,7 @@ impl CollationIndexer for TcconColIndexer {
 #[cfg(test)]
 mod tests {
     use ggg_rs::o2_dmf::DEFAULT_O2_DMF;
-    use ggg_rs::test_utils::compare_output_text_files;
+    use ggg_rs::test_utils::{compare_output_text_files, remove_file_if_exists};
     use ggg_rs::utils::GggCompatibilityInput;
 
     use super::*;
@@ -331,6 +331,9 @@ mod tests {
             .join("test-data")
             .join("outputs")
             .join(subdir);
+        remove_file_if_exists(&output_dir.join(out_file_name))
+            .expect("Should be able to delete existing output file");
+
         let clargs = CollateCli {
             mode,
             multiggg_file: input_dir.join("multiggg.sh"),
