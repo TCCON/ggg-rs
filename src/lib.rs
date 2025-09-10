@@ -13,6 +13,9 @@ pub mod logging;
 /// Utilities for netCDF files
 #[cfg(feature = "netcdf")]
 pub mod nc_utils;
+/// Reexport netcdf to allow dependencies use the same version
+#[cfg(feature = "netcdf")]
+pub use netcdf;
 /// Interfaces for calculating the mean atmospheric O2 mole fraction
 pub mod o2_dmf;
 /// Reading OPUS interferograms or spectra
