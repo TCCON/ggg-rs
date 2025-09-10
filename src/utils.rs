@@ -504,7 +504,7 @@ pub struct GggCompatibilityCli {
     /// in your shell. Using this flag overrides the environmental variable. See
     /// https://tccon.github.io/ggg-rs/compatibility.html for an explanation of
     /// the allowed values.
-    #[arg(long = "compat", default_value_t = GggCompatibilityInput::default_from_env())]
+    #[arg(long, ignore_case = true, default_value_t = GggCompatibilityInput::default_from_env())]
     compat: GggCompatibilityInput,
 }
 
