@@ -185,7 +185,11 @@ fn driver(clargs: AirmassCorrCli) -> error_stack::Result<(), CliError> {
     })?;
 
     // Read each row, apply airmass corrections, and write out the Xgas values.
-    let settings = fortformat::ser::SerSettings::default().align_left_str(true);
+    // We want to allow skipped fields in case we are reading a file that omitted
+    // fields allowed to have defaults in the auxiliary columns.
+    let settings = fortformat::ser::SerSettings::default()
+        .align_left_str(true)
+        .allow_skipped_fields(true);
     let missing_value = header.missing_value;
 
     for (irow, row) in rows.enumerate() {
@@ -339,19 +343,31 @@ mod tests {
 
     #[test]
     fn test_airmass_correct_pa_benchmark() {
+        test_airmass_correct_pa_benchmark_inner("apply-tccon-airmass-correction");
+    }
+
+    #[test]
+    fn test_airmass_correct_pa_benchmark_stable() {
+        // This tests that the airmass correction code correctly handles upstream files from
+        // the last GGG release. We don't need to specify the compatibility setting because
+        // this program will keep the same auxiliary columns that are in the upstream file.
+        test_airmass_correct_pa_benchmark_inner("apply-tccon-airmass-correction-stable");
+    }
+
+    fn test_airmass_correct_pa_benchmark_inner(subdir: &str) {
         let crate_root = env!("CARGO_MANIFEST_DIR");
         let input_dir = PathBuf::from(crate_root)
             .join("test-data")
             .join("inputs")
-            .join("apply-tccon-airmass-correction");
+            .join(subdir);
         let expected_dir = PathBuf::from(crate_root)
             .join("test-data")
             .join("expected")
-            .join("apply-tccon-airmass-correction");
+            .join(subdir);
         let output_dir = PathBuf::from(crate_root)
             .join("test-data")
             .join("outputs")
-            .join("apply-tccon-airmass-correction");
+            .join(subdir);
 
         let clargs = AirmassCorrCli {
             correction_file: input_dir.join("corrections_airmass_preavg.dat"),

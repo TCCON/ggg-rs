@@ -273,16 +273,51 @@ mod tests {
 
     #[test]
     fn test_collate_pa_benchmark_vsw() {
-        test_inner(CollationMode::VerticalColumns, "pa_ggg_benchmark.vsw");
+        test_inner(
+            CollationMode::VerticalColumns,
+            GggCompatibilityInput::Current,
+            "pa_ggg_benchmark.vsw",
+        );
+    }
+
+    #[test]
+    fn test_collate_pa_benchmark_vsw_stable() {
+        // This will test that we correctly produce a .vsw file compatible
+        // with the previous release of GGG
+        test_inner(
+            CollationMode::VerticalColumns,
+            GggCompatibilityInput::Stable,
+            "pa_ggg_benchmark.vsw",
+        );
     }
 
     #[test]
     fn test_collate_pa_benchmark_tsw() {
-        test_inner(CollationMode::VmrScaleFactors, "pa_ggg_benchmark.tsw");
+        test_inner(
+            CollationMode::VmrScaleFactors,
+            GggCompatibilityInput::Current,
+            "pa_ggg_benchmark.tsw",
+        );
     }
 
-    fn test_inner(mode: CollationMode, out_file_name: &str) {
-        let tmp = GggCompatibilityInput::default_from_env();
+    #[test]
+    fn test_collate_pa_benchmark_tsw_stable() {
+        // This will test that we correctly produce a .vsw file compatible
+        // with the previous release of GGG
+        test_inner(
+            CollationMode::VmrScaleFactors,
+            GggCompatibilityInput::Stable,
+            "pa_ggg_benchmark.tsw",
+        );
+    }
+
+    fn test_inner(mode: CollationMode, compat: GggCompatibilityInput, out_file_name: &str) {
+        let subdir = match compat {
+            GggCompatibilityInput::Current => "collate-tccon-results",
+            GggCompatibilityInput::Stable => "collate-tccon-results-stable",
+            GggCompatibilityInput::GGG2020 => "collate-tccon-results-ggg2020",
+        };
+
         let crate_root = env!("CARGO_MANIFEST_DIR");
         let input_dir = PathBuf::from(crate_root)
             .join("test-data")
@@ -291,11 +326,11 @@ mod tests {
         let expected_dir = PathBuf::from(crate_root)
             .join("test-data")
             .join("expected")
-            .join("collate-tccon-results");
+            .join(subdir);
         let output_dir = PathBuf::from(crate_root)
             .join("test-data")
             .join("outputs")
-            .join("collate-tccon-results");
+            .join(subdir);
         let clargs = CollateCli {
             mode,
             multiggg_file: input_dir.join("multiggg.sh"),
@@ -307,7 +342,7 @@ mod tests {
                 o2_dmf_file: None,
             },
             output_dir: Some(output_dir.clone()),
-            compatibility: GggCompatibilityCli::new(tmp),
+            compatibility: GggCompatibilityCli::new(compat),
             verbosity: Verbosity::new(0, 0),
         };
         main_inner(clargs).expect("running collation should succeed");

@@ -112,7 +112,9 @@ fn driver(clargs: InsituCorrCli) -> error_stack::Result<(), CliError> {
     })?;
 
     // Read each row, apply airmass corrections, and write out the Xgas values.
-    let settings = fortformat::ser::SerSettings::default().align_left_str(true);
+    let settings = fortformat::ser::SerSettings::default()
+        .align_left_str(true)
+        .allow_skipped_fields(true);
     let missing_value = header.missing_value;
 
     // The original apply_insitu_correction switches the second field from "a1" to "1x".
@@ -219,19 +221,31 @@ mod tests {
 
     #[test]
     fn test_insitu_correct_pa_benchmark() {
+        test_insitu_correct_pa_benchmark_inner("apply-tccon-insitu-correction");
+    }
+
+    #[test]
+    fn test_insitu_correct_pa_benchmark_stable() {
+        // This tests that the in situ correction code correctly handles upstream files from
+        // the last GGG release. We don't need to specify the compatibility setting because
+        // this program will keep the same auxiliary columns that are in the upstream file.
+        test_insitu_correct_pa_benchmark_inner("apply-tccon-insitu-correction-stable");
+    }
+
+    fn test_insitu_correct_pa_benchmark_inner(subdir: &str) {
         let crate_root = env!("CARGO_MANIFEST_DIR");
         let input_dir = PathBuf::from(crate_root)
             .join("test-data")
             .join("inputs")
-            .join("apply-tccon-insitu-correction");
+            .join(subdir);
         let expected_dir = PathBuf::from(crate_root)
             .join("test-data")
             .join("expected")
-            .join("apply-tccon-insitu-correction");
+            .join(subdir);
         let output_dir = PathBuf::from(crate_root)
             .join("test-data")
             .join("outputs")
-            .join("apply-tccon-insitu-correction");
+            .join(subdir);
 
         let clargs = InsituCorrCli {
             correction_file: input_dir.join("corrections_insitu_postavg.dat"),
