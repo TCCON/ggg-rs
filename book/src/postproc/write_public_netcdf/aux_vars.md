@@ -74,6 +74,3 @@ attr_overrides = {units = "Julian day", description = "1-based day of year"}
 private_name = "solzen"
 long_name = "solar zenith angle"
 ```
-
-By default, any of the standard TCCON auxiliary variables not listed will be added.
-See the [Defaults](/write_public_netcdf/defaults.html) section for how to modify that behavior.

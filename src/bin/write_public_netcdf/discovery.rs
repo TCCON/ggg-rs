@@ -132,8 +132,6 @@ impl XgasMatchMethod {
     pub(crate) fn suffix_from_string(suffix: String, new_suffix: Option<String>) -> Self {
         let suffix = regex::escape(&suffix);
         // Apologies to future me for this regex but:
-        //  - (?<base> ... ) is needed to capture the whole variable name except the suffix in case
-        //    we have to do a substitution
         //  - x(?<gas>[a-z][a-z0-9]*) will match e.g. xco2, xch4, etc.
         //  - we do not allow for any interveneing parts to avoid confusion with intermediate variables.
         let discovery_pattern = format!(r"^x(?<gas>[a-z][a-z0-9]*)_{suffix}$");

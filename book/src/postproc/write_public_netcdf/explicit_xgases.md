@@ -123,6 +123,19 @@ prior_xgas = { type = "inferred", only_if_first = true, required = false }
 prior_profile = { type = "specified", only_if_first = true, private_name = "prior_1hcl", public_name = "prior_hcl" }
 ak = { type = "omit" }
 ```
+
+The keys for each of these ancillary variables and their default values are:
+
+- `xgas_error`: `{ type = "inferred", only_if_first = false, required = true }`
+- `prior_profile`: `{ type = "inferred", only_if_first = true, required = true }`
+- `prior_xgas`: `{ type = "inferred", only_if_first = true, required = true }`
+- `ak`: `{ type = "inferred", only_if_first = true, required = true }`
+- `slant_bin`: `{ type = "inferred", only_if_first = false, required = true }`
+- `traceability_scale`: `{ type = "inferred", only_if_first = false, required = true }`
+
+Note that `prior_profile`, `prior_xgas`, and `ak` are set so that if multiple Xgases need the same variables for these, only the first one will trigger a copy.
+This is because it is expected that these might be duplicated (e.g., the `xco2`, `xwco2`, and `xlco2` variables all need the same CO2 priors).
+Also note that `slant_bin` is a special case, in that it will only be copied if the AK variable is.
   
 ## Ancillary variable name inference
 
