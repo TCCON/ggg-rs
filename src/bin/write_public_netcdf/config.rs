@@ -1,7 +1,7 @@
 //! Interface for the configuration of which variables to copy
 use std::{
     borrow::Cow,
-    collections::{HashSet, VecDeque},
+    collections::VecDeque,
     convert::Infallible,
     fmt::Display,
     io::Read,
@@ -21,8 +21,13 @@ use crate::{
     AuxVarCopy, ComputedVariable, XgasCopy,
 };
 
-pub(crate) static STANDARD_TCCON_TOML: &'static str = include_str!("tccon_configs/standard.toml");
-pub(crate) static EXTENDED_TCCON_TOML: &'static str = include_str!("tccon_configs/extended.toml");
+pub(crate) static COMMON_TOML: &'static str = include_str!("included_configs/common.toml");
+pub(crate) static STANDARD_TCCON_TOML: &'static str =
+    include_str!("included_configs/tccon_standard.toml");
+pub(crate) static EXTENDED_TCCON_TOML: &'static str =
+    include_str!("included_configs/tccon_extended.toml");
+pub(crate) static STANDARD_EM27_TOML: &'static str =
+    include_str!("included_configs/em27sun_standard.toml");
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum ConfigError {
@@ -101,7 +106,7 @@ pub(crate) struct Config {
     ///
     /// # Developer note
     /// This is included as a private field because the intended behavior is that
-    /// this is only references when first loading the configuration to determine
+    /// this is only referenced when first loading the configuration to determine
     /// whether to add default values to each section, and after that, the writer
     /// simply looks at the other fields. Originally, I considered having a `MetaConfig`
     /// structure that held defaults and a flattened `Config`, and then deserializing
@@ -196,10 +201,6 @@ impl Config {
     }
 
     fn finalize(&mut self) {
-        if self.defaults.aux_vars && !self.defaults.disable_all {
-            add_default_aux_vars(self);
-        }
-
         if self.defaults.gas_long_names && !self.defaults.disable_all {
             add_default_gas_long_names(self);
         }
@@ -281,8 +282,6 @@ struct DefaultsConfig {
     #[serde(default)]
     disable_all: bool,
     #[serde(default = "default_true")]
-    aux_vars: bool,
-    #[serde(default = "default_true")]
     gas_long_names: bool,
     #[serde(default = "default_true")]
     xgas_rules: bool,
@@ -291,7 +290,6 @@ struct DefaultsConfig {
 impl Default for DefaultsConfig {
     fn default() -> Self {
         Self {
-            aux_vars: true,
             gas_long_names: true,
             xgas_rules: true,
             disable_all: false,
@@ -301,8 +299,10 @@ impl Default for DefaultsConfig {
 
 enum IncludeSource {
     Path(PathBuf),
-    Standard,
-    Extended,
+    Common,
+    TcconStandard,
+    TcconExtended,
+    Em27SunStandard,
 }
 
 impl FromStr for IncludeSource {
@@ -310,8 +310,10 @@ impl FromStr for IncludeSource {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "TCCON_STANDARD" => Ok(Self::Standard),
-            "TCCON_EXTENDED" => Ok(Self::Extended),
+            "COMMON" => Ok(Self::Common),
+            "TCCON_STANDARD" => Ok(Self::TcconStandard),
+            "TCCON_EXTENDED" => Ok(Self::TcconExtended),
+            "EM27SUN_STANDARD" => Ok(Self::Em27SunStandard),
             _ => Ok(Self::Path(PathBuf::from(s))),
         }
     }
@@ -321,8 +323,10 @@ impl Display for IncludeSource {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             IncludeSource::Path(p) => write!(f, "{}", p.display()),
-            IncludeSource::Standard => write!(f, "TCCON standard config"),
-            IncludeSource::Extended => write!(f, "TCCON extended config"),
+            IncludeSource::Common => write!(f, "Common standard config"),
+            IncludeSource::TcconStandard => write!(f, "TCCON standard config"),
+            IncludeSource::TcconExtended => write!(f, "TCCON extended config"),
+            IncludeSource::Em27SunStandard => write!(f, "EM27/SUN standard config"),
         }
     }
 }
@@ -331,16 +335,20 @@ impl IncludeSource {
     fn into_provider(self) -> figment::providers::Data<figment::providers::Toml> {
         match self {
             IncludeSource::Path(p) => figment::providers::Toml::file(p),
-            IncludeSource::Standard => figment::providers::Toml::string(STANDARD_TCCON_TOML),
-            IncludeSource::Extended => figment::providers::Toml::string(EXTENDED_TCCON_TOML),
+            IncludeSource::Common => figment::providers::Toml::string(COMMON_TOML),
+            IncludeSource::TcconStandard => figment::providers::Toml::string(STANDARD_TCCON_TOML),
+            IncludeSource::TcconExtended => figment::providers::Toml::string(EXTENDED_TCCON_TOML),
+            IncludeSource::Em27SunStandard => figment::providers::Toml::string(STANDARD_EM27_TOML),
         }
     }
 
     fn as_cow_str<'a>(&'a self) -> Result<Cow<'a, str>, ConfigError> {
         match self {
             IncludeSource::Path(path) => Ok(Cow::Owned(read_file(path)?)),
-            IncludeSource::Standard => Ok(Cow::Borrowed(STANDARD_TCCON_TOML)),
-            IncludeSource::Extended => Ok(Cow::Borrowed(EXTENDED_TCCON_TOML)),
+            IncludeSource::Common => Ok(Cow::Borrowed(COMMON_TOML)),
+            IncludeSource::TcconStandard => Ok(Cow::Borrowed(STANDARD_TCCON_TOML)),
+            IncludeSource::TcconExtended => Ok(Cow::Borrowed(EXTENDED_TCCON_TOML)),
+            IncludeSource::Em27SunStandard => Ok(Cow::Borrowed(STANDARD_EM27_TOML)),
         }
     }
 }
@@ -367,56 +375,12 @@ pub(crate) fn default_attr_remove() -> Vec<String> {
     vec!["precision".to_string(), "standard_name".to_string()]
 }
 
-/// Helper function for the default list of auxiliary variables.
-pub(crate) fn default_aux_vars() -> Vec<AuxVarCopy> {
-    vec![
-        AuxVarCopy::new("time", "time", true),
-        AuxVarCopy::new("year", "year", true),
-        AuxVarCopy::new("day", "day of year", true),
-        AuxVarCopy::new("prior_altitude", "altitude a.s.l.", true),
-        AuxVarCopy::new("hour", "UTC hour", true),
-        AuxVarCopy::new("lat", "latitude", true),
-        AuxVarCopy::new("long", "longitude", true),
-        AuxVarCopy::new("zobs", "observation altitude", true),
-        AuxVarCopy::new("zmin", "pressure altitude", true),
-        AuxVarCopy::new("solzen", "solar zenith angle", true),
-        AuxVarCopy::new("azim", "solar azimuth angle", true),
-        AuxVarCopy::new("tout", "atmospheric temperature", true),
-        AuxVarCopy::new("pout", "surface pressure", true),
-        AuxVarCopy::new("hout", "atmospheric humidity", true),
-        AuxVarCopy::new("sia", "average solar intensity", true),
-        AuxVarCopy::new("fvsi", "fractional variation in solar intensity", true),
-        AuxVarCopy::new("wspd", "wind speed", true),
-        AuxVarCopy::new("wdir", "wind direction", true),
-        AuxVarCopy::new("o2_mean_mole_fraction", "dry atmospheric mole fraction of oxygen", true),
-        AuxVarCopy::new("integration_operator", "integration operator", true),
-        AuxVarCopy::new("o2_7885_am_o2", "airmass", true)
-            .with_public_name("airmass")
-            .with_attr_override("units", "1")
-            .with_attr_override("description", "airmass computed as the total vertical column of O2 divided by the total slant column of O2 retrieved from the window centered at 7885 cm-1."),
-    ]
-}
-
 pub(crate) fn default_ancillary_infer_first() -> XgasAncillary {
     XgasAncillary::Inferred(XgasAncInferOptions::new_if_first(None))
 }
 
 pub(crate) fn default_ancillary_infer() -> XgasAncillary {
     XgasAncillary::Inferred(XgasAncInferOptions::new_required(None))
-}
-
-fn add_default_aux_vars(config: &mut Config) {
-    let aux_var_names: HashSet<String> = config
-        .aux
-        .iter()
-        .map(|aux| aux.private_name.clone())
-        .collect();
-
-    for default_aux in default_aux_vars() {
-        if !aux_var_names.contains(&default_aux.private_name) {
-            config.aux.push(default_aux);
-        }
-    }
 }
 
 fn add_default_gas_long_names(config: &mut Config) {
@@ -474,23 +438,22 @@ mod tests {
         // Test that an empty config correctly defaults to including the default
         // values.
         let cfg = Config::from_toml_str("").expect("deserialization should not fail");
-        assert_eq!(cfg.aux.len(), default_aux_vars().len());
+        assert_eq!(cfg.aux.len(), 0);
         assert_eq!(cfg.gas_long_names.len(), DEFAULT_GAS_LONG_NAMES.len());
 
         // Test that if the [defaults] section is given and empty, the individual
         // default option fields still say to include the default values.
         let toml_str = "[defaults]";
         let cfg = Config::from_toml_str(toml_str).expect("deserialization should not fail");
-        assert_eq!(cfg.aux.len(), default_aux_vars().len());
+        assert_eq!(cfg.aux.len(), 0);
         assert_eq!(cfg.gas_long_names.len(), DEFAULT_GAS_LONG_NAMES.len());
 
         // Test that explicitly requesting defaults works.
         let toml_str = r#"[defaults]
-        aux_vars = true
         gas_long_names = true
         "#;
         let cfg = Config::from_toml_str(toml_str).expect("deserialization should not fail");
-        assert_eq!(cfg.aux.len(), default_aux_vars().len());
+        assert_eq!(cfg.aux.len(), 0);
         assert_eq!(cfg.gas_long_names.len(), DEFAULT_GAS_LONG_NAMES.len());
 
         // Test that the disable_all option for [defaults] works.

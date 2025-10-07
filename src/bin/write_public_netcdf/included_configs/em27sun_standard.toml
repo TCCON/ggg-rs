@@ -1,0 +1,54 @@
+include = ["COMMON"]
+
+# For the EM27s, only xco2 is actually tied to the WMO scale,
+# hence it is the only one with a scale suffix in the name.
+[[xgas]]
+xgas = "xco2_x2019"
+gas = "co2"
+prior_profile = { type = "specified", only_if_first = true, private_name = "prior_1co2", public_name = "prior_co2" }
+prior_xgas = { type = "specified", only_if_first = true, private_name = "prior_xco2_x2019", public_name = "prior_xco2" }
+ak = { type = "specified", only_if_first = true, private_name = "ak_xco2" }
+slant_bin = { type = "specified", private_name = "ak_slant_xco2_bin" }
+
+[[xgas]]
+xgas = "xwco2"
+gas = "co2"
+prior_profile = { type = "specified", only_if_first = true, private_name = "prior_1co2", public_name = "prior_co2" }
+prior_xgas = { type = "specified", only_if_first = true, private_name = "prior_xwco2_x2019", public_name = "prior_xco2" }
+ak = { type = "specified", only_if_first = true, private_name = "ak_xwco2" }
+slant_bin = { type = "specified", private_name = "ak_slant_xwco2_bin" }
+
+[[xgas]]
+xgas = "xlco2"
+gas = "co2"
+prior_profile = { type = "specified", only_if_first = true, private_name = "prior_1co2", public_name = "prior_co2" }
+prior_xgas = { type = "specified", only_if_first = true, private_name = "prior_xlco2_x2007", public_name = "prior_xco2" }
+ak = { type = "specified", only_if_first = true, private_name = "ak_xlco2" }
+slant_bin = { type = "specified", private_name = "ak_slant_xlco2_bin" }
+
+# -------------- #
+# Other settings #
+# -------------- #
+[global_attributes]
+must_copy = [
+    "source",
+    "description",
+    "file_creation",
+    "auxiliary_data_description",
+    "contact",
+    "data_revision",
+    "file_format_information",
+    "algorithm_version",
+    "file_format_version",
+]
+copy_if_present = [
+    "title",
+    "more_information",
+    "data_use_policy",
+    "long_name",
+    "location",
+    "data_doi",
+    "site_reference",
+    "data_reference",
+    "short_location",
+]

@@ -16,6 +16,8 @@ use itertools::Itertools;
 use ndarray::Ix1;
 use netcdf::{AttributeValue, Extents};
 
+use crate::config::STANDARD_EM27_TOML;
+
 mod config;
 mod constants;
 mod copying;
@@ -26,7 +28,7 @@ mod template_strings;
 //   1. Traceability scale [x]
 //   2. GEOS source summary [x]
 //   3. Xgas discovery [x]
-//   4. Standard [x] and experimental [ ] configs
+//   4. Standard [x] and experimental [x] configs
 //      4a. Create unit tests that parse the book TOML examples and try deserializing them [x]
 //      4b. Add ability to specify Xgas and Xgas error public name [x - tentative]
 //      4c. Add rename option to Xgas discovery [x - tentative]
@@ -51,8 +53,7 @@ fn main() -> ExitCode {
 }
 
 fn driver(clargs: Cli) -> error_stack::Result<(), CliError> {
-    let config = load_config(clargs.extended, clargs.config.clone())
-        .change_context(CliError::ReadingConfig)?;
+    let config = load_config(&clargs.config).change_context(CliError::ReadingConfig)?;
 
     if clargs.check_config_only {
         println!("Loaded configuration:\n{config:#?}");
@@ -94,19 +95,16 @@ fn driver(clargs: Cli) -> error_stack::Result<(), CliError> {
 
 #[derive(Debug, clap::Parser)]
 struct Cli {
+    /// Which configuration to use when generating the public files. May
+    /// be "tccon-std" (for the standard InGaAs-only TCCON public files),
+    /// "tccon-ext" (for TCCON public files that include secondary detector)
+    /// variables, "em27-std" (for EM27/SUN public files), or a path to a custom
+    /// configuration file.
+    config: String,
+
     /// The private netCDF file to copy.
     #[clap(required_unless_present("check_config_only"))]
     private_nc_file: Option<PathBuf>,
-
-    /// Run using the default configuration for the extended
-    /// TCCON public files, which include Xgas values from the
-    /// secondary detector if available.
-    #[clap(long, group = "configuration")]
-    extended: bool,
-
-    /// Run using a custom configuration.
-    #[clap(long, group = "configuration")]
-    config: Option<PathBuf>,
 
     /// Do not rename the output file to match the time span of the
     /// data retained after flagging and data latency.
@@ -266,14 +264,12 @@ impl CliError {
     }
 }
 
-fn load_config(extended: bool, custom_file: Option<PathBuf>) -> Result<Config, ConfigError> {
-    match (extended, custom_file) {
-        (true, None) => Config::from_toml_str(EXTENDED_TCCON_TOML),
-        (true, Some(_)) => panic!(
-            "invalid combination of arguments: --extended and --config cannot be used together"
-        ),
-        (false, None) => Config::from_toml_str(STANDARD_TCCON_TOML),
-        (false, Some(p)) => Config::from_toml_file(p),
+fn load_config(cli_config: &str) -> Result<Config, ConfigError> {
+    match cli_config {
+        "tccon-std" => Config::from_toml_str(STANDARD_TCCON_TOML),
+        "tccon-ext" => Config::from_toml_str(EXTENDED_TCCON_TOML),
+        "em27-std" => Config::from_toml_str(STANDARD_EM27_TOML),
+        _ => Config::from_toml_file(PathBuf::from(cli_config)),
     }
 }
 

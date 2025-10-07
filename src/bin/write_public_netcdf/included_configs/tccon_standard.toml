@@ -1,84 +1,8 @@
-[[computed]]
-type = "prior_source"
+include = ["COMMON"]
 
-[[extra_priors]]
-private_name = "prior_time"
-long_name = "time of a priori data"
-
-[[extra_priors]]
-private_name = "prior_density"
-long_name = "a priori number density of air"
-
-[[extra_priors]]
-private_name = "prior_effective_latitude"
-long_name = "a priori effective latitude"
-
-[[extra_priors]]
-private_name = "prior_equivalent_latitude"
-long_name = "a priori equivalent latitude"
-attr_overrides = { description = "equivalent latitude derived from potential voriticity on potential temperature levels" }
-
-[[extra_priors]]
-private_name = "prior_gravity"
-long_name = "a priori gravitational acceleration"
-
-[[extra_priors]]
-private_name = "prior_mid_tropospheric_potential_temperature"
-long_name = "a priori mid-tropospheric potential temperature"
-
-[[extra_priors]]
-private_name = "prior_pressure"
-long_name = "a priori atmospheric pressure"
-
-[[extra_priors]]
-private_name = "prior_temperature"
-long_name = "a priori atmospheric temperature"
-
-[[extra_priors]]
-private_name = "prior_tropopause_altitude"
-long_name = "a priori tropopause altitude"
-
-[[aux]]
-private_name = "xn2o_original"
-long_name = "column average nitrous oxide mole fraction"
-attr_to_remove = [
-    "standard_name",
-    "precision",
-    "note",
-] # incorporated the note about the T-dependent bias reduction into the overridded description.
-[aux.attr_overrides]
-wmo_or_analogous_scale = "NOAA 2006A"
-description = "o2_mean_mole_fraction * column_n2o / column_o2. This variable contains the XN2O values BEFORE the temperature bias reduction is applied but AFTER the new O2 mole fractions were applied. Most users should prefer the 'xn2o' variable over this one."
-
-[[aux]]
-private_name = "column_o2"
-long_name = "oxygen column density"
-[aux.attr_overrides]
-description = "column density of oxygen retrieved from the singlet-delta band"
-note = "Use the o2_mean_mole_fraction variable to convert to a column of dry air if needed, e.g., for calculation of surface pressure."
-ancillary_variables = "o2_mean_mole_fraction"
-
-[[aux]]
-private_name = "column_o2_error"
-long_name = "oxygen column density error"
-[aux.attr_overrides]
-description = "one-sigma precision"
-
-[[aux]]
-private_name = "o2_7885_ovc_o2"
-public_name = "prior_column_o2"
-long_name = "a priori oxygen column density"
-[aux.attr_overrides]
-description = "Column density calculated from the PRIOR of oxygen"
-units = "molecules.cm-2"
-
-[[xgas]]
-xgas = "xluft"
-gas = "luft"
-gas_long = "dry air"
-prior_profile = { type = "omit" }
-prior_xgas = { type = "omit" }
-ak = { type = "omit" }
+# --------------------- #
+# TCCON-specific Xgases #
+# --------------------- #
 
 [[xgas]]
 xgas = "xco2_x2007"
@@ -129,20 +53,14 @@ ak = { type = "specified", only_if_first = true, private_name = "ak_xlco2" }
 slant_bin = { type = "specified", private_name = "ak_slant_xlco2_bin" }
 
 [[xgas]]
-xgas = "xco"
-gas = "co"
-xgas_attr_overrides = { wmo_or_analogous_scale = "Not used" }
-
-[[xgas]]
 xgas = "xhcl"
 gas = "hcl"
 ak = { type = "inferred", only_if_first = true, required = false }
 traceability_scale = { type = "inferred", only_if_first = true, required = false }
 
-[discovery]
-excluded_gases = ["th2o", "fco2", "zco2"]
-excluded_xgas_variables = ["xo2"]
-
+# -------------- #
+# Other settings #
+# -------------- #
 [global_attributes]
 must_copy = [
     "source",
