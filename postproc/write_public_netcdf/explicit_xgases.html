@@ -300,6 +300,18 @@ prior_xgas = { type = "inferred", only_if_first = true, required = false }
 prior_profile = { type = "specified", only_if_first = true, private_name = "prior_1hcl", public_name = "prior_hcl" }
 ak = { type = "omit" }
 </code></pre>
+<p>The keys for each of these ancillary variables and their default values are:</p>
+<ul>
+<li><code>xgas_error</code>: <code>{ type = "inferred", only_if_first = false, required = true }</code></li>
+<li><code>prior_profile</code>: <code>{ type = "inferred", only_if_first = true, required = true }</code></li>
+<li><code>prior_xgas</code>: <code>{ type = "inferred", only_if_first = true, required = true }</code></li>
+<li><code>ak</code>: <code>{ type = "inferred", only_if_first = true, required = true }</code></li>
+<li><code>slant_bin</code>: <code>{ type = "inferred", only_if_first = false, required = true }</code></li>
+<li><code>traceability_scale</code>: <code>{ type = "inferred", only_if_first = false, required = true }</code></li>
+</ul>
+<p>Note that <code>prior_profile</code>, <code>prior_xgas</code>, and <code>ak</code> are set so that if multiple Xgases need the same variables for these, only the first one will trigger a copy.
+This is because it is expected that these might be duplicated (e.g., the <code>xco2</code>, <code>xwco2</code>, and <code>xlco2</code> variables all need the same CO2 priors).
+Also note that <code>slant_bin</code> is a special case, in that it will only be copied if the AK variable is.</p>
 <h2 id="ancillary-variable-name-inference"><a class="header" href="#ancillary-variable-name-inference">Ancillary variable name inference</a></h2>
 <p>The writer uses the following rules when asked to infer ancillary variable names.
 In these, <code>{xgas_var}</code> indicates the Xgas variable name and <code>{gas}</code> the physical gas name.</p>

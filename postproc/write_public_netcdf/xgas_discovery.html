@@ -231,9 +231,20 @@ traceability_scale = { type = "omit" }
 </code></pre>
 <h2 id="ancillary-variables"><a class="header" href="#ancillary-variables">Ancillary variables</a></h2>
 <p>The rules also include default settings for the prior profile, prior column average, averaging kernel (and its slant Xgas bins), and the traceability scale.
-These can be specified the same way as described <a href="/write_public_netcdf/explicit_xgases.html#ancillary-variable-specifications">in the Xgases ancillary subsection</a>,
+These can be specified the same way as described <a href="/postproc/write_public_netcdf/explicit_xgases.html#ancillary-variable-specifications">in the Xgases ancillary subsection</a>,
 and the defaults are the same as well.
 However only the <code>inferred</code> and <code>omit</code> types may be used, as <code>specified</code> does not make sense when a rule may apply to more than one Xgas.</p>
+<p>The following list gives the TOML <code>key</code> for that field and what variable it relates to.</p>
+<ul>
+<li><code>xgas_error</code>: the error value for the Xgas values,</li>
+<li><code>prior_profile</code> the a priori profile,</li>
+<li><code>prior_xgas</code>: the a priori Xgas value,</li>
+<li><code>ak</code>: averaging kernel,</li>
+<li><code>slant_bin</code>: the related slant Xgas bins for expanding the AKs, and</li>
+<li><code>traceability_scale</code>: the metrological measurement scale to which the Xgas data are tied.</li>
+</ul>
+<p>Note that <code>slant_bin</code> is only needed if AKs are copied, so it behaves as if set to "inferred_if_first".
+How each of these variable names are inferred if needed is described in the <a href="/postproc/write_public_netcdf/explicit_xgases.html#ancillary-variable-name-inference">Xgas section</a>.</p>
 <h2 id="exclusions"><a class="header" href="#exclusions">Exclusions</a></h2>
 <p>The second part of the discovery section are lists of gases or variables to exclude.
 The first option is <code>excluded_xgas_variables</code>.

@@ -180,6 +180,23 @@
                 <div id="content" class="content">
                     <main>
                         <h1 id="bin2nc"><a class="header" href="#bin2nc">bin2nc</a></h1>
+<p><code>bin2nc</code> is a utility to convert binary spectra into netCDF format.
+This is intended to support publishing spectra if desired.</p>
+<h2 id="examples"><a class="header" href="#examples">Examples</a></h2>
+<p>Convert the spectra listed in the runlog <code>RUNLOG</code> to individual netCDF files in <code>OUTPUT_DIR</code>:</p>
+<pre><code class="language-bash">$GGGPATH/bin2nc $GGGPATH/runlogs/gnd/RUNLOG OUTPUT_DIR
+</code></pre>
+<p>This requires that the directories for the spectra be listed in <code>$GGGPATH/config/data_part.lst</code>.
+If instead you want to indicate that the spectra can be found in <code>SPEC_DIR1</code> and <code>SPEC_DIR2</code> directly, use:</p>
+<pre><code class="language-bash">$GGGPATH/bin2nc --spec-dir SPEC_DIR1 --spec-dir SPEC_DIR2 $GGGPATH/runlogs/gnd/RUNLOG OUTPUT_DIR
+</code></pre>
+<p>To output a single netCDF file containing all the spectra from the runlog, use the <code>--single-file</code> flag:</p>
+<pre><code class="language-bash">$GGGPATH/bin2nc --single-file $GGGPATH/runlogs/gnd/RUNLOG OUTPUT_DIR
+</code></pre>
+<p>This does require that all the spectra for the same detector have the same frequency grid.</p>
+<h2 id="use-in-tccon-and-em27sun-standard-processing"><a class="header" href="#use-in-tccon-and-em27sun-standard-processing">Use in TCCON and EM27/SUN standard processing</a></h2>
+<p><code>bin2nc</code> is not part of TCCON or EM27/SUN standard processing.
+It is provided as a utility for users who wish to make their spectra more readily available.</p>
 
                     </main>
 

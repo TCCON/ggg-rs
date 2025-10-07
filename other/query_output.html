@@ -180,6 +180,16 @@
                 <div id="content" class="content">
                     <main>
                         <h1 id="query_output"><a class="header" href="#query_output">query_output</a></h1>
+<p><code>query_output</code> is a utility to quickly check values in a GGG post-processing output file, e.g.
+a file with an extension beginning with <code>.vsw</code>, <code>.tsw</code>, <code>.vav</code>, or <code>.tav</code>.</p>
+<h2 id="examples"><a class="header" href="#examples">Examples</a></h2>
+<p>To print the <code>day</code>, <code>xco2</code>, and <code>xco2_error</code> columns from the <code>pa_ggg_benchmark.vav.ada.aia</code> file created during the post-install test:</p>
+<pre><code class="language-bash">$GGGPATH/bin/query_output $GGGPATH/install/current_results/pa_ggg_benchmark.vav.ada.aia day xco2 xco2_error
+</code></pre>
+<h2 id="limitations"><a class="header" href="#limitations">Limitations</a></h2>
+<p>Currently, this must be reading a GGG2020.1 post-processing file (i.e., one that includes an "o2dmf" auxiliary column).</p>
+<h2 id="use-in-tccon-or-em27sun-standard-processing"><a class="header" href="#use-in-tccon-or-em27sun-standard-processing">Use in TCCON or EM27/SUN standard processing</a></h2>
+<p><code>query_output</code> is not used in either TCCON or EM27/SUN standard processing.</p>
 
                     </main>
 
