@@ -94,7 +94,7 @@ pub enum CollationError {
     MissingColumn { path: PathBuf, column: String },
 
     /// A value is provided by two spectra when it should not be.
-    #[error("Spectrum {new_spec} is trying to set a value for {column} that is already present")]
+    #[error("Spectrum {new_spec} is trying to set a value for {column} that is already present. Check for duplicate spectra.")]
     DuplicateValue { new_spec: String, column: String },
 
     /// Some value had a different format than expected and could not be parsed.
@@ -712,6 +712,7 @@ fn add_col_value<I: CollationIndexer>(
                 col_file,
             )
         })?;
+        log::trace!("irow = {irow}: col_row = {col_row:?}");
 
         let (val, val_err) = match mode {
             CollationMode::VerticalColumns => {
@@ -746,6 +747,7 @@ fn add_col_value<I: CollationIndexer>(
         let sw_row = rows.get_mut(sw_idx)
             .expect("Index returned by the collation indexer should be a valid index for the rows created from the runlog");
 
+        log::trace!("irow = {irow}: sw_row.retrieved = {:?}", sw_row.retrieved);
         let do_insert = if sw_row.retrieved.contains_key(val_colname) {
             indexer.do_replace_value(&col_row.spectrum, &val_colname)?
         } else {
