@@ -41,6 +41,10 @@ must_copy = [
     "algorithm_version",
     "file_format_version",
 ]
+
+# I put retrieval_reference in the `copy_if_present` list
+# just in case that makes it easier for EM27 users to update
+# existing files.
 copy_if_present = [
     "title",
     "more_information",
@@ -51,4 +55,5 @@ copy_if_present = [
     "site_reference",
     "data_reference",
     "short_location",
+    "retrieval_reference",
 ]

@@ -71,6 +71,7 @@ must_copy = [
     "auxiliary_data_description",
     "more_information",
     "tccon_reference",
+    "retrieval_reference",
     "contact",
     "data_revision",
     "file_format_information",
