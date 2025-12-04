@@ -22,7 +22,6 @@ mod config;
 mod constants;
 mod copying;
 mod discovery;
-mod template_strings;
 
 // Todos:
 //   1. Traceability scale [x]
