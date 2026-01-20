@@ -19,6 +19,7 @@ error-stack = "0.5.0"
 figment = { version = "0.10.19", features = ["toml"] }
 fortformat = { version = "0.2.0", features = ["serde"] }
 indexmap = { version = "2.9", features = ["serde"] }
+ncdfcat-lib = { path = "/mnt/data/josh/Research/ncdfcat-lib", optional = true, features = ["error-stack"] }
 ndarray = { version = "0.15", features = ["approx"] }
 netcdf = { version = "0.11.0", optional = true }
 num-traits = "0.2.16"
@@ -48,8 +49,8 @@ rstest = "0.18.2"
 
 [features]
 inprogress = []
-netcdf = ["dep:netcdf"]
-static = ["netcdf", "netcdf/static"]
+netcdf = ["dep:netcdf", "dep:ncdfcat-lib"]
+static = ["netcdf", "netcdf/static", "ncdfcat-lib/static"]
 plotting = ["dep:plotly"]
 
 [lib]
@@ -60,6 +61,10 @@ required-features = ["netcdf"]
 
 [[bin]]
 name = "collate_tccon_results"
+
+[[bin]]
+name = "concat_netcdf"
+required-features = ["netcdf"]
 
 [[bin]]
 name = "apply_tccon_airmass_correction"
