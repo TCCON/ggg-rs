@@ -1,6 +1,10 @@
 CARGOCMD ?= cargo
 GGGRS_FEATURES ?= netcdf
 
+# We need this to insert commas in some return values within functions
+# that use commas to separate arguments.
+COMMA := ,
+
 ifndef GGGPATH
 $(error "Must have GGGPATH set")
 endif
@@ -51,7 +55,8 @@ else
 endif
 
 ifeq ("$(GGGRS_NCDIR)", "STATIC")
-	CARGOARGS = --features $(GGGRS_FEATURES),static
+	# This ensures that we only have a comma before "static" if there are features other that "static"
+	CARGOARGS = $(if $(strip $(GGGRS_FEATURES)),--features $(GGGRS_FEATURES)$(COMMA)static,--features static)
 	NC_LIB = 
 else ifdef GGGRS_NCDIR
 	HDF5_DIR := $(GGGRS_NCDIR)
@@ -60,7 +65,8 @@ else ifdef GGGRS_NCDIR
 	export NETCDF_DIR
 	RUSTFLAGS := -C link-args=-Wl,-rpath,$(HDF5_DIR)/lib
 	export RUSTFLAGS
-	CARGOARGS = --features $(GGGRS_FEATURES)
+	# The addprefix is a simple way to only insert --features if GGGRS_FEATURES is not empty
+	CARGOARGS = $(addprefix --features ,$(strip $(GGGRS_FEATURES)))
 	ifeq ("$(shell uname -s)", "Darwin")
 		NC_LIB = $(GGGRS_NCDIR)/lib/libnetcdf.dylib
 	else
