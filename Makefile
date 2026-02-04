@@ -1,4 +1,5 @@
-CARGOCMD ?= cargo
+DEFAULT_CARGOCMD = $(if $(shell which cargo-auditable),cargo auditable,cargo)
+CARGOCMD ?= $(DEFAULT_CARGOCMD)
 GGGRS_FEATURES ?= netcdf
 
 # We need this to insert commas in some return values within functions
@@ -104,6 +105,8 @@ $(NC_LIB):
 endif
 
 check-args:
+	@echo "CARGOCMD = $(CARGOCMD)"
+	@echo "DEFAULT_CARGOCMD = $(DEFAULT_CARGOCMD)"
 	@echo "CARGOARGS = $(CARGOARGS)"
 	@echo "BUILD_ENV = $(BUILD_ENV)"
 	@echo "GGGRS_NCDIR = $(GGGRS_NCDIR)"
