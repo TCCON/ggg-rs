@@ -12,8 +12,9 @@ jobs:
       - name: Setup mdBook
         uses: peaceiris/actions-mdbook@v2
         with:
-          # mdbook-version: '0.4.37'
-          mdbook-version: 'latest'
+          # 2026-02-11: 0.5+ is not yet compatible with mdbook-admonish, see https://github.com/tommilligan/mdbook-admonish/issues/233
+          mdbook-version: '0.4.52'
+          # mdbook-version: 'latest'
       - name: Install mdbook-admonish
         uses: baptiste0928/cargo-install@v3
         with:
