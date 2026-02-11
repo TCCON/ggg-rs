@@ -337,7 +337,7 @@ impl TomlCli {
     }
 }
 
-/// Create an example of the filter JSON file
+/// Create an example of the filter file
 #[derive(Debug, Clone, Args)]
 struct TemplateCli {
     /// Path to write the template to

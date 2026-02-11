@@ -75,6 +75,10 @@ name = "add_nc_flags"
 required-features = ["netcdf"]
 
 [[bin]]
+name = "apply_nc_fills"
+required-features = ["netcdf"]
+
+[[bin]]
 name = "plot_spt"
 required-features = ["plotting"]
 

@@ -527,3 +527,12 @@ impl GetNcAttr for &netcdf::File {
         "group '/'".to_string()
     }
 }
+
+// ------------- //
+// Value helpers //
+// ------------- //
+
+pub fn convert_nc_timestamp(ts: f64) -> chrono::DateTime<chrono::Utc> {
+    let nanos = (ts * 1e9).trunc() as i64;
+    chrono::DateTime::from_timestamp_nanos(nanos)
+}
