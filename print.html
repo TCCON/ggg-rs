@@ -1470,12 +1470,125 @@ For other instruments, this may vary for now.</li>
 </ul>
 <p>TCCON sites can find the most up-to-date versions of their values for this metadata at https://tccondata.org/metadata/siteinfo/.
 Other users should do their best to ensure that the above conventions are followed.</p>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="apply_nc_fills"><a class="header" href="#apply_nc_fills">apply_nc_fills</a></h1>
+<h2 id="purpose-7"><a class="header" href="#purpose-7">Purpose</a></h2>
+<p><code>apply_nc_fills</code> can be used to convert values representating null data in a
+netCDF file to the defined netCDF fill values.
+That way, programs and packages like <a href="https://www.giss.nasa.gov/tools/panoply/">Panoply</a>
+or Python's <a href="https://unidata.github.io/netcdf4-python/">netCDF4 package</a> will
+correctly mask them when read in.
+The netCDF writer can do this automatically, but you may still need to use this
+separate program if, for example:</p>
+<ul>
+<li>you used the GGG2020 Python netCDF writer and didn't realize that it won't automatically
+mask the null values from your <code>xx_sunrun.dat</code>, or</li>
+<li>you have other null values that come in from an ancillary instrument that need to be
+accounted for.</li>
+</ul>
+<h2 id="examples-7"><a class="header" href="#examples-7">Examples</a></h2>
+<p>This program uses a TOML file to specify what variables to filter.
+(We may add a <code>quick</code> option in the future that takes the input on the command line,
+but for now, the TOML file is required.)
+You can generate an example TOML file with the <code>toml-template</code> subcommand, e.g.:</p>
+<pre><code class="language-bash">$GGGPATH/bin/apply_nc_fills toml-template my-fills.toml
+</code></pre>
+<p>This command will create a new file, <code>my-fills.toml</code> with some examples of how to
+specify which values to replace.</p>
+<p>To actually replace the values, use the <code>toml</code> subcommand.
+If you want to keep the original file and create a new file with the fill values inserted
+(recommended), use the <code>--output</code> option:</p>
+<pre><code class="language-bash">$GGGPATH/bin/apply_nc_fills toml \
+    --nc-file $GGGPATH/install/current_results/pa20040721_20041222.private.nc \
+    --output $GGGPATH/install/current_results/pa20040721_20041222.private.with-fills.nc \
+    pa_fills.toml
+</code></pre>
+<p>This would use the rules in <code>pa_fills.toml</code> to replace bad values in <code>pa20040721_20041222.private.nc</code>
+with fill values in <code>pa20040721_20041222.private.with-fills.nc</code>.</p>
+<p>Alternatively, if you want to just modify a file without making a copy, use the <code>--in-place</code> flag:</p>
+<pre><code class="language-bash">$GGGPATH/bin/apply_nc_fills toml \
+    --nc-file $GGGPATH/install/current_results/pa20040721_20041222.private.nc \
+    --in-place \
+    pa_fills.toml
+</code></pre>
+<p>This would edit <code>pa20040721_20041222.private.nc</code> directly.</p>
+<h2 id="toml-format"><a class="header" href="#toml-format">TOML format</a></h2>
+<p>The TOML file will be a sequence of <code>[[replace]]</code> blocks.
+Each one defines a rule to replace values in one variable with netCDF fill values.</p>
+<p>Each block <em>must</em> have the field <code>varname</code>, which gives the name of the variable in
+the netCDF file is applies to.</p>
+<p>Each block <em>must</em> have <em>one</em> of the following sets of fields:</p>
+<ul>
+<li><code>approx</code>: values that are within floating point precision of this value are replaced with fills.</li>
+<li><code>gt</code> and <code>lt</code>: values that are between these values (<code>gt &lt;= x &lt;= lt</code>) are replaced with fills.</li>
+<li><code>equal</code>: values that are exactly equal to this value are replaced with fills.</li>
+</ul>
+<p><code>approx</code> and <code>gt + lt</code> can be used to filter floating point variables.
+<code>equal</code> can be used to filter integer variables.</p>
+<p>Each block <em>may</em> have the following:</p>
+<ul>
+<li><code>time_greater_than</code>: limits this rule to data for times greater than or equal to this value.</li>
+<li><code>time_less_than</code>: limits this rule to data for times less than or equal to this value.</li>
+</ul>
+<p>Each of these must be in the format "YYYY-MM-DDThh:mm:ss", e.g. 12:34:56 on 31 Jan 2000 would
+be <code>2000-01-31T12:34:56</code>.</p>
+<p>Multiple blocks can be specified for the same variable.
+This way, if there are different fill values for different time periods, or just multiple fill
+values over the whole file, they can be handled.</p>
+<h3 id="toml-example-snippets"><a class="header" href="#toml-example-snippets">TOML example snippets</a></h3>
+<p>This first example will simple replace any values approximately equal to 60.0 in the <code>tins</code>
+variable with fill values:</p>
+<pre><code class="language-toml">[[replace]]
+varname = "tins"
+approx = 60.0
+</code></pre>
+<p>This second example similarly replaces values approximately equal to -99.0 in the <code>pout</code>
+variable with fills, but only between 1 Jan 2010 and 12 June 2015:</p>
+<pre><code class="language-toml">[[replace]]
+varname = "pout"
+approx = -99.0
+time_greater_than = "2010-01-01T00:00:00"
+time_less_than = "2015-06-12T00:00:00"
+</code></pre>
+<p>We could edit this example to replace the same values, but for <em>all</em> times after 1 Jan 2010
+by omitting the <code>time_less_than</code> field:</p>
+<pre><code class="language-toml">[[replace]]
+varname = "pout"
+approx = -99.0
+time_greater_than = "2010-01-01T00:00:00"
+</code></pre>
+<p>If the approximate equality check is missing some value due to weird floating point rounding,
+or if you just have a spectrum of fill values, use <code>gt</code> and <code>lt</code> to replace a range of values.
+This example will replace all values between -1.5 and -0.5 in the <code>fvsi</code> variable:</p>
+<pre><code class="language-toml">[[replace]]
+varname = "fvsi"
+gt = -1.5
+lt = -0.5
+</code></pre>
+<div id="admonition-note" class="admonition admonish-note" role="note" aria-labelledby="admonition-note-title">
+<div class="admonition-title">
+<div id="admonition-note-title">
+<p>Note</p>
+</div>
+<a class="admonition-anchor-link" href="postproc/apply_nc_fills.html#admonition-note"></a>
+</div>
+<div>
+<p>Both <code>lt</code> and <code>gt</code> are required.
+You can mimic an open-ended range by setting the open end to a very positive or negative value.</p>
+</div>
+</div>
+<p>Finally, if you need to insert fills into an integer variable, use the <code>equal</code> field:</p>
+<pre><code class="language-toml"># I don't know why you would put fill values in the day of year.
+# But there just aren't that many integer variables in TCCON netCDF files.
+[[replace]]
+varname = "day"
+equal = 367
+</code></pre>
 <div style="break-before: page; page-break-before: always;"></div><h1 id="other-utility-programs"><a class="header" href="#other-utility-programs">Other utility programs</a></h1>
 <p>This section describes programs which do not fit in the GGG pipeline, but which may be useful to analyze or publish the files used by GGG.</p>
 <div style="break-before: page; page-break-before: always;"></div><h1 id="bin2nc"><a class="header" href="#bin2nc">bin2nc</a></h1>
 <p><code>bin2nc</code> is a utility to convert binary spectra into netCDF format.
 This is intended to support publishing spectra if desired.</p>
-<h2 id="examples-7"><a class="header" href="#examples-7">Examples</a></h2>
+<h2 id="examples-8"><a class="header" href="#examples-8">Examples</a></h2>
 <p>Convert the spectra listed in the runlog <code>RUNLOG</code> to individual netCDF files in <code>OUTPUT_DIR</code>:</p>
 <pre><code class="language-bash">$GGGPATH/bin2nc $GGGPATH/runlogs/gnd/RUNLOG OUTPUT_DIR
 </code></pre>
@@ -1493,7 +1606,7 @@ It is provided as a utility for users who wish to make their spectra more readil
 <div style="break-before: page; page-break-before: always;"></div><h1 id="query_output"><a class="header" href="#query_output">query_output</a></h1>
 <p><code>query_output</code> is a utility to quickly check values in a GGG post-processing output file, e.g.
 a file with an extension beginning with <code>.vsw</code>, <code>.tsw</code>, <code>.vav</code>, or <code>.tav</code>.</p>
-<h2 id="examples-8"><a class="header" href="#examples-8">Examples</a></h2>
+<h2 id="examples-9"><a class="header" href="#examples-9">Examples</a></h2>
 <p>To print the <code>day</code>, <code>xco2</code>, and <code>xco2_error</code> columns from the <code>pa_ggg_benchmark.vav.ada.aia</code> file created during the post-install test:</p>
 <pre><code class="language-bash">$GGGPATH/bin/query_output $GGGPATH/install/current_results/pa_ggg_benchmark.vav.ada.aia day xco2 xco2_error
 </code></pre>
@@ -1502,11 +1615,11 @@ a file with an extension beginning with <code>.vsw</code>, <code>.tsw</code>, <c
 <h2 id="use-in-tccon-or-em27sun-standard-processing"><a class="header" href="#use-in-tccon-or-em27sun-standard-processing">Use in TCCON or EM27/SUN standard processing</a></h2>
 <p><code>query_output</code> is not used in either TCCON or EM27/SUN standard processing.</p>
 <div style="break-before: page; page-break-before: always;"></div><h1 id="strip_header"><a class="header" href="#strip_header">strip_header</a></h1>
-<h2 id="purpose-7"><a class="header" href="#purpose-7">Purpose</a></h2>
+<h2 id="purpose-8"><a class="header" href="#purpose-8">Purpose</a></h2>
 <p><code>strip_header</code> interprets the first line of a GGG input or output file as starting with the number of header lines,
 and uses that to print everything after the header (by default) or just the header.
 This is intended to help with command line workflows to concatenate multiple GGG files.</p>
-<h2 id="examples-9"><a class="header" href="#examples-9">Examples</a></h2>
+<h2 id="examples-10"><a class="header" href="#examples-10">Examples</a></h2>
 <p>Assume you want to concatenate the entries in <code>RUNLOG2</code> to the end of <code>RUNLOG1</code>.
 You do so with:</p>
 <pre><code class="language-bash">$GGGPATH/bin/strip_header RUNLOG2 &gt;&gt; RUNLOG1
