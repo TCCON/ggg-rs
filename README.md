@@ -59,11 +59,8 @@ To install the programs in this repo, clone the repo. We recommend placing it in
 keep all GGG code together, so assuming you have the `GGGPATH` environmental variable set, do:
 
 ```
-git clone git@github.com:TCCON/ggg-rs.git $GGGPATH/src-rs
+git clone https://github.com/TCCON/ggg-rs.git $GGGPATH/src-rs
 ```
-
-For now, because this is a private repo, you must have an SSH key pair to authenticate to GitHub 
-configured to work for the github.com domain. 
 
 Once the repo is cloned, you can install the programs from it under your GGGPATH alongside the 
 standard Fortran programs, by running `make` from the directory containing this README.
