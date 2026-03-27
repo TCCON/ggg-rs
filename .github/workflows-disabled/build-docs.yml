@@ -1,3 +1,5 @@
+# !! Any actions used should be pinned to a specific commit
+# !! to reduce the exposure to a supply chain attack.
 name: Docs for GH Pages
 on:
   push:
@@ -16,12 +18,15 @@ jobs:
     name: Build docs
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      # Pinned to v6.0.2 commit on 26 Mar 2026
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      # Pinned to stable branch commit on 26 Mar 2026
+      - uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7
       - run: cargo doc --no-default-features --no-deps
       - run: tar -czf ../docs.tgz .
         working-directory: ./target/doc/ggg_rs
-      - uses: actions/upload-artifact@v4
+      # Pinned to the v7.0.0 commit on 26 Mar 2026
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
         with:
           name: github-pages
           path: ./target/doc/docs.tgz
@@ -40,4 +45,6 @@ jobs:
     steps:
       - name: Deploy to Github Pages
         id: deployment
-        uses: actions/deploy-pages@v4
+        # Pinned to v4.0.5 commit on 26 Mar 2026. There was a v5.0.0, but it had *just* been
+        # released, so I went with a more battle-tested version.
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e

@@ -1,3 +1,5 @@
+# !! All actions used should pin to a specific commit to reduce
+# !! vulnerability to a supply chain attack
 name: Run cargo tests
 
 on:
@@ -15,7 +17,8 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v4
+      # Pinned to v6.0.2 commit on 26 Mar 2026
+    - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
     - name: Build
       run: cargo build --verbose
     - name: Run tests
