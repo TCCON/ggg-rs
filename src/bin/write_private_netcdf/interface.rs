@@ -38,12 +38,12 @@ pub(crate) trait DataProvider: Display + Send {
     ///
     /// If a dimension should have an associated variable, then the provider must
     /// write that variable in its `write_data_to_nc` method.
-    fn dimension_lengths(&self) -> Cow<[(&'static str, usize)]>;
+    fn dimension_lengths(&self) -> Cow<'_, [(&'static str, usize)]>;
 
     /// This must list the dimensions that the this provider requires before writing its
     /// variables. If the lengths for any are not given by one of the providers, the
     /// writer will throw an error.
-    fn dimensions_required(&self) -> Cow<[&'static str]>;
+    fn dimensions_required(&self) -> Cow<'_, [&'static str]>;
 
     /// Write all the data for this source to the netCDF file.
     ///

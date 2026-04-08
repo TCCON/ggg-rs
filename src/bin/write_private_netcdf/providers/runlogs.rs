@@ -111,12 +111,12 @@ impl RunlogProvider {
 }
 
 impl DataProvider for RunlogProvider {
-    fn dimension_lengths(&self) -> std::borrow::Cow<[(&'static str, usize)]> {
+    fn dimension_lengths(&self) -> std::borrow::Cow<'_, [(&'static str, usize)]> {
         let lengths = vec![(TIME_DIM_NAME, self.times.len())];
         std::borrow::Cow::Owned(lengths)
     }
 
-    fn dimensions_required(&self) -> std::borrow::Cow<[&'static str]> {
+    fn dimensions_required(&self) -> std::borrow::Cow<'_, [&'static str]> {
         std::borrow::Cow::Borrowed(&DIMS_REQ)
     }
 

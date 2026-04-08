@@ -35,7 +35,7 @@ pub fn sort_spectra_in_dirs<P: AsRef<Path>>(dirs: &[P]) -> Result<Vec<String>, N
     sort_spectrum_names(&paths)
 }
 
-fn get_spectrum_names<P: AsRef<Path>>(paths: &[P]) -> Result<Vec<SortingSpec>, NameError> {
+fn get_spectrum_names<P: AsRef<Path>>(paths: &[P]) -> Result<Vec<SortingSpec<'_>>, NameError> {
     let mut names = vec![];
 
     for path in paths {

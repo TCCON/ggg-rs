@@ -83,7 +83,7 @@ impl MavBlockHeader {
         start_with: &str,
     ) -> error_stack::Result<T, GggError> {
         let s = Self::split_value_line(buf, position, start_with)?;
-        let v: T = s.trim().parse().map_err(|e| {
+        let v: T = s.trim().parse().map_err(|_| {
             GggError::custom(format!(
                 "could not parse value in the \"{start_with}\" line ({s})"
             ))
@@ -142,7 +142,7 @@ impl MavBlock {
             for (s, colname) in buf.trim().split_ascii_whitespace().zip(colnames.iter()) {
                 let v: f32 = s.parse().map_err(|e| {
                     GggError::custom(format!(
-                        "Could not parse {colname} value for level {} of {} block as a float",
+                        "Could not parse {colname} value for level {} of {} block as a float: {e}",
                         i + 1,
                         header.next_spectrum
                     ))

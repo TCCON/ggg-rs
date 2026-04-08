@@ -74,7 +74,7 @@ impl FlagCalculator {
         ntime: usize,
         flag_vars: &HashMap<String, Array1<f32>>,
         pb: ProgressBar,
-    ) -> (Array1<u32>, Array1<&str>, HashMap<&str, FlagCount>) {
+    ) -> (Array1<u32>, Array1<&str>, HashMap<&str, FlagCount<'_>>) {
         let mut flags = Array1::from_elem(ntime, 0);
         let mut flag_var_names = Array1::from_elem(ntime, "");
         let mut flag_var_counts = HashMap::new();

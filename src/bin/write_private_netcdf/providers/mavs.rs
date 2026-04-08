@@ -9,7 +9,7 @@ use ndarray::{s, Array1, Array2};
 use crate::{
     dimensions::{CELL_INDEX_DIM_NAME, PRIOR_ALT_DIM_NAME, TIME_DIM_NAME},
     errors::{CliError, WriteError},
-    interface::{ConcreteVarToBe, DataProvider, GroupWriter, StdDataGroup, VarToBe},
+    interface::{ConcreteVarToBe, DataProvider, VarToBe},
 };
 
 static DIMS_REQ: [&'static str; 3] = [TIME_DIM_NAME, PRIOR_ALT_DIM_NAME, CELL_INDEX_DIM_NAME];
@@ -151,7 +151,7 @@ impl Display for MavFile {
 }
 
 impl DataProvider for MavFile {
-    fn dimension_lengths(&self) -> std::borrow::Cow<[(&'static str, usize)]> {
+    fn dimension_lengths(&self) -> std::borrow::Cow<'_, [(&'static str, usize)]> {
         let lengths = vec![
             (PRIOR_ALT_DIM_NAME, self.nlev),
             (CELL_INDEX_DIM_NAME, self.ncell),
@@ -159,7 +159,7 @@ impl DataProvider for MavFile {
         std::borrow::Cow::Owned(lengths)
     }
 
-    fn dimensions_required(&self) -> std::borrow::Cow<[&'static str]> {
+    fn dimensions_required(&self) -> std::borrow::Cow<'_, [&'static str]> {
         std::borrow::Cow::Borrowed(&DIMS_REQ)
     }
 

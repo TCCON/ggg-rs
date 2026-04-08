@@ -204,11 +204,11 @@ impl Display for AiaFile {
 }
 
 impl DataProvider for AiaFile {
-    fn dimension_lengths(&self) -> std::borrow::Cow<[(&'static str, usize)]> {
+    fn dimension_lengths(&self) -> std::borrow::Cow<'_, [(&'static str, usize)]> {
         Cow::Borrowed(&[])
     }
 
-    fn dimensions_required(&self) -> std::borrow::Cow<[&'static str]> {
+    fn dimensions_required(&self) -> std::borrow::Cow<'_, [&'static str]> {
         Cow::Owned(vec![TIME_DIM_NAME])
     }
 
@@ -457,11 +457,11 @@ impl Display for PostprocFile {
 }
 
 impl DataProvider for PostprocFile {
-    fn dimension_lengths(&self) -> std::borrow::Cow<[(&'static str, usize)]> {
+    fn dimension_lengths(&self) -> std::borrow::Cow<'_, [(&'static str, usize)]> {
         Cow::Borrowed(&[])
     }
 
-    fn dimensions_required(&self) -> std::borrow::Cow<[&'static str]> {
+    fn dimensions_required(&self) -> std::borrow::Cow<'_, [&'static str]> {
         Cow::Owned(vec![TIME_DIM_NAME])
     }
 

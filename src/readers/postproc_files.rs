@@ -691,7 +691,7 @@ impl PostprocFile {
         Ok(Self { buffer, header })
     }
 
-    pub fn next_data_record(&mut self) -> Result<PostprocData, GggError> {
+    pub fn next_data_record(&mut self) -> Result<PostprocData<'_>, GggError> {
         let line = self.buffer.read_data_line()?;
 
         // If I try to directly deserialize to PostprocData, even with #[serde(borrow)]
