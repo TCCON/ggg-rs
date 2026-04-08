@@ -411,6 +411,7 @@ pub fn interp_aks_to_new_pressures(
 #[derive(Debug, Deserialize)]
 pub struct NcSiteMetadata {
     pub long_name: String,
+    #[serde(deserialize_with = "release_lag_de_helper")]
     pub release_lag: u32,
     pub location: String,
     pub contact: String,
@@ -420,7 +421,70 @@ pub struct NcSiteMetadata {
     pub site_reference: Option<String>,
 }
 
+/// Helper function that handles deserializing the release lag in site_info files, which
+/// must be an integer in TOML files and will be a string in JSON files.
+///
+/// Eventually, the site info file should be converted to a TOML file, but that will require
+/// updates to the metadata portal. That'll be a GGG2020.2 thing I think.
+fn release_lag_de_helper<'de, D>(de: D) -> Result<u32, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(de)?;
+    match value {
+        serde_json::Value::String(s) => {
+            let v: u32 = s.trim().parse()
+            .map_err(|e| D::Error::custom(format!(
+                "if given as a string, release_lag must be parsable as an unsigned integer (parsing error was: {e}"
+            )))?;
+            Ok(v)
+        }
+        serde_json::Value::Number(n) => {
+            let v = n.as_u64().ok_or_else(|| {
+                D::Error::custom("if given as a number, release_lag must be an unsigned integer")
+            })?;
+            // Should be safe to cast to a u32, release lags should be <= 366, so a 4B max should not
+            // ever be reached.
+            Ok(v as u32)
+        }
+        _ => {
+            let e = D::Error::custom("release_lag must be a string or number");
+            Err(e)
+        }
+    }
+}
+
 pub fn read_nc_site_metadata(
+    site_info_file: &Path,
+) -> Result<IndexMap<String, NcSiteMetadata>, GggError> {
+    match site_info_file.extension() {
+        Some(ext) => {
+            if ext == "json" {
+                log::debug!(
+                    "Reading site info file '{}' as a JSON file",
+                    site_info_file.display()
+                );
+                return read_nc_site_metadata_json(site_info_file)
+                    .map_err(|e| GggError::could_not_read(site_info_file.to_path_buf(), e));
+            } else if ext == "toml" {
+                log::debug!(
+                    "Reading site info file '{}' as a TOML file",
+                    site_info_file.display()
+                );
+                return read_nc_site_metadata_toml(site_info_file)
+                    .map_err(|e| GggError::could_not_read(site_info_file.to_path_buf(), e));
+            }
+        }
+        None => (),
+    }
+
+    Err(GggError::could_not_read(
+        site_info_file.to_path_buf(),
+        "Unknown file extension, expected .toml or .json",
+    ))
+}
+
+fn read_nc_site_metadata_toml(
     site_info_file: &Path,
 ) -> Result<IndexMap<String, NcSiteMetadata>, toml::de::Error> {
     let mut f = std::fs::File::open(site_info_file).map_err(|e| {
@@ -437,6 +501,18 @@ pub fn read_nc_site_metadata(
         ))
     })?;
     toml::from_str(&buf)
+}
+
+fn read_nc_site_metadata_json(
+    site_info_file: &Path,
+) -> Result<IndexMap<String, NcSiteMetadata>, serde_json::Error> {
+    let f = std::fs::File::open(site_info_file).map_err(|e| {
+        serde_json::Error::custom(format!(
+            "error opening metadata file, {}: {e}",
+            site_info_file.display()
+        ))
+    })?;
+    serde_json::from_reader(f)
 }
 
 /// Retrieve the value of a string attribute on a netCDF variable, group, or file.
