@@ -79,6 +79,27 @@ fn driver(clargs: Cli) -> error_stack::Result<(), CliError> {
             config.extra_extension.as_deref(),
         )?
     };
+
+    if clargs.print_public_name_only {
+        let name = public_file_name
+            .file_name()
+            .ok_or_else(|| {
+                CliError::custom(format!(
+                    "Failed to get file name of the public file, {}",
+                    public_file_name.display(),
+                ))
+            })?
+            .to_str()
+            .ok_or_else(|| {
+                CliError::custom(format!(
+                    "Failed to convert file name of {} to UTF-8",
+                    public_file_name.display()
+                ))
+            })?;
+        println!("{name}");
+        return Ok(());
+    }
+
     log::info!("Will write to {}", public_file_name.display());
     let mut public_ds =
         netcdf::create(&public_file_name).change_context(CliError::OpeningPublicFile)?;
@@ -121,6 +142,13 @@ struct Cli {
     /// creating a netCDF file.
     #[clap(long)]
     check_config_only: bool,
+
+    /// Will print out the name the public file will have and exit
+    /// without creating it. Useful when this tool is part of a
+    /// workflow and you need to know the output filename to define
+    /// a processing rule target.
+    #[clap(long)]
+    print_public_name_only: bool,
 
     /// Specify a number of days back in time from today to withhold
     /// data from the public files. For example, if run with
