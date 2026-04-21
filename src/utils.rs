@@ -502,7 +502,7 @@ pub struct GggCompatibilityCli {
     /// This controls compatibility of output files with previous versions of GGG.
     /// The default is taken from the GGGRS_COMPAT environmental variable, if set
     /// in your shell. Using this flag overrides the environmental variable. See
-    /// https://tccon.github.io/ggg-rs/compatibility.html for an explanation of
+    /// <https://tccon.github.io/ggg-rs/compatibility.html> for an explanation of
     /// the allowed values.
     #[arg(long, ignore_case = true, default_value_t = GggCompatibilityInput::default_from_env())]
     compat: GggCompatibilityInput,

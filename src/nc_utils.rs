@@ -176,6 +176,18 @@ impl NcArray {
 // Helper functions for expanding the priors //
 // ----------------------------------------- //
 
+/// Convert priors in the condensed format used in GGG2020.0 private
+/// files (with one profile per time) to a full set of one profile
+/// per spectrum.
+///
+/// `compact_priors` is the array of priors in the
+/// one-per-time format, with `prior_time` as the first dimension.
+/// `prior_index` is the array of 0-based indices mapping each prior
+/// to the spectra it applies to.
+///
+/// # Errors
+/// A custom [`GggError`] if any prior index is out of bounds for the
+/// `compact_priors` array's first dimension.
 pub fn expand_priors<T: Zero + Copy>(
     compact_priors: ArrayViewD<T>,
     prior_index: ArrayView1<usize>,
@@ -204,6 +216,26 @@ pub fn expand_priors<T: Zero + Copy>(
 // Helper functions for expanding the AKs //
 // -------------------------------------- //
 
+/// Expand averaging kernels from the lookup table format to a one-per-spectrum
+/// array.
+///
+/// Parameters:
+/// - `slant_xgas_values`: the per-spectrum Xgas times airmass values. When
+/// reading from the private files, airmass should be the O2 airmass (usually
+/// `o2_7885_am_o2`).
+/// - `xgas_units`: the units of the `slant_xgas_values` data, e.g. "ppm" or "ppb".
+/// - `slant_xgas_bins`: the slant Xgas values defined for the AK look up table
+/// - `bin_units`: the units of `slant_xgas_bins`, e.g., "ppm" or "ppb".
+/// - `aks`: the averaging kernels in look up table format
+/// - `nsamples`: if `Some(n)`, then the AKs will be quantized to `n` distinct
+///    slant Xgas values within the bounds of the slant Xgas bins. This allows
+///    the AKs to compress more efficiently in netCDF files.
+///
+/// # Errors
+/// Returns an error if:
+/// - custom [`GggError`] it cannot convert the slant Xgas values and bins to consistent units
+///   (usually because the unit is not known)
+/// - custom [`GggError`] if `slant_xgas_bins` is empty.
 pub fn expand_slant_xgas_binned_aks(
     slant_xgas_values: ArrayView1<f32>,
     xgas_units: &str,
@@ -327,6 +359,24 @@ fn quantize(v: f32, minval: f32, maxval: f32, n: f32) -> f32 {
     vi * (maxval - minval) + minval
 }
 
+/// Interpolate an array of averaging kernels from their standard pressures
+/// to new, per-observation pressures.
+///
+/// Typically this will be used to move the
+/// AKs from their lookup table pressure levels to the same pressure levels
+/// as the a priori profiles. Parameters:
+///
+/// - `aks`: the array of averaging kernels. The first dimension is the observation
+/// and must be the same length as the first dimension of `target_pressure' and its
+/// second dimension must be its levels and be the same length as `ak_pressure`.
+/// - `ak_pressure`: the array of pressures that the AKs are originally defined on.
+/// It is assumed that each row of `aks` is on the same pressure levels.
+/// - `target_pressures`: the array of pressures to which the AKs will be interpolated.
+/// Each row of this array will be the vector of pressures for the corresponding row
+/// of `aks`.
+///
+/// # Errors
+/// Will return an error if:the shapes of the inputs are inconsistent (custom [`GggError`]).
 pub fn interp_aks_to_new_pressures(
     aks: ArrayView2<f32>,
     ak_pressure: Array1<f32>,
@@ -408,16 +458,46 @@ pub fn interp_aks_to_new_pressures(
 // Metadata helpers //
 // ---------------- //
 
+/// A structure representing metadata for a single TCCON site.
 #[derive(Debug, Deserialize)]
 pub struct NcSiteMetadata {
+    /// A long (human readable) name for the site. Traditionally,
+    /// this is the location name with a two-digit extension used to
+    /// identify different instruments at the same location, e.g.
+    /// "caltech01", "lauder03".
     pub long_name: String,
+
+    /// The number of days after aquisition that data will be withheld
+    /// from the public files. For example, a value of 30 means that data
+    /// taken on 1 Apr would not go into the public files until 1 May.
+    /// This should be written as an integer in new files, but has
+    /// historically been written as a string in the GGG2020 JSON files.
     #[serde(deserialize_with = "release_lag_de_helper")]
     pub release_lag: u32,
+
+    /// The physical location of the site, usually "City, Country" or
+    /// similar format appropriate for the location.
     pub location: String,
+
+    /// The name and email address of the person to contact with questions
+    /// about the data. Expected format is "Name <Email>".
     pub contact: String,
+
+    /// The revision of the data, typically "R0", "R1", etc.
     pub data_revision: String,
+
+    /// The DOI of the data, starting with "10." (not "https://doi.org").
+    /// May be omitted if the DOI has not been assigned yet.
     pub data_doi: Option<String>,
+
+    /// A plain-text citation for the data. This will be assigned by CaltechData
+    /// with information provided by the sites regarding creators and contributors.
+    /// May be omitted if the CaltechData record has not been created.
     pub data_reference: Option<String>,
+
+    /// A plain-text citation for the site. This will ideally be a journal article
+    /// that describes the location and site setup. May be omitted if no such
+    /// reference exists.
     pub site_reference: Option<String>,
 }
 
@@ -454,6 +534,18 @@ where
     }
 }
 
+/// Read a TOML or JSON file defining site metadata.
+///
+/// The file must have a table (a.k.a. map or dict)
+/// with the site IDs as keys and subtables that have
+/// keys matching the fields in [`NcSiteMetadata`].
+/// In terms of file format, TOML will be preferred going
+/// forward.
+///
+/// # Errors
+/// Returns a [`GggError::CouldNotRead`] if either the file
+/// had the wrong structure or it does not have a `.toml` or
+/// `.json` extension.
 pub fn read_nc_site_metadata(
     site_info_file: &Path,
 ) -> Result<IndexMap<String, NcSiteMetadata>, GggError> {
@@ -608,6 +700,7 @@ impl GetNcAttr for &netcdf::File {
 // Value helpers //
 // ------------- //
 
+/// Convert a single timestamp from a TCCON netCDF file into a datetime.
 pub fn convert_nc_timestamp(ts: f64) -> chrono::DateTime<chrono::Utc> {
     let nanos = (ts * 1e9).trunc() as i64;
     chrono::DateTime::from_timestamp_nanos(nanos)

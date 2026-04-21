@@ -157,7 +157,7 @@ pub(super) fn check_dim_exists(
 
 /// Wrapper around unsigned bytes to represent a netCDF character type
 ///
-/// From https://docs.rs/netcdf/0.11.0/netcdf/trait.NcTypeDescriptor.html#char-type,
+/// From <https://docs.rs/netcdf/0.11.0/netcdf/trait.NcTypeDescriptor.html#char-type>,
 /// in netCDF v0.11, i8 and u8 are not considered equivalent to an NC_CHAR type.
 /// Therefore, to read an NC_CHAR-type variable, we create this structure to
 /// hold a byte as a character.
