@@ -71,12 +71,17 @@ fn driver(clargs: Cli) -> error_stack::Result<(), CliError> {
     let public_file_name = if let Some(out_file) = clargs.output_file.as_deref() {
         out_file.to_path_buf()
     } else if clargs.no_rename_by_dates {
-        make_public_name_from_stem(private_file_name, config.extra_extension.as_deref())?
+        make_public_name_from_stem(
+            private_file_name,
+            config.extra_extension.as_deref(),
+            clargs.output_dir.as_deref(),
+        )?
     } else {
         make_public_name_from_dates(
             private_file_name,
             &time_subsetter,
             config.extra_extension.as_deref(),
+            clargs.output_dir.as_deref(),
         )?
     };
 
@@ -133,9 +138,14 @@ struct Cli {
 
     /// Specify the path at which to write the output file. Will be overwritten
     /// if it exists. This argument takes precedence over the --no-rename-by-dates
-    /// flag.
+    /// flag and --output-dir option.
     #[clap(long)]
     output_file: Option<PathBuf>,
+
+    /// Specify the directory in which to write the output file, with a name
+    /// derived according to whether --no-rename-by-dates is given or not.
+    #[clap(long)]
+    output_dir: Option<PathBuf>,
 
     /// Will attempt to parse the selected configuration and print
     /// a debugging representation to stdout, then stop without
@@ -340,6 +350,7 @@ fn make_public_name_from_dates(
     private_filename: &Path,
     time_subsetter: &Subsetter,
     extra_extension: Option<&str>,
+    output_dir: Option<&Path>,
 ) -> error_stack::Result<PathBuf, CliError> {
     // Load the times, subset them, and find the first and last times.
     // Yeah, this is painfully long for what should be simple...
@@ -396,9 +407,14 @@ fn make_public_name_from_dates(
         .split_once('.')
         .map(|(_, ext)| ext.replace("private", &new_ext))
         .unwrap_or_else(|| "public.nc".to_string());
-    let parent_dir = private_filename
-        .parent()
-        .ok_or_else(|| CliError::custom("could not get parent directory of the private file"))?;
+
+    let parent_dir = if let Some(d) = output_dir {
+        d
+    } else {
+        private_filename
+            .parent()
+            .ok_or_else(|| CliError::custom("could not get parent directory of the private file"))?
+    };
 
     // Finally, construct the dang name
     let public_filename = format!(
@@ -412,6 +428,7 @@ fn make_public_name_from_dates(
 fn make_public_name_from_stem(
     private_filename: &Path,
     extra_extension: Option<&str>,
+    output_dir: Option<&Path>,
 ) -> error_stack::Result<PathBuf, CliError> {
     let base_name = private_filename
         .file_name()
@@ -431,9 +448,13 @@ fn make_public_name_from_stem(
         format!("{base_name}.{new_ext}.nc")
     };
 
-    let parent_dir = private_filename
-        .parent()
-        .ok_or_else(|| CliError::custom("could not get parent directory of the private file"))?;
+    let parent_dir = if let Some(d) = output_dir {
+        d
+    } else {
+        private_filename
+            .parent()
+            .ok_or_else(|| CliError::custom("could not get parent directory of the private file"))?
+    };
     Ok(parent_dir.join(public_filename))
 }
 
