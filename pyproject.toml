@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "ggg-rs"
-version = "0.1.0"
+version = "2020.1.0-rc.1"
 description = "Rust programs for GGG"
 requires-python = ">=3.8"
 
