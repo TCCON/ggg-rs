@@ -1,4 +1,4 @@
-name: CI/CD - Multi-Arch Release
+name: Build wheels for PyPI
 on:
   workflow_dispatch
   #release:
@@ -24,9 +24,11 @@ jobs:
           # macOS (Maturin handles Universal binaries by default on macos-latest)
           - os: macos-latest
             target: aarch64-apple-darwin
+          # Excluding windows, at least for now. The github run failed, and we
+          # don't really support windows anyway.
           # Windows x86_64
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
+          #- os: windows-latest
+          #  target: x86_64-pc-windows-msvc
 
     steps:
       # v6 commit on 22 May 2026
