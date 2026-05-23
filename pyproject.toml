@@ -6,6 +6,7 @@ build-backend = "maturin"
 name = "ggg-rs"
 version = "2020.1.0-rc.1"
 description = "Rust programs for GGG"
+readme = "README.md"
 requires-python = ">=3.8"
 
 [tool.maturin]
