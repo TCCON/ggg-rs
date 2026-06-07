@@ -62,6 +62,9 @@ required-features = ["netcdf"]
 name = "collate_tccon_results"
 
 [[bin]]
+name = "average_tccon_results"
+
+[[bin]]
 name = "apply_tccon_airmass_correction"
 
 [[bin]]

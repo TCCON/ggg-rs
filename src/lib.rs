@@ -1,3 +1,5 @@
+/// Common code for averaging windows
+pub mod averaging;
 /// Utilities for interpreting spectra named following the Caltech TCCON convention
 pub mod cit_spectrum_name;
 /// Common code for `collate-*-results` programs.

@@ -669,11 +669,11 @@ impl PostprocFileHeader {
         FortFormat::Fixed(fields)
     }
 
-    fn aux_varnames(&self) -> &[String] {
+    pub fn aux_varnames(&self) -> &[String] {
         &self.column_names[..self.naux]
     }
 
-    fn gas_varnames(&self) -> &[String] {
+    pub fn gas_varnames(&self) -> &[String] {
         &self.column_names[self.naux..]
     }
 }
