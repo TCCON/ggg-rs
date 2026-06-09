@@ -2,7 +2,10 @@ use std::{path::PathBuf, process::ExitCode};
 
 use clap::Parser;
 use error_stack::ResultExt;
-use ggg_rs::{averaging::WindowGrouper, readers::postproc_files::open_and_iter_postproc_file};
+use ggg_rs::{
+    averaging::{self, WindowGrouper},
+    readers::postproc_files::open_and_iter_postproc_file,
+};
 
 mod grouping;
 
@@ -93,6 +96,9 @@ fn driver(clargs: AverageCli) -> error_stack::Result<(), CliError> {
         .group_windows(&header)
         .change_context_lazy(|| CliError::context("Error occurred while grouping the windows"))?;
     dbg!(tmp_groups);
+    let predefined_scale_factors = averaging::extract_scale_factors(&header)
+        .change_context_lazy(|| CliError::context("An error occurred while checking for predefined scale factors in the input file header"))?;
+    dbg!(predefined_scale_factors);
 
     Ok(())
 }

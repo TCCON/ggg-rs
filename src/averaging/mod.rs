@@ -1,4 +1,5 @@
 use indexmap::IndexMap;
+use itertools::Itertools;
 
 use crate::{readers::postproc_files::PostprocFileHeader, utils::GggError};
 
@@ -52,4 +53,57 @@ pub struct AveragingResult {
     /// Any adjustment factor made to the windows to account for biases.
     /// Length of `n_windows`.
     adjustment_factors: ndarray::Array1<f64>,
+}
+
+/// Extract precalculated scale factors from the header of a post-processing file.
+/// If no "sf=" line is present, returns `None`, meaning scale factors will need
+/// to be computed dynamically when averaging windows. Otherwise, the returned map
+/// will have the gas windows as keys, e.g. `"co2_6220"`. Error column names are
+/// not included.
+pub fn extract_scale_factors(
+    header: &PostprocFileHeader,
+) -> Result<Option<IndexMap<String, f64>>, GggError> {
+    for line in header.extra_lines.iter() {
+        if line.trim_start().starts_with("sf=") {
+            let sf_map = parse_scale_factors(line, header.gas_varnames())?;
+            return Ok(Some(sf_map));
+        }
+    }
+
+    Ok(None)
+}
+
+fn parse_scale_factors<S: ToString>(
+    sf_line: &str,
+    gas_colnames: &[S],
+) -> Result<IndexMap<String, f64>, GggError> {
+    let scale_factors: Vec<f64> = sf_line
+        .replace("sf=", "")
+        .trim()
+        .split_ascii_whitespace()
+        .map(|s| s.parse::<f64>())
+        .try_collect()
+        .map_err(|e| {
+            GggError::custom(format!(
+                "Could not parse one of the entries in the sf= header line as a number (error was: {e})"
+            ))
+        })?;
+
+    // The gas columns includes the errors
+    if scale_factors.len() != gas_colnames.len() / 2 {
+        return Err(GggError::custom(format!(
+            "Number of scale factors in the sf= header line ({}) was not equal to the number of gas columns ({})",
+            scale_factors.len(),
+            gas_colnames.len(),
+        )));
+    }
+
+    let sf_map: IndexMap<String, f64, _> = IndexMap::from_iter(
+        gas_colnames
+            .iter()
+            .step_by(2) // skip over the error columns
+            .zip(scale_factors)
+            .map(|(gas, sf)| (gas.to_string(), sf)),
+    );
+    Ok(sf_map)
 }
