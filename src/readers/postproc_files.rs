@@ -11,6 +11,7 @@ use fortformat::{FortField, FortFormat};
 use indexmap::IndexMap;
 use itertools::Itertools;
 use log::debug;
+use ndarray::Array1;
 use serde::Deserialize;
 
 use crate::{
@@ -258,6 +259,140 @@ impl AuxDataBuilder {
     }
 }
 
+/// Auxiliary (i.e. non-retrieved) data stored in post-processing files.
+#[derive(Debug)]
+pub struct AuxDataArrays {
+    pub spectrum: Array1<String>,
+    pub year: Array1<f64>,
+    pub day: Array1<f64>,
+    pub hour: Array1<f64>,
+    pub run: Array1<f64>,
+    pub lat: Array1<f64>,
+    pub long: Array1<f64>,
+    pub zobs: Array1<f64>,
+    pub zmin: Array1<f64>,
+    pub solzen: Array1<f64>,
+    pub azim: Array1<f64>,
+    pub osds: Array1<f64>,
+    pub opd: Array1<f64>,
+    pub fovi: Array1<f64>,
+    pub amal: Array1<f64>,
+    pub graw: Array1<f64>,
+    pub tins: Array1<f64>,
+    pub pins: Array1<f64>,
+    pub tout: Array1<f64>,
+    pub pout: Array1<f64>,
+    pub hout: Array1<f64>,
+    pub sia: Array1<f64>,
+    pub fvsi: Array1<f64>,
+    pub wspd: Array1<f64>,
+    pub wdir: Array1<f64>,
+    pub o2dmf: Array1<f64>,
+}
+
+impl AuxDataArrays {
+    // TODO: it would be nice to make this a derive macro, but when I tried to
+    // just add a derive crate (with Claude's help) without making this crate
+    // a workspace, Cargo wouldn't have it.
+    fn new_with_length(n: usize) -> Self {
+        Self {
+            spectrum: Array1::from_elem(n, "".to_string()),
+            year: Array1::from_elem(n, POSTPROC_FILL_VALUE),
+            day: Array1::from_elem(n, POSTPROC_FILL_VALUE),
+            hour: Array1::from_elem(n, POSTPROC_FILL_VALUE),
+            run: Array1::from_elem(n, POSTPROC_FILL_VALUE),
+            lat: Array1::from_elem(n, POSTPROC_FILL_VALUE),
+            long: Array1::from_elem(n, POSTPROC_FILL_VALUE),
+            zobs: Array1::from_elem(n, POSTPROC_FILL_VALUE),
+            zmin: Array1::from_elem(n, POSTPROC_FILL_VALUE),
+            solzen: Array1::from_elem(n, POSTPROC_FILL_VALUE),
+            azim: Array1::from_elem(n, POSTPROC_FILL_VALUE),
+            osds: Array1::from_elem(n, POSTPROC_FILL_VALUE),
+            opd: Array1::from_elem(n, POSTPROC_FILL_VALUE),
+            fovi: Array1::from_elem(n, POSTPROC_FILL_VALUE),
+            amal: Array1::from_elem(n, POSTPROC_FILL_VALUE),
+            graw: Array1::from_elem(n, POSTPROC_FILL_VALUE),
+            tins: Array1::from_elem(n, POSTPROC_FILL_VALUE),
+            pins: Array1::from_elem(n, POSTPROC_FILL_VALUE),
+            tout: Array1::from_elem(n, POSTPROC_FILL_VALUE),
+            pout: Array1::from_elem(n, POSTPROC_FILL_VALUE),
+            hout: Array1::from_elem(n, POSTPROC_FILL_VALUE),
+            sia: Array1::from_elem(n, POSTPROC_FILL_VALUE),
+            fvsi: Array1::from_elem(n, POSTPROC_FILL_VALUE),
+            wspd: Array1::from_elem(n, POSTPROC_FILL_VALUE),
+            wdir: Array1::from_elem(n, POSTPROC_FILL_VALUE),
+            o2dmf: Array1::from_elem(n, POSTPROC_FILL_VALUE),
+        }
+    }
+
+    /// Insert data from one row of auxiliary values at index `i` in the arrays.
+    ///
+    /// # Panics
+    /// Panics if `i` is outside the allocated array bounds.
+    fn insert_row(&mut self, i: usize, data: &AuxData) {
+        self.spectrum[i] = data.spectrum.clone();
+        self.year[i] = data.year;
+        self.day[i] = data.day;
+        self.hour[i] = data.hour;
+        self.run[i] = data.run;
+        self.lat[i] = data.lat;
+        self.long[i] = data.long;
+        self.zobs[i] = data.zobs;
+        self.zmin[i] = data.zmin;
+        self.solzen[i] = data.solzen;
+        self.azim[i] = data.azim;
+        self.osds[i] = data.osds;
+        self.opd[i] = data.opd;
+        self.fovi[i] = data.fovi;
+        self.amal[i] = data.amal;
+        self.graw[i] = data.graw;
+        self.tins[i] = data.tins;
+        self.pins[i] = data.pins;
+        self.tout[i] = data.tout;
+        self.pout[i] = data.pout;
+        self.hout[i] = data.hout;
+        self.sia[i] = data.sia;
+        self.fvsi[i] = data.fvsi;
+        self.wspd[i] = data.wspd;
+        self.wdir[i] = data.wdir;
+        self.o2dmf[i] = data.o2dmf;
+    }
+}
+
+pub struct RetrievedDataArrays {
+    n: usize,
+    data: IndexMap<String, Array1<f64>>,
+}
+
+impl RetrievedDataArrays {
+    fn new_with_length(n: usize) -> Self {
+        Self {
+            n,
+            data: Default::default(),
+        }
+    }
+
+    /// Insert data from one row of retrieved values at index `i` in the arrays.
+    ///
+    /// # Panics
+    /// Panics if `i` is outside the allocated array bounds.
+    fn insert_row(&mut self, i: usize, data: &HashMap<String, f64>) {
+        for (colname, value) in data.iter() {
+            if !self.data.contains_key(colname) {
+                self.data.insert(
+                    colname.to_string(),
+                    Array1::from_elem(self.n, POSTPROC_FILL_VALUE),
+                );
+            }
+
+            let arr = self.data.get_mut(colname).expect(
+                "Logic error: map should contain the column name at this point (this is a bug)",
+            );
+            arr[i] = *value;
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum PostprocType {
     Vsw,
@@ -371,6 +506,41 @@ impl Iterator for PostprocRowIter {
     }
 }
 
+pub struct PostprocArray {
+    aux: AuxDataArrays,
+    retrieved: RetrievedDataArrays,
+}
+
+impl PostprocArray {
+    fn new_with_length(n: usize) -> Self {
+        Self {
+            aux: AuxDataArrays::new_with_length(n),
+            retrieved: RetrievedDataArrays::new_with_length(n),
+        }
+    }
+
+    /// Fill in the arrays with values from an iterator over the postprocessing rows.
+    ///
+    /// # Panics
+    /// Panics if the iterator returns more rows than were allocated for the arrays.
+    fn fill_from_iter(&mut self, it: PostprocRowIter) -> Result<(), GggError> {
+        for (irow, res) in it.enumerate() {
+            let row = res?;
+            self.aux.insert_row(irow, &row.auxiliary);
+            self.retrieved.insert_row(irow, &row.retrieved);
+        }
+        Ok(())
+    }
+
+    pub fn aux(&self) -> &AuxDataArrays {
+        &self.aux
+    }
+
+    pub fn retrieved_column(&self, colname: &str) -> Option<&Array1<f64>> {
+        self.retrieved.data.get(colname)
+    }
+}
+
 /// Convenience function to open a postprocessing output file at `path` and
 /// return an iterator over its data rows.
 pub fn open_and_iter_postproc_file(
@@ -410,6 +580,25 @@ pub fn open_and_iter_postproc_file(
     };
 
     Ok((header, it))
+}
+
+pub fn open_and_read_postproc_file(
+    path: &Path,
+) -> error_stack::Result<(PostprocFileHeader, PostprocArray), GggError> {
+    let (header, it) = open_and_iter_postproc_file(path).change_context_lazy(|| {
+        GggError::context(format!(
+            "Error while opening or reading header of {}",
+            path.display()
+        ))
+    })?;
+    let mut arrays = PostprocArray::new_with_length(header.nrec);
+    arrays.fill_from_iter(it).change_context_lazy(|| {
+        GggError::context(format!(
+            "Error while reading contents of {}",
+            path.display()
+        ))
+    })?;
+    Ok((header, arrays))
 }
 
 /// Represents data from a row of any tabular GGG file that has the spectrum name,

@@ -4,7 +4,7 @@ use clap::Parser;
 use error_stack::ResultExt;
 use ggg_rs::{
     averaging::{self, WindowGrouper},
-    readers::postproc_files::open_and_iter_postproc_file,
+    readers::postproc_files::open_and_read_postproc_file,
 };
 
 mod grouping;
@@ -88,7 +88,7 @@ fn driver(clargs: AverageCli) -> error_stack::Result<(), CliError> {
     let in_file = clargs.upstream_file.as_path();
     let out_file = clargs.get_output_file()?;
 
-    let (mut header, rows) = open_and_iter_postproc_file(&clargs.upstream_file)
+    let (mut header, data) = open_and_read_postproc_file(in_file)
         .change_context_lazy(|| CliError::ReadError(clargs.upstream_file.to_path_buf()))?;
 
     let grouper = grouping::default_tccon_grouper();
