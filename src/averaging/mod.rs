@@ -42,6 +42,7 @@ pub trait Averager {
         window_values: ndarray::ArrayView2<f64>,
         error_values: ndarray::ArrayView2<f64>,
         window_names: &[S],
+        missing_value: f64,
     ) -> Result<AveragingResult, GggError>;
 }
 
@@ -107,3 +108,8 @@ fn parse_scale_factors<S: ToString>(
     );
     Ok(sf_map)
 }
+
+// TODO: write the .?av file along with any diagnostic files.
+// In particular, write out the groups and window scale factors into their own TOML file.
+// In the .?av file header, include a summary of the grouping and a checksum of that TOML file.
+pub fn write_averaged_files() {}
