@@ -22,3 +22,7 @@ pub fn init_logging(level: log::LevelFilter) {
 
     log4rs::init_config(config).expect("Failed to initialize logger");
 }
+
+pub fn init_test_logging() {
+    init_logging(log::LevelFilter::Debug);
+}

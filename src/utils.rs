@@ -65,6 +65,8 @@ pub enum GggError {
         path: PathBuf,
         cause: String,
     },
+    /// Indicates that an iterative process failed to convege
+    ConvergenceError(String),
     /// A generic error for an unimplemented case in the code
     NotImplemented(String),
     /// A general error for one-off cases that don't need their own variant
@@ -109,6 +111,9 @@ impl Display for GggError {
             }
             Self::DataError { path, cause } => {
                 write!(f, "Error in data format of {}: {cause}", path.display())
+            }
+            Self::ConvergenceError(reason) => {
+                write!(f, "{reason}")
             }
             Self::NotImplemented(case) => {
                 write!(f, "Not implemented: {case}")

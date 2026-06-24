@@ -1,5 +1,5 @@
 use indexmap::IndexMap;
-use log::warn;
+use log::{debug, warn};
 use ndarray::Array1;
 
 use crate::utils::GggError;
@@ -20,7 +20,7 @@ impl Averager for MulBiasAverager {
         let (_, nwin) = window_values.dim();
         let scale_factors = Array1::from_elem(nwin, 1.0);
         let scale_factor_errors = Array1::from_elem(nwin, 5.0);
-        Ok(iterative_mul_bias(
+        iterative_mul_bias(
             window_values,
             error_values,
             scale_factors,
@@ -28,7 +28,7 @@ impl Averager for MulBiasAverager {
             window_names,
             missing_value,
             25,
-        ))
+        )
     }
 }
 
@@ -72,7 +72,7 @@ impl Averager for PresetMulBiasAverager {
     ) -> Result<super::AveragingResult, crate::utils::GggError> {
         let scale_factors = self.get_window_scale_factors(window_names)?;
         let scale_factor_errors = Array1::from_elem(scale_factors.dim(), 5.0);
-        Ok(iterative_mul_bias(
+        iterative_mul_bias(
             window_values,
             error_values,
             scale_factors,
@@ -80,7 +80,7 @@ impl Averager for PresetMulBiasAverager {
             window_names,
             missing_value,
             1,
-        ))
+        )
     }
 }
 
@@ -92,73 +92,113 @@ fn iterative_mul_bias<S: AsRef<str>>(
     window_names: &[S],
     missing_value: f64,
     max_num_iter: usize,
-) -> super::AveragingResult {
+) -> Result<super::AveragingResult, GggError> {
     let (n_spec, n_win) = window_values.dim();
     let mut mean_values = Array1::from_elem(n_spec, missing_value);
     let mut mean_errors = Array1::from_elem(n_spec, missing_value);
 
     let mut win_has_vals = Array1::from_elem(n_win, false);
+    let a_priori_scale_factors = scale_factors.clone();
     let a_priori_scale_factor_errors = scale_factor_errors.clone();
-    let mut numerator_all = Array1::from_iter(
-        a_priori_scale_factor_errors
-            .iter()
-            .map(|aperr| 1.0 / aperr.powi(2)),
-    );
-    let mut denominator_all = Array1::from_iter(
-        a_priori_scale_factor_errors
-            .iter()
-            .map(|aperr| 1.0 / aperr.powi(2)),
-    );
 
-    for _ in 0..max_num_iter {
-        for ispec in 0..n_spec {
+    let mut prev_total_error_weight = f64::MAX;
+    let mut converged = false;
+
+    for i_iter in 0..max_num_iter {
+        let mut chi2_all = 0.0;
+        let mut n_val = 0;
+
+        let mut numerator_all = Array1::from_iter(
+            a_priori_scale_factor_errors
+                .iter()
+                .map(|aperr| 1.0 / aperr.powi(2)),
+        );
+        let mut denominator_all = Array1::from_iter(
+            a_priori_scale_factor_errors
+                .iter()
+                .map(|aperr| 1.0 / aperr.powi(2)),
+        );
+        let mut chi2_windows = Array1::from_iter((0..n_win).into_iter().map(|i| {
+            ((a_priori_scale_factors[i] - scale_factors[i]) / a_priori_scale_factor_errors[i])
+                .powi(2)
+        }));
+
+        for i_spec in 0..n_spec {
             let mut n_obs_this_spec = 0;
             let mut numerator_spec = 0.0;
             let mut denominator_spec = 0.0;
-            for iwin in 0..n_win {
+            for i_win in 0..n_win {
                 // let mut numerator_win = 1.0 / a_priori_scale_factor_errors[iwin].powi(2);
                 // let mut denominator_win = 1.0 / a_priori_scale_factor_errors[iwin].powi(2);
 
-                if approx::abs_diff_ne!(window_values[(ispec, iwin)], missing_value) {
-                    let sf = scale_factors[iwin];
-                    let y = window_values[(ispec, iwin)];
-                    let yerr_sq = error_values[(ispec, iwin)].powi(2);
+                if approx::abs_diff_ne!(window_values[(i_spec, i_win)], missing_value) {
+                    let sf = scale_factors[i_win];
+                    let y = window_values[(i_spec, i_win)];
+                    let yerr_sq = error_values[(i_spec, i_win)].powi(2);
                     n_obs_this_spec += 1;
                     numerator_spec += sf * y / yerr_sq;
                     denominator_spec += sf.powi(2) / yerr_sq;
+
+                    n_val += 1;
                 }
             }
 
             if n_obs_this_spec > 0 {
-                mean_values[ispec] = numerator_spec / denominator_spec;
-                mean_errors[ispec] = 1.0 / denominator_spec.sqrt();
+                mean_values[i_spec] = numerator_spec / denominator_spec;
+                mean_errors[i_spec] = 1.0 / denominator_spec.sqrt();
             }
 
-            for iwin in 0..n_win {
-                if approx::abs_diff_ne!(window_values[(ispec, iwin)], missing_value) {
-                    numerator_all += mean_values[ispec] * window_values[(ispec, iwin)]
-                        / error_values[(ispec, iwin)].powi(2);
-                    denominator_all += (mean_values[ispec] / error_values[(ispec, iwin)]).powi(2);
-                    win_has_vals[iwin] = true;
+            for i_win in 0..n_win {
+                if approx::abs_diff_ne!(window_values[(i_spec, i_win)], missing_value) {
+                    numerator_all[i_win] += mean_values[i_spec] * window_values[(i_spec, i_win)]
+                        / error_values[(i_spec, i_win)].powi(2);
+                    denominator_all[i_win] +=
+                        (mean_values[i_spec] / error_values[(i_spec, i_win)]).powi(2);
+
+                    let delta_value =
+                        window_values[(i_spec, i_win)] - mean_values[i_spec] * scale_factors[i_win];
+                    let this_chi2 = (delta_value / error_values[(i_spec, i_win)]).powi(2);
+                    chi2_windows[i_win] += this_chi2;
+                    chi2_all += this_chi2;
+                    win_has_vals[i_win] = true;
                 }
             }
         }
+        debug!("chi2 after iteration {i_iter}: {chi2_all}");
 
-        for iwin in 0..n_win {
-            if win_has_vals[iwin] {
-                scale_factors[iwin] = numerator_all[iwin] / denominator_all[iwin];
-                scale_factor_errors[iwin] = 1.0 / denominator_all[iwin].powi(2);
+        for i_win in 0..n_win {
+            if win_has_vals[i_win] {
+                debug!("Numerator = {numerator_all}, denominator = {denominator_all}");
+                scale_factors[i_win] = numerator_all[i_win] / denominator_all[i_win];
+                scale_factor_errors[i_win] = 1.0 / denominator_all[i_win].powi(2);
             } else {
-                warn!("No data for window {}", window_names[iwin].as_ref());
+                warn!("No data for window {}", window_names[i_win].as_ref());
             }
+        }
+        debug!("Scale factors after iteration {i_iter}: {scale_factors}");
+
+        let curr_total_error_weight = (chi2_all / n_val as f64).sqrt();
+        if curr_total_error_weight > prev_total_error_weight {
+            converged = true;
+            break;
+        } else {
+            prev_total_error_weight = curr_total_error_weight;
         }
     }
 
-    super::AveragingResult {
+    if !converged && max_num_iter > 1 {
+        return Err(GggError::ConvergenceError(
+            "average_with_mul_bias failed to converge".to_string(),
+        ));
+    }
+
+    // TODO: final scaling of mean errors by scale factors? and maybe total error?
+    log::debug!("Final scale factors = {scale_factors}");
+    Ok(super::AveragingResult {
         values: mean_values,
         errors: mean_errors,
         adjustment_factors: scale_factors,
-    }
+    })
 }
 
 #[cfg(test)]
@@ -169,9 +209,12 @@ mod tests {
     use indexmap::IndexMap;
     use ndarray::array;
 
-    use crate::averaging::{
-        average_with_mul_bias::{MulBiasAverager, PresetMulBiasAverager},
-        Averager,
+    use crate::{
+        averaging::{
+            average_with_mul_bias::{MulBiasAverager, PresetMulBiasAverager},
+            Averager,
+        },
+        logging,
     };
 
     #[test]
@@ -216,6 +259,7 @@ mod tests {
 
     #[test]
     fn test_iterative_scale_mul_avg() {
+        logging::init_test_logging();
         // Data from the 3 CH4 windows (5938, 6002, 6076)
         let col_vals = array!(
             [3.53152E19, 3.5241E19, 3.49562E19],
@@ -241,10 +285,10 @@ mod tests {
             )
             .unwrap();
 
+        let expected_sfs = array![1.0045, 1.0005, 0.9956];
         let expected_vals = array![3.51601E19, 3.53996E19, 3.60453E19, 3.61085E19];
         let expected_errs = array![1.4905E17, 1.65534E17, 1.54375E17, 1.5019E17];
-        let expected_sfs = array![0.9994, 0.9989, 0.9994];
-        approx::assert_abs_diff_eq!(results.adjustment_factors, expected_sfs);
+        approx::assert_abs_diff_eq!(results.adjustment_factors, expected_sfs, epsilon = 1e-4);
         approx::assert_abs_diff_eq!(results.values, expected_vals, epsilon = 1e14);
         approx::assert_abs_diff_eq!(results.errors, expected_errs, epsilon = 1e12);
     }
