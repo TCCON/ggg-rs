@@ -88,7 +88,16 @@ impl WindowGrouper for FrequencyWindowGrouper {
     }
 
     fn header_lines(&self) -> Vec<String> {
-        todo!()
+        let mut lines = vec![format!(" Averaging groups: {} 3", self.ranges.len())];
+        for r in self.ranges.iter() {
+            lines.push(format!(
+                r#""{}"  {:.2}  {:.2}"#,
+                r.suffix.as_deref().unwrap_or(""),
+                r.min_freq,
+                r.max_freq
+            ));
+        }
+        lines
     }
 }
 

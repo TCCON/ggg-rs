@@ -1,12 +1,118 @@
+use std::path::{Path, PathBuf};
+
+use error_stack::ResultExt;
 use indexmap::IndexMap;
 use itertools::Itertools;
+use ndarray::{s, Array2};
 
-use crate::{readers::postproc_files::PostprocFileHeader, utils::GggError};
+use crate::{
+    collation::CollationMode,
+    readers::{
+        postproc_files::{
+            open_and_read_postproc_file, PostprocArray, PostprocFileHeader, RetrievedDataArrays,
+        },
+        ProgramVersion,
+    },
+    utils::GggError,
+    writers::postproc_files::{FortranPostprocWriter, PostprocWriter},
+};
 
 pub mod average_with_mul_bias;
 pub mod grouping;
 
 pub type AverageGroup<'c> = IndexMap<String, Vec<&'c str>>;
+
+static SW_TO_AV_REGEX: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+
+pub fn average_results<G: WindowGrouper>(
+    per_window_file: &Path,
+    grouper: &G,
+    averaging_version: ProgramVersion,
+    output_dir: Option<&Path>,
+) -> error_stack::Result<(), GggError> {
+    let output_file = output_file_path(per_window_file, output_dir)?;
+
+    let (mut header, mut data) =
+        open_and_read_postproc_file(per_window_file).change_context_lazy(|| {
+            GggError::context(format!(
+                "error occurred while reading file {} into arrays",
+                per_window_file.display()
+            ))
+        })?;
+
+    // Which averaging method we use depends on what quantity we are working with and whether or not
+    // the window-to-window scale factors have been fixed.
+    let preset_adj_factors = extract_scale_factors(&mut header).change_context_lazy(|| {
+        GggError::context(format!(
+            "error occurred while searching for present window scale factors in file {}",
+            per_window_file.display()
+        ))
+    })?;
+    let col_mode = CollationMode::try_from(per_window_file).change_context_lazy(|| {
+        GggError::context(format!(
+            "error getting collation mode from extension of file {}",
+            per_window_file.display(),
+        ))
+    })?;
+    let averager = averager_for_col_mode(col_mode, preset_adj_factors);
+
+    // Next section handles getting the window groups and doing the averaging
+    let window_groups = grouper.group_windows(&header).change_context_lazy(|| {
+        GggError::context(format!(
+            "error occurred while grouping windows in {}",
+            per_window_file.display(),
+        ))
+    })?;
+    let mut averaged_data = IndexMap::new();
+    for (group_name, windows) in window_groups {
+        let window_averages = average_one_group(&windows, &data, header.missing_value, &averager)?;
+        averaged_data.insert(group_name.clone(), window_averages.values);
+        averaged_data.insert(format!("{group_name}_error"), window_averages.errors);
+    }
+
+    // Update the metadata and data
+    let mut new_column_names = header.column_names[0..header.naux].to_vec();
+    new_column_names.extend(averaged_data.keys().cloned());
+    header.update_colnames(new_column_names);
+    header.program_versions.insert(0, averaging_version);
+    header.extra_lines.extend(grouper.header_lines());
+    data.set_retrieved(RetrievedDataArrays::try_from(averaged_data)?);
+
+    let writer = FortranPostprocWriter::new(output_file, false);
+    writer.write_postproc_file(&header, data.iter_rows().map(|r| Ok(r)))?;
+    Ok(())
+}
+
+fn average_one_group(
+    windows: &[&str],
+    data: &PostprocArray,
+    missing: f64,
+    averager: &AveragingMethod,
+) -> error_stack::Result<AveragingResult, GggError> {
+    let mut values = Array2::from_elem((data.num_spec(), windows.len()), missing);
+    let mut errors = Array2::from_elem((data.num_spec(), windows.len()), missing);
+    for (iwin, win) in windows.iter().enumerate() {
+        let win_values = data
+            .retrieved_column(win)
+            .expect(&format!("Could not find values for {win}"));
+        values.slice_mut(s![.., iwin]).assign(win_values);
+        let win_errors = data
+            .retrieved_column(&format!("{win}_error"))
+            .expect(&format!("Could not find error values for {win}"));
+        errors.slice_mut(s![.., iwin]).assign(win_errors);
+    }
+
+    let averaged_data = averager
+        .average_windows(values.view(), errors.view(), windows, missing)
+        .change_context_lazy(|| {
+            GggError::context(format!(
+                "error while averaging windows {}",
+                windows.join(", ")
+            ))
+        })?;
+
+    Ok(averaged_data)
+}
 
 pub trait WindowGrouper {
     /// Given the header of a .?sw file, map groups of input windows to output mean gases
@@ -35,15 +141,41 @@ pub trait WindowGrouper {
     fn header_lines(&self) -> Vec<String>;
 }
 
-pub trait Averager {
-    /// Compute the averaged values and combined errors for the given windows.
+pub enum AveragingMethod {
+    /// Average windows assumed to have a multiplicative bias w.r.t. each other that must be calculated.
+    IterMulBias,
+    /// Average windows assumed to have a multiplicative bias w.r.t. each other that has already been calculated.
+    PresetMulBias(IndexMap<String, f64>),
+    AddBias,
+}
+
+impl AveragingMethod {
     fn average_windows<S: AsRef<str>>(
         &self,
         window_values: ndarray::ArrayView2<f64>,
         error_values: ndarray::ArrayView2<f64>,
         window_names: &[S],
         missing_value: f64,
-    ) -> Result<AveragingResult, GggError>;
+    ) -> Result<AveragingResult, GggError> {
+        match self {
+            AveragingMethod::IterMulBias => average_with_mul_bias::average_with_mul_bias_iter(
+                window_values,
+                error_values,
+                window_names,
+                missing_value,
+            ),
+            AveragingMethod::PresetMulBias(scale_factors) => {
+                average_with_mul_bias::average_with_mul_bias_preset(
+                    window_values,
+                    error_values,
+                    scale_factors,
+                    window_names,
+                    missing_value,
+                )
+            }
+            AveragingMethod::AddBias => todo!(),
+        }
+    }
 }
 
 pub struct AveragingResult {
@@ -61,12 +193,13 @@ pub struct AveragingResult {
 /// to be computed dynamically when averaging windows. Otherwise, the returned map
 /// will have the gas windows as keys, e.g. `"co2_6220"`. Error column names are
 /// not included.
-pub fn extract_scale_factors(
-    header: &PostprocFileHeader,
+fn extract_scale_factors(
+    header: &mut PostprocFileHeader,
 ) -> Result<Option<IndexMap<String, f64>>, GggError> {
-    for line in header.extra_lines.iter() {
+    for (iline, line) in header.extra_lines.iter().enumerate() {
         if line.trim_start().starts_with("sf=") {
             let sf_map = parse_scale_factors(line, header.gas_varnames())?;
+            header.extra_lines.remove(iline);
             return Ok(Some(sf_map));
         }
     }
@@ -109,7 +242,59 @@ fn parse_scale_factors<S: ToString>(
     Ok(sf_map)
 }
 
+fn averager_for_col_mode(
+    mode: CollationMode,
+    adjustment_factors: Option<IndexMap<String, f64>>,
+) -> AveragingMethod {
+    match (mode, adjustment_factors) {
+        (CollationMode::VerticalColumns | CollationMode::VmrScaleFactors, Some(sfs)) => {
+            AveragingMethod::PresetMulBias(sfs)
+        }
+        (CollationMode::VerticalColumns | CollationMode::VmrScaleFactors, None) => {
+            AveragingMethod::IterMulBias
+        }
+    }
+}
+
+fn output_file_path(
+    per_window_file: &Path,
+    output_dir: Option<&Path>,
+) -> Result<PathBuf, GggError> {
+    let output_dir = output_dir
+        .or_else(|| per_window_file.parent())
+        .ok_or_else(|| {
+            GggError::custom(format!(
+                "Could not determine parent directory of upstream per-window file {}",
+                per_window_file.display()
+            ))
+        })?;
+
+    let orig_base_name = per_window_file
+        .file_name()
+        .ok_or_else(|| {
+            GggError::custom(format!(
+                "Could not get file name of upstream per-window file {}",
+                per_window_file.display()
+            ))
+        })?
+        .to_str()
+        .ok_or_else(|| {
+            GggError::custom(format!(
+                "Could not interpret base name of {} in UTF-8 encoding",
+                per_window_file.display()
+            ))
+        })?;
+
+    let re = SW_TO_AV_REGEX.get_or_init(|| {
+        regex::Regex::new(r"\.([a-z])sw(.|$)")
+            .expect("Failed to compile regex for changing file extension")
+    });
+    let new_base_name = re.replace(orig_base_name, ".${1}av${2}");
+    let out_file = output_dir.join(new_base_name.as_ref());
+
+    Ok(out_file)
+}
+
 // TODO: write the .?av file along with any diagnostic files.
 // In particular, write out the groups and window scale factors into their own TOML file.
 // In the .?av file header, include a summary of the grouping and a checksum of that TOML file.
-pub fn write_averaged_files() {}

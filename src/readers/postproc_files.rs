@@ -357,11 +357,64 @@ impl AuxDataArrays {
         self.wdir[i] = data.wdir;
         self.o2dmf[i] = data.o2dmf;
     }
+
+    pub(crate) fn iter_rows(&self) -> impl Iterator<Item = AuxData> + use<'_> {
+        (0..self.spectrum.len()).map(|i| AuxData {
+            spectrum: self.spectrum[i].clone(),
+            year: self.year[i],
+            day: self.day[i],
+            hour: self.hour[i],
+            run: self.run[i],
+            lat: self.lat[i],
+            long: self.long[i],
+            zobs: self.zobs[i],
+            zmin: self.zmin[i],
+            solzen: self.solzen[i],
+            azim: self.azim[i],
+            osds: self.osds[i],
+            opd: self.opd[i],
+            fovi: self.fovi[i],
+            amal: self.amal[i],
+            graw: self.graw[i],
+            tins: self.tins[i],
+            pins: self.pins[i],
+            tout: self.tout[i],
+            pout: self.pout[i],
+            hout: self.hout[i],
+            sia: self.sia[i],
+            fvsi: self.fvsi[i],
+            wspd: self.wspd[i],
+            wdir: self.wdir[i],
+            o2dmf: self.o2dmf[i],
+        })
+    }
 }
 
 pub struct RetrievedDataArrays {
     n: usize,
     data: IndexMap<String, Array1<f64>>,
+}
+
+impl TryFrom<IndexMap<String, Array1<f64>>> for RetrievedDataArrays {
+    type Error = GggError;
+
+    fn try_from(value: IndexMap<String, Array1<f64>>) -> Result<Self, Self::Error> {
+        let mut n_opt = None;
+        for arr in value.values() {
+            if let Some(n) = n_opt {
+                if n != arr.len() {
+                    return Err(GggError::custom(
+                        "retrieved arrays have inconsistent lengths",
+                    ));
+                }
+            } else {
+                n_opt = Some(arr.len());
+            }
+        }
+
+        let n = n_opt.unwrap_or(0);
+        Ok(Self { n, data: value })
+    }
 }
 
 impl RetrievedDataArrays {
@@ -390,6 +443,13 @@ impl RetrievedDataArrays {
             );
             arr[i] = *value;
         }
+    }
+
+    pub(crate) fn iter_rows(&self) -> impl Iterator<Item = HashMap<String, f64>> + use<'_> {
+        // If needed, can probably optimize this by writing a proper iterator type that reuses
+        // the same HashMap, since the keys will always be the same.
+        (0..self.n)
+            .map(|i| HashMap::from_iter(self.data.iter().map(|(k, v)| (k.to_uppercase(), v[i]))))
     }
 }
 
@@ -532,12 +592,30 @@ impl PostprocArray {
         Ok(())
     }
 
+    pub(crate) fn set_retrieved(&mut self, retrieved: RetrievedDataArrays) {
+        self.retrieved = retrieved;
+    }
+
     pub fn aux(&self) -> &AuxDataArrays {
         &self.aux
     }
 
     pub fn retrieved_column(&self, colname: &str) -> Option<&Array1<f64>> {
         self.retrieved.data.get(colname)
+    }
+
+    pub fn num_spec(&self) -> usize {
+        self.retrieved.n
+    }
+
+    pub fn iter_rows(&self) -> impl Iterator<Item = PostprocRow> + use<'_> {
+        self.aux
+            .iter_rows()
+            .zip(self.retrieved.iter_rows())
+            .map(|(aux, ret)| PostprocRow {
+                auxiliary: aux,
+                retrieved: ret,
+            })
     }
 }
 
@@ -791,6 +869,11 @@ impl PostprocFileHeader {
             fformat,
             column_names,
         }
+    }
+
+    pub fn update_colnames(&mut self, new_colnames: Vec<String>) {
+        self.ncol = new_colnames.len();
+        self.column_names = new_colnames;
     }
 
     pub fn read_postproc_file_header<F: BufRead>(

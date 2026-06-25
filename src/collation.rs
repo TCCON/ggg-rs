@@ -311,6 +311,34 @@ impl FromStr for CollationMode {
     }
 }
 
+impl TryFrom<&Path> for CollationMode {
+    type Error = CollationError;
+
+    fn try_from(value: &Path) -> Result<Self, Self::Error> {
+        let filename = value
+            .file_name()
+            .ok_or_else(|| CollationError::custom(format!("file {} has no name", value.display())))?
+            .to_str()
+            .ok_or_else(|| {
+                CollationError::custom(format!(
+                    "could not interpret name of file {} as UTF-8",
+                    value.display()
+                ))
+            })?;
+
+        let (_, ext) = filename.split_once('.').ok_or_else(|| {
+            CollationError::custom(format!(
+                "could not find extension of file {}",
+                value.display()
+            ))
+        })?;
+
+        let mode_str = String::from_iter(ext.chars().take(1));
+
+        CollationMode::from_str(&mode_str)
+    }
+}
+
 /// The primary entry point for this module.
 ///
 /// Given a path to a multiggg.sh file, i.e. one with a series of calls to `gfit` such as:

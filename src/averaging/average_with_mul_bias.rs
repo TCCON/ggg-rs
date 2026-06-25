@@ -4,84 +4,63 @@ use ndarray::Array1;
 
 use crate::utils::GggError;
 
-use super::Averager;
-
-/// Average windows assumed to have a multiplicative bias w.r.t. each other that must be calculated.
-pub struct MulBiasAverager;
-
-impl Averager for MulBiasAverager {
-    fn average_windows<S: AsRef<str>>(
-        &self,
-        window_values: ndarray::ArrayView2<f64>,
-        error_values: ndarray::ArrayView2<f64>,
-        window_names: &[S],
-        missing_value: f64,
-    ) -> Result<super::AveragingResult, crate::utils::GggError> {
-        let (_, nwin) = window_values.dim();
-        let scale_factors = Array1::from_elem(nwin, 1.0);
-        let scale_factor_errors = Array1::from_elem(nwin, 5.0);
-        iterative_mul_bias(
-            window_values,
-            error_values,
-            scale_factors,
-            scale_factor_errors,
-            window_names,
-            missing_value,
-            25,
-        )
-    }
+pub(super) fn average_with_mul_bias_iter<S: AsRef<str>>(
+    window_values: ndarray::ArrayView2<f64>,
+    error_values: ndarray::ArrayView2<f64>,
+    window_names: &[S],
+    missing_value: f64,
+) -> Result<super::AveragingResult, GggError> {
+    let (_, nwin) = window_values.dim();
+    let scale_factors = Array1::from_elem(nwin, 1.0);
+    let scale_factor_errors = Array1::from_elem(nwin, 5.0);
+    iterative_mul_bias(
+        window_values,
+        error_values,
+        scale_factors,
+        scale_factor_errors,
+        window_names,
+        missing_value,
+        25,
+    )
 }
 
-/// Average windows assumed to have a multiplicative bias w.r.t. each other that has already been calculated.
-pub struct PresetMulBiasAverager {
-    scale_factors: IndexMap<String, f64>,
+pub(super) fn average_with_mul_bias_preset<S: AsRef<str>>(
+    window_values: ndarray::ArrayView2<f64>,
+    error_values: ndarray::ArrayView2<f64>,
+    all_scale_factors: &IndexMap<String, f64>,
+    window_names: &[S],
+    missing_value: f64,
+) -> Result<super::AveragingResult, GggError> {
+    let scale_factors = get_window_scale_factors(all_scale_factors, window_names)?;
+    let scale_factor_errors = Array1::from_elem(scale_factors.dim(), 5.0);
+    iterative_mul_bias(
+        window_values,
+        error_values,
+        scale_factors,
+        scale_factor_errors,
+        window_names,
+        missing_value,
+        1,
+    )
 }
 
-impl PresetMulBiasAverager {
-    pub fn new(scale_factors: IndexMap<String, f64>) -> Self {
-        Self { scale_factors }
+fn get_window_scale_factors<S: AsRef<str>>(
+    scale_factors: &IndexMap<String, f64>,
+    window_names: &[S],
+) -> Result<Array1<f64>, GggError> {
+    let mut sf = Vec::with_capacity(window_names.len());
+
+    for name in window_names {
+        let this_sf = scale_factors.get(name.as_ref()).ok_or_else(|| {
+            GggError::custom(format!(
+                "Unable to find preset scale factor for window '{}'",
+                name.as_ref()
+            ))
+        })?;
+        sf.push(*this_sf);
     }
 
-    fn get_window_scale_factors<S: AsRef<str>>(
-        &self,
-        window_names: &[S],
-    ) -> Result<Array1<f64>, GggError> {
-        let mut sf = Vec::with_capacity(window_names.len());
-
-        for name in window_names {
-            let this_sf = self.scale_factors.get(name.as_ref()).ok_or_else(|| {
-                GggError::custom(format!(
-                    "Unable to find preset scale factor for window '{}'",
-                    name.as_ref()
-                ))
-            })?;
-            sf.push(*this_sf);
-        }
-
-        Ok(Array1::from_vec(sf))
-    }
-}
-
-impl Averager for PresetMulBiasAverager {
-    fn average_windows<S: AsRef<str>>(
-        &self,
-        window_values: ndarray::ArrayView2<f64>,
-        error_values: ndarray::ArrayView2<f64>,
-        window_names: &[S],
-        missing_value: f64,
-    ) -> Result<super::AveragingResult, crate::utils::GggError> {
-        let scale_factors = self.get_window_scale_factors(window_names)?;
-        let scale_factor_errors = Array1::from_elem(scale_factors.dim(), 5.0);
-        iterative_mul_bias(
-            window_values,
-            error_values,
-            scale_factors,
-            scale_factor_errors,
-            window_names,
-            missing_value,
-            1,
-        )
-    }
+    Ok(Array1::from_vec(sf))
 }
 
 fn iterative_mul_bias<S: AsRef<str>>(
@@ -209,13 +188,8 @@ mod tests {
     use indexmap::IndexMap;
     use ndarray::array;
 
-    use crate::{
-        averaging::{
-            average_with_mul_bias::{MulBiasAverager, PresetMulBiasAverager},
-            Averager,
-        },
-        logging,
-    };
+    use super::{average_with_mul_bias_iter, average_with_mul_bias_preset};
+    use crate::logging;
 
     #[test]
     fn test_preset_scale_mul_avg() {
@@ -240,15 +214,14 @@ mod tests {
             ("ch4_6076".to_string(), 0.995),
         ]);
 
-        let averager = PresetMulBiasAverager::new(sfs);
-        let results = averager
-            .average_windows(
-                col_vals.view(),
-                err_vals.view(),
-                &["ch4_5938", "ch4_6002", "ch4_6076"],
-                f64::MAX,
-            )
-            .unwrap();
+        let results = average_with_mul_bias_preset(
+            col_vals.view(),
+            err_vals.view(),
+            &sfs,
+            &["ch4_5938", "ch4_6002", "ch4_6076"],
+            f64::MAX,
+        )
+        .unwrap();
 
         let expected_vals = array![3.51674E+19, 3.54060E+19, 3.60517E+19, 3.61149E+19];
         let expected_errs = array![1.49081E+17, 1.65563E+17, 1.54403E+17, 1.50217E+17];
@@ -275,15 +248,13 @@ mod tests {
             [2.53876E17, 2.90144E17, 2.42996E17]
         ];
 
-        let averager = MulBiasAverager;
-        let results = averager
-            .average_windows(
-                col_vals.view(),
-                err_vals.view(),
-                &["ch4_5938", "ch4_6002", "ch4_6076"],
-                f64::MAX,
-            )
-            .unwrap();
+        let results = average_with_mul_bias_iter(
+            col_vals.view(),
+            err_vals.view(),
+            &["ch4_5938", "ch4_6002", "ch4_6076"],
+            f64::MAX,
+        )
+        .unwrap();
 
         let expected_sfs = array![1.0045, 1.0005, 0.9956];
         let expected_vals = array![3.51601E19, 3.53996E19, 3.60453E19, 3.61085E19];
