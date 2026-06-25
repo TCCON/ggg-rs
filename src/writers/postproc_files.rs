@@ -1,8 +1,109 @@
-use std::io::Write;
+use std::{io::Write, path::{PathBuf}};
 
 use error_stack::ResultExt;
 
-use crate::{error::WriteError, readers::ProgramVersion};
+use crate::{error::WriteError, readers::{ProgramVersion, postproc_files::{PostprocFileHeader, PostprocRow}}, utils::GggError};
+
+/// A trait that defines how to write a postprocessing file
+/// 
+/// For GGG2020 and GGG2020.1, the standard post processing files (`.?sw`, `.?av`, `.vsw.ada`, `.vav.ada`, and `.vav.ada.aia`)
+/// are written as Fortran fixed-format text files with a header. This trait defined a general interface for that which we can
+/// use in the future if we want the option to, e.g., change these files to netCDF files.
+pub trait PostprocWriter {
+    /// Write a common post processing file.
+    /// 
+    /// The `header` is used to write metadata about the file. `row_iter` must be an
+    /// iterator that produces `Result<PostprocRow, GggError>`. While this might often
+    /// be an infallible iterator (e.g., one derived from `Vec<PostprocRow>`), returning
+    /// a result gives us the option to "stream" the conversion of previous data. In cases
+    /// where the transformation from input to output can work on one row at a time, this
+    /// could reduce memory usage.
+    fn write_postproc_file<I>(&self, header: &PostprocFileHeader, row_iter: I) -> error_stack::Result<(), GggError>
+        where I: Iterator<Item = Result<PostprocRow, GggError>>;
+}
+
+/// A concrete post-processing writer to generate fixed-format Fortran files.
+pub struct FortranPostprocWriter {
+    file: PathBuf,
+    replace_comment_in_format: bool,
+}
+
+impl FortranPostprocWriter {
+    /// Create a new Fortran fixed-format writer.
+    /// 
+    /// `file` is the path to the file to write; it must have the correct
+    /// extension already. `replace_comment_in_format` determines whether
+    /// the "a1" field in the format string is replaced with "1x" (`true`)
+    /// in the file header, or kept as "a1" (false). This allows us to match
+    /// previous file formats for compatibility with Fortran programs.
+    pub fn new(file: PathBuf, replace_comment_in_format: bool) -> Self {
+        Self { file, replace_comment_in_format }
+    }
+}
+
+impl PostprocWriter for FortranPostprocWriter {
+    fn write_postproc_file<I>(&self, header: &PostprocFileHeader, row_iter: I) -> error_stack::Result<(), GggError>
+    where I: Iterator<Item = Result<PostprocRow, GggError>> {
+        let fw = std::fs::File::create(&self.file).change_context_lazy(|| GggError::CouldNotWrite { 
+            path: self.file.clone(),
+            reason: "could not open output file for writing".to_string()
+        })?;
+        let mut fw = std::io::BufWriter::new(fw);
+
+        let fmt_str = if self.replace_comment_in_format {
+            header.fformat_without_comment().fmt_string(1)
+        } else {
+            header.fformat.fmt_string(1)
+        };
+
+        write_postproc_header(
+            &mut fw,
+            header.column_names.len(),
+            header.nrec,
+            header.naux,
+            &header.program_versions,
+            &header.extra_lines,
+            header.missing_value,
+            &fmt_str,
+            &header.column_names,
+        )
+        .change_context_lazy(|| GggError::CouldNotWrite { 
+            path: self.file.clone(),
+            reason: "error occurred while writing the file header".to_string()
+        })?;
+
+        // We want to allow skipped fields in case we are reading a file that omitted
+        // fields allowed to have defaults in the auxiliary columns.
+        let settings = fortformat::ser::SerSettings::default()
+            .align_left_str(true)
+            .allow_skipped_fields(true);
+        // Handle replacing the "a1" column that we retain for backwards compatibility with
+        // older runlog formats - this can't go in the format string because it represents a
+        // commenting-out character that we don't have a field for.
+        let writer_format_spec = header.fformat_without_comment();
+
+        for (irow, row_res) in row_iter.enumerate() {
+            let row = row_res.change_context_lazy(|| GggError::CouldNotWrite { 
+                path: self.file.clone(),
+                reason: format!("error getting data for output row {}", irow + 1)
+            })?;
+            fortformat::ser::to_writer_custom(
+                row,
+                &writer_format_spec,
+                Some(&header.column_names),
+                &settings,
+                &mut fw,
+            )
+            .change_context_lazy(|| GggError::CouldNotWrite { 
+                path: self.file.clone(),
+                reason: format!("error serializing data line {}", irow + 1)
+            })?;
+        }
+
+        Ok(())
+    }
+}
+
 
 /// Write the header of a postprocessing file.
 ///
@@ -28,7 +129,7 @@ use crate::{error::WriteError, readers::ProgramVersion};
 /// here should include that if needed, even if that means it differs from the string used by [`fortformat`]
 /// to actually write the output. (That is, usually you will remove the "a1" column for the string given
 /// to [`fortformat`] and add one to the width of the spectrum name column.)
-pub fn write_postproc_header<W: Write>(
+fn write_postproc_header<W: Write>(
     mut f: W,
     ncol: usize,
     nrow: usize,

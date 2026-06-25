@@ -746,7 +746,7 @@ pub struct PostprocFileHeader {
     pub ncol: usize,
     pub nrec: usize,
     pub naux: usize,
-    pub program_versions: IndexMap<String, ProgramVersion>,
+    pub program_versions: Vec<ProgramVersion>,
     pub extra_lines: Vec<String>,
     pub missing_value: f64,
     pub fformat: FortFormat,
@@ -754,6 +754,45 @@ pub struct PostprocFileHeader {
 }
 
 impl PostprocFileHeader {
+    /// Create a new header from scratch.
+    ///
+    /// # Parameters
+    /// - `nrec`: number of data rows in the file
+    /// - `naux`: number of auxiliary data columns in the file
+    /// - `program_versions`: the list of programs used to process
+    ///   the data. Typically the most recent file should be first
+    ///   in the list.
+    /// - `extra_lines`: additional lines to add to the end of the
+    ///   header.
+    /// - `missing_value`: what value is used to represent missing
+    ///   data in the file.
+    /// - `fformat`: the [`FortFormat`] to record in the file header.
+    /// - `column_names`: the list of all column names (auxiliary and
+    /// retrieved).
+    pub fn new(
+        nrec: usize,
+        naux: usize,
+        program_versions: Vec<ProgramVersion>,
+        extra_lines: Vec<String>,
+        missing_value: f64,
+        fformat: FortFormat,
+        column_names: Vec<String>,
+    ) -> Self {
+        // The extra 4 = line with nhead etc. + missing + format + colnames
+        let nhead = program_versions.len() + extra_lines.len() + 4;
+        Self {
+            nhead,
+            ncol: column_names.len(),
+            nrec,
+            naux,
+            program_versions,
+            extra_lines,
+            missing_value,
+            fformat,
+            column_names,
+        }
+    }
+
     pub fn read_postproc_file_header<F: BufRead>(
         file: &mut FileBuf<F>,
     ) -> error_stack::Result<Self, HeaderError> {
@@ -764,7 +803,7 @@ impl PostprocFileHeader {
         let nrec = sizes[2];
         let naux = sizes[3];
 
-        let mut program_versions = IndexMap::new();
+        let mut program_versions = vec![];
         let mut extra_lines = vec![];
         let mut missing_value = None;
         let mut fformat = None;
@@ -800,7 +839,7 @@ impl PostprocFileHeader {
                 column_names = Some(line.split_whitespace().map(|s| s.to_string()).collect_vec());
             } else {
                 if let Ok(pv) = ProgramVersion::from_str(&line) {
-                    program_versions.insert(pv.program.clone(), pv);
+                    program_versions.push(pv);
                 } else {
                     extra_lines.push(line.trim_end().to_string());
                 }
@@ -1073,62 +1112,44 @@ mod tests {
         assert_eq!(f.header.nrec, 4);
         assert_eq!(f.header.naux, 26);
 
-        let ex_pgrm_vers = IndexMap::from([
-            (
-                "apply_tccon_insitu_correction".to_string(),
-                ProgramVersion {
-                    program: "apply_tccon_insitu_correction".to_string(),
-                    version: "Version 1.0".to_string(),
-                    date: "2025-03-31".to_string(),
-                    authors: "JLL".to_string(),
-                },
-            ),
-            (
-                "average_results".to_string(),
-                ProgramVersion {
-                    program: "average_results".to_string(),
-                    version: "Version 1.37".to_string(),
-                    date: "2020-07-31".to_string(),
-                    authors: "GCT,JLL".to_string(),
-                },
-            ),
-            (
-                "apply_tccon_airmass_correction".to_string(),
-                ProgramVersion {
-                    program: "apply_tccon_airmass_correction".to_string(),
-                    version: "Version 1.0".to_string(),
-                    date: "2024-09-30".to_string(),
-                    authors: "JLL".to_string(),
-                },
-            ),
-            (
-                "collate_tccon_results".to_string(),
-                ProgramVersion {
-                    program: "collate_tccon_results".to_string(),
-                    version: "Version 1.0".to_string(),
-                    date: "2024-04-28".to_string(),
-                    authors: "JLL".to_string(),
-                },
-            ),
-            (
-                "GFIT".to_string(),
-                ProgramVersion {
-                    program: "GFIT".to_string(),
-                    version: "Version 5.28".to_string(),
-                    date: "2020-04-24".to_string(),
-                    authors: "GCT".to_string(),
-                },
-            ),
-            (
-                "GSETUP".to_string(),
-                ProgramVersion {
-                    program: "GSETUP".to_string(),
-                    version: "Version 4.70".to_string(),
-                    date: "2020-06-29".to_string(),
-                    authors: "GCT".to_string(),
-                },
-            ),
-        ]);
+        let ex_pgrm_vers = vec![
+            ProgramVersion {
+                program: "apply_tccon_insitu_correction".to_string(),
+                version: "Version 1.0".to_string(),
+                date: "2025-03-31".to_string(),
+                authors: "JLL".to_string(),
+            },
+            ProgramVersion {
+                program: "average_results".to_string(),
+                version: "Version 1.37".to_string(),
+                date: "2020-07-31".to_string(),
+                authors: "GCT,JLL".to_string(),
+            },
+            ProgramVersion {
+                program: "apply_tccon_airmass_correction".to_string(),
+                version: "Version 1.0".to_string(),
+                date: "2024-09-30".to_string(),
+                authors: "JLL".to_string(),
+            },
+            ProgramVersion {
+                program: "collate_tccon_results".to_string(),
+                version: "Version 1.0".to_string(),
+                date: "2024-04-28".to_string(),
+                authors: "JLL".to_string(),
+            },
+            ProgramVersion {
+                program: "GFIT".to_string(),
+                version: "Version 5.28".to_string(),
+                date: "2020-04-24".to_string(),
+                authors: "GCT".to_string(),
+            },
+            ProgramVersion {
+                program: "GSETUP".to_string(),
+                version: "Version 4.70".to_string(),
+                date: "2020-06-29".to_string(),
+                authors: "GCT".to_string(),
+            },
+        ];
 
         assert_eq!(f.header.program_versions, ex_pgrm_vers);
 

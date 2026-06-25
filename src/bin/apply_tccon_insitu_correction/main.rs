@@ -1,12 +1,21 @@
-use std::{collections::HashMap, path::PathBuf, process::ExitCode};
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+    process::ExitCode,
+};
 
 use clap::Parser;
 use error_stack::ResultExt;
 use fortformat::FortFormat;
 use ggg_rs::{
-    readers::{postproc_files::open_and_iter_postproc_file, ProgramVersion},
+    readers::{
+        postproc_files::{
+            open_and_iter_postproc_file, PostprocFileHeader, PostprocRow, PostprocRowIter,
+        },
+        ProgramVersion,
+    },
     tccon::input_config::{self, AicfRow},
-    writers::postproc_files::write_postproc_header,
+    writers::postproc_files::{FortranPostprocWriter, PostprocWriter},
 };
 use indexmap::IndexMap;
 
@@ -80,68 +89,22 @@ fn driver(clargs: InsituCorrCli) -> error_stack::Result<(), CliError> {
     add_aicf_header_lines(&mut header.extra_lines, &aicfs).change_context_lazy(|| {
         CliError::WriteError {
             path: out_file.clone(),
-            cause: "writing the AICF values in the header failed.".to_string(),
+            cause: "adding the AICF values to the header in memory failed.".to_string(),
         }
     })?;
 
-    // Go ahead and start writing to the output
-    let fw = std::fs::File::create(&out_file).change_context_lazy(|| CliError::WriteError {
-        path: out_file.to_path_buf(),
-        cause: "creating file failed".to_string(),
-    })?;
-    let mut fw = std::io::BufWriter::new(fw);
+    let out_rows = apply_correction_all_lines(&header, rows, &aicfs, &clargs.upstream_file)?;
+    header.program_versions.insert(0, program_version());
 
-    let format_str = header.fformat_without_comment().fmt_string(1);
-    let mut program_versions = Vec::from_iter(header.program_versions.values().cloned());
-    program_versions.insert(0, program_version());
-
-    write_postproc_header(
-        &mut fw,
-        header.column_names.len(),
-        header.nrec,
-        header.naux,
-        &program_versions,
-        &header.extra_lines,
-        header.missing_value,
-        &format_str,
-        &header.column_names,
-    )
-    .change_context_lazy(|| CliError::WriteError {
-        path: out_file.clone(),
-        cause: "error occurred while writing the file header".to_string(),
-    })?;
-
-    // Read each row, apply airmass corrections, and write out the Xgas values.
-    let settings = fortformat::ser::SerSettings::default()
-        .align_left_str(true)
-        .allow_skipped_fields(true);
-    let missing_value = header.missing_value;
-
-    // The original apply_insitu_correction switches the second field from "a1" to "1x".
-    // We'll keep that behavior for backwards compatibility for now. Eventually we could
-    // probably make that change back in collate_tccon_results, once all the post processing
-    // programs can support that.
-    let writer_fformat = header.fformat_without_comment();
-    for (irow, row) in rows.enumerate() {
-        let mut row = row.change_context_lazy(|| CliError::ReadErrorAtLine {
-            file: clargs.upstream_file.clone(),
-            line: header.nhead + irow + 1,
-        })?;
-
-        row.retrieved = apply_correction(&row.retrieved, &aicfs, missing_value)?;
-
-        fortformat::ser::to_writer_custom(
-            row,
-            &writer_fformat,
-            Some(&header.column_names),
-            &settings,
-            &mut fw,
-        )
+    // Historically, the .aia files replaced the a1 in the format string with 1x. This may have been needed
+    // for the .oof files, so we will retain that for now.
+    let writer = FortranPostprocWriter::new(out_file.clone(), true);
+    writer
+        .write_postproc_file(&header, out_rows.into_iter().map(|r| Ok(r)))
         .change_context_lazy(|| CliError::WriteError {
-            path: out_file.clone(),
-            cause: format!("error serializing data line {}", irow + 1),
+            path: out_file,
+            cause: "error writing the in situ corrected file".to_string(),
         })?;
-    }
 
     Ok(())
 }
@@ -170,6 +133,27 @@ fn add_aicf_header_lines(
     }
 
     Ok(())
+}
+
+fn apply_correction_all_lines(
+    header: &PostprocFileHeader,
+    rows: PostprocRowIter,
+    aicfs: &IndexMap<String, AicfRow>,
+    upstream_file: &Path,
+) -> error_stack::Result<Vec<PostprocRow>, CliError> {
+    let mut out_rows = vec![];
+
+    for (irow, row) in rows.enumerate() {
+        let mut row = row.change_context_lazy(|| CliError::ReadErrorAtLine {
+            file: upstream_file.to_path_buf(),
+            line: header.nhead + irow + 1,
+        })?;
+
+        row.retrieved = apply_correction(&row.retrieved, &aicfs, header.missing_value)?;
+        out_rows.push(row);
+    }
+
+    Ok(out_rows)
 }
 
 fn apply_correction(

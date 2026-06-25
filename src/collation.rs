@@ -36,6 +36,7 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use error_stack::ResultExt;
+use fortformat::FortFormat;
 use itertools::Itertools;
 use log::{info, warn};
 
@@ -45,11 +46,13 @@ use crate::readers::col_files::{
     get_col_files, get_file_from_col_header, open_and_iter_col_file, read_col_file_header,
     ColFileHeader, ColRetQuantity,
 };
-use crate::readers::postproc_files::{iter_tabular_file, AuxData, AuxDataBuilder, PostprocRow};
+use crate::readers::postproc_files::{
+    iter_tabular_file, AuxData, AuxDataBuilder, PostprocFileHeader, PostprocRow,
+};
 use crate::readers::runlogs::RunlogDataRec;
 use crate::readers::{ProgramVersion, POSTPROC_FILL_VALUE};
 use crate::utils::{self, FileBuf, GggCompatibility};
-use crate::writers::postproc_files::write_postproc_header;
+use crate::writers::postproc_files::{FortranPostprocWriter, PostprocWriter};
 
 pub type CollationResult<T> = Result<T, CollationError>;
 
@@ -445,47 +448,29 @@ pub fn collate_results<I: CollationIndexer, P: CollationPrefixer>(
     };
     let output_dir = output_dir.unwrap_or(run_dir);
     let xsw_file = output_dir.join(format!("{runlog_name}.{}sw", mode.ext_char()));
-    let f = std::fs::File::create(&xsw_file)
-        .change_context_lazy(|| CollationError::could_not_write(&xsw_file))?;
-    let mut writer = std::io::BufWriter::new(f);
     let format_str = format!(
         "(a57,a1,f13.8,{}f13.5,{}(1pe13.5))",
         naux - 2,
         columns.len() - naux
     );
-    write_postproc_header(
-        &mut writer,
-        columns.len(),
+
+    let fformat = FortFormat::parse(&format_str).expect(
+        "Failed to parse the fortran format string created during collation; this is a bug",
+    );
+    let header = PostprocFileHeader::new(
         rows.len(),
         naux,
-        &[collate_version, gfit_version, gsetup_version],
-        &extra_lines,
+        vec![collate_version, gfit_version, gsetup_version],
+        extra_lines,
         POSTPROC_FILL_VALUE,
-        &format_str,
-        &columns,
-    )
-    .change_context_lazy(|| CollationError::could_not_write(&xsw_file))?;
-
-    // We don't write the "a1" column that has the colon/semicolon
-    let writer_format_str = format_str.replace("a1,", "1x");
-    let write_format = fortformat::FortFormat::parse(&writer_format_str).map_err(|e| {
-        CollationError::parsing_error(format!(
-            "Could not parse format .xsw format string '{writer_format_str}': {e}"
-        ))
-    })?;
-
+        fformat,
+        columns,
+    );
     info!("Writing results to {}...", xsw_file.display());
-    let ser_settings = fortformat::ser::SerSettings::default()
-        .align_left_str(true)
-        .allow_skipped_fields(true);
-    fortformat::ser::many_to_writer_custom(
-        &rows,
-        &write_format,
-        Some(&columns),
-        &ser_settings,
-        &mut writer,
-    )
-    .change_context_lazy(|| CollationError::could_not_write(&xsw_file))?;
+    let writer = FortranPostprocWriter::new(xsw_file.clone(), false);
+    writer
+        .write_postproc_file(&header, rows.into_iter().map(|r| Ok(r)))
+        .map_err(|_| CollationError::could_not_write(&xsw_file))?;
     info!("Results written to {}.", xsw_file.display());
 
     missing

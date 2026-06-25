@@ -1,13 +1,22 @@
-use std::{collections::HashMap, path::PathBuf, process::ExitCode};
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+    process::ExitCode,
+};
 
 use clap::Parser;
 
 use error_stack::{Report, ResultExt};
 use fortformat::FortFormat;
 use ggg_rs::{
-    readers::{postproc_files::open_and_iter_postproc_file, ProgramVersion},
+    readers::{
+        postproc_files::{
+            open_and_iter_postproc_file, PostprocFileHeader, PostprocRow, PostprocRowIter,
+        },
+        ProgramVersion,
+    },
     tccon::input_config::{self, AdcfRow},
-    writers::postproc_files::write_postproc_header,
+    writers::postproc_files::{FortranPostprocWriter, PostprocWriter},
 };
 use indexmap::IndexMap;
 
@@ -112,15 +121,11 @@ fn driver(clargs: AirmassCorrCli) -> error_stack::Result<(), CliError> {
 
     // Make sure we found a number of auxiliary columns.
     let naux = header.naux;
-    let nrow = header.nrec;
-
-    let missing_value = header.missing_value;
-    let mut col_names = header.column_names.clone();
 
     // Before we edit the column names, find the O2 window. This looks complicated, but all it's doing
     // is finding the first window name that starts with "o2" and is not a column error amount or
     // the O2 mean DMF auxiliary column.
-    let o2_window = col_names[naux - 1..]
+    let o2_window = header.column_names[naux - 1..]
         .iter()
         .fold(None, |acc, name| {
             if !name.starts_with("o2") | name.ends_with("_error") | name.ends_with("dmf") {
@@ -139,16 +144,9 @@ fn driver(clargs: AirmassCorrCli) -> error_stack::Result<(), CliError> {
         .ok_or_else(|| CliError::custom("could not find O2 window"))??;
 
     // Change the column names to prepend an "x" to all of the retrieved columns.
-    for name in col_names[naux..].iter_mut() {
+    for name in header.column_names[naux..].iter_mut() {
         name.insert(0, 'x');
     }
-
-    // Handle replacing the "a1" column that we retain for backwards compatibility with
-    // older runlog formats - this can't go in the format string because it represents a
-    // commenting-out character that we don't have a field for.
-    // let format_str = format_spec.fmt_string(1).replacen("1x", "a1", 1);
-    let writer_format_spec = header.fformat_without_comment();
-    let format_str = header.fformat.fmt_string(1);
 
     // Add the airmass corrections to the file header
     add_adcf_header_lines(&mut header.extra_lines, &adcfs).change_context_lazy(|| {
@@ -158,69 +156,25 @@ fn driver(clargs: AirmassCorrCli) -> error_stack::Result<(), CliError> {
         }
     })?;
 
-    // Write out the file header, this way we can do one row at a time and not have to
-    // load the whole file into memory.
-    let fw = std::fs::File::create(&out_file).change_context_lazy(|| CliError::WriteError {
-        path: out_file.to_path_buf(),
-        cause: "creating file failed".to_string(),
-    })?;
-    let mut fw = std::io::BufWriter::new(fw);
-
-    let mut program_versions = Vec::from_iter(header.program_versions.values().cloned());
-    program_versions.insert(0, program_version());
-    write_postproc_header(
-        &mut fw,
-        col_names.len(),
-        nrow,
-        naux,
-        &program_versions,
-        &header.extra_lines,
-        missing_value,
-        &format_str,
-        &col_names,
-    )
-    .change_context_lazy(|| CliError::WriteError {
-        path: out_file.clone(),
-        cause: "error occurred while writing the file header".to_string(),
-    })?;
-
-    // Read each row, apply airmass corrections, and write out the Xgas values.
-    // We want to allow skipped fields in case we are reading a file that omitted
-    // fields allowed to have defaults in the auxiliary columns.
-    let settings = fortformat::ser::SerSettings::default()
-        .align_left_str(true)
-        .allow_skipped_fields(true);
-    let missing_value = header.missing_value;
-
-    for (irow, row) in rows.enumerate() {
-        let mut row = row.change_context_lazy(|| CliError::ReadErrorAtLine {
-            file: clargs.upstream_file.clone(),
-            line: header.nhead + irow + 1,
-        })?;
-
-        let this_o2_dmf = row.auxiliary.o2dmf;
-        row.retrieved = apply_correction(
-            &row.retrieved,
-            &adcfs,
-            &o2_window,
-            this_o2_dmf,
-            row.auxiliary.solzen,
-            missing_value,
-            input_is_averaged,
-        )?;
-
-        fortformat::ser::to_writer_custom(
-            row,
-            &writer_format_spec,
-            Some(&col_names),
-            &settings,
-            &mut fw,
-        )
+    // Apply the airmass correction. We should be able to pass some iterator adaptor
+    // to the writer, but that's more confusing, and the memory use is unlikely to
+    // be big enough to matter.
+    header.program_versions.insert(0, program_version());
+    let out_rows = apply_correction_to_all_lines(
+        rows,
+        &clargs.upstream_file,
+        &header,
+        &adcfs,
+        &o2_window,
+        input_is_averaged,
+    )?;
+    let writer = FortranPostprocWriter::new(out_file.clone(), false);
+    writer
+        .write_postproc_file(&header, out_rows.into_iter().map(|r| Ok(r)))
         .change_context_lazy(|| CliError::WriteError {
-            path: out_file.clone(),
-            cause: format!("error serializing data line {}", irow + 1),
+            path: out_file,
+            cause: "error writing airmass corrected file".to_string(),
         })?;
-    }
 
     Ok(())
 }
@@ -247,6 +201,37 @@ fn add_adcf_header_lines(
     }
 
     Ok(())
+}
+
+fn apply_correction_to_all_lines(
+    rows: PostprocRowIter,
+    upstream_file: &Path,
+    header: &PostprocFileHeader,
+    adcfs: &IndexMap<String, AdcfRow>,
+    o2_window: &str,
+    input_is_averaged: bool,
+) -> error_stack::Result<Vec<PostprocRow>, CliError> {
+    let mut out_rows = vec![];
+    for (irow, row) in rows.enumerate() {
+        let mut row = row.change_context_lazy(|| CliError::ReadErrorAtLine {
+            file: upstream_file.to_path_buf(),
+            line: header.nhead + irow + 1,
+        })?;
+
+        let this_o2_dmf = row.auxiliary.o2dmf;
+        row.retrieved = apply_correction(
+            &row.retrieved,
+            &adcfs,
+            o2_window,
+            this_o2_dmf,
+            row.auxiliary.solzen,
+            header.missing_value,
+            input_is_averaged,
+        )?;
+
+        out_rows.push(row);
+    }
+    Ok(out_rows)
 }
 
 fn apply_correction(
