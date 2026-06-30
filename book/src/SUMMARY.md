@@ -8,6 +8,8 @@
     - [`list_spectra`](./setup/list_spectra.md)
 - [Post processing programs](./post_processing.md)
     - [`collate_tccon_results`](./postproc/collate_tccon_results.md)
+    - [`average_tccon_results`](./postproc/average_tccon_results.md)
+        - [Averaging approach](./postproc/averaging_approach.md)
     - [`apply_tccon_airmass_correction`](./postproc/apply_tccon_airmass_correction.md)
         - [Correction file format](./postproc/corrections/airmass_correction_file.md)
     - [`apply_tccon_insitu_correction`](./postproc/apply_tccon_insitu_correction.md)
