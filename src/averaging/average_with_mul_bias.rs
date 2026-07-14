@@ -1,3 +1,7 @@
+//! Functions to average target quantities from multiple windows with a multiplicative bias.
+//!
+//! For background on this method, see [the averaging method section of the
+//! book](https://tccon.github.io/ggg-rs/postproc/averaging_approach.html)
 use indexmap::IndexMap;
 use log::{debug, warn};
 use ndarray::Array1;
@@ -172,6 +176,8 @@ fn iterative_mul_bias<S: AsRef<str>>(
     }
 
     // TODO: final scaling of mean errors by scale factors? and maybe total error?
+    // TODO: handle error propagation depending on whether we are averaging columns or Xgas
+    //  - should probably be one level up.
     log::debug!("Final scale factors = {scale_factors}");
     Ok(super::AveragingResult {
         values: mean_values,

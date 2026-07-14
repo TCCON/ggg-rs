@@ -35,6 +35,8 @@ struct AverageCli {
 fn driver(clargs: AverageCli) -> error_stack::Result<(), GggError> {
     let in_file = clargs.upstream_file.as_path();
     let grouper = grouping::default_tccon_grouper();
+    // TODO: error if preset scale factors not found and a CLI option to
+    // re-optimize those not found.
     averaging::average_results(
         in_file,
         &grouper,
