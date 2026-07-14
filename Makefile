@@ -93,6 +93,9 @@ check: $(NC_LIB)
 	$(CARGOCMD) check $(CARGOARGS)
 
 docs: $(NC_LIB)
+	$(CARGOCMD) doc --no-deps $(CARGOARGS)
+
+all-docs: $(NC_LIB)
 	$(CARGOCMD) doc $(CARGOARGS)
 
 ifeq ("$(BUILD_ENV)", "1")
