@@ -187,20 +187,44 @@ impl Display for GggPathErrorKind {
 #[cfg(feature = "netcdf")]
 #[derive(Debug)]
 pub enum GggNcError {
+    /// Indicates that an attribute expected on a variable is missing.
+    ///
+    /// If `group` is `None`, then the variable was in the root group.
     MissingVarAttr {
         attribute: String,
         variable: String,
         group: Option<String>,
     },
-    MissingGroupAttr {
-        attribute: String,
-        group: String,
-    },
+
+    /// Indicates that an attribute expected on a group is missing.
+    MissingGroupAttr { attribute: String, group: String },
+
+    /// Indicates that a variable was missing.
+    ///
+    /// If `group` is `None`, the variable was expected to be in the
+    /// root group.
     MissingVar {
         variable: String,
         group: Option<String>,
     },
+
+    /// Indicates that a variable had a different number of dimensions than expected.
+    ///
+    /// If `group` is `None`, the variable was expected to be in the
+    /// root group.
+    WrongDimensionality {
+        variable: String,
+        group: Option<String>,
+        shape_err: ndarray::ShapeError,
+    },
+
+    /// Wraps a netCDF error.
     NcErr(netcdf::Error),
+
+    /// A custom error for other problems that are uncommon.
+    Custom(String),
+
+    /// Provides additional context for lower-level error via [`error_stack`].
     Context(String),
 }
 
@@ -242,8 +266,25 @@ impl Display for GggNcError {
                     write!(f, "Variable '{variable}' not found")
                 }
             }
+            GggNcError::WrongDimensionality {
+                variable,
+                group,
+                shape_err,
+            } => {
+                if let Some(grp) = group {
+                    write!(
+                        f,
+                        "Variable '{variable}' in group '{grp}' has wrong number of dimensions, underlying error was: {shape_err}"
+                    )
+                } else {
+                    write!(f, "Variable '{variable}' has wrong number of dimensions, underlying error was: {shape_err}")
+                }
+            }
             GggNcError::NcErr(error) => {
                 write!(f, "{error}")
+            }
+            GggNcError::Custom(msg) => {
+                write!(f, "{msg}")
             }
             GggNcError::Context(msg) => {
                 write!(f, "{msg}")
@@ -289,10 +330,37 @@ impl GggNcError {
         }
     }
 
+    /// Construct a variant with a general error message for uncommon error cases.
+    pub fn custom<C: ToString>(msg: C) -> Self {
+        Self::Custom(msg.to_string())
+    }
+
     /// Construct a variant useful for adding context to a lower-level error.
     pub fn context<C: ToString>(msg: C) -> Self {
         Self::Context(msg.to_string())
     }
+}
+
+/// Derive the TCCON site ID from a filename.
+///
+/// Currently, this assumes that the site ID will be the first two characters of the
+/// file's base name. However, all code should use this function rather than directly
+/// extracting the site ID, since this could change in the future.
+pub fn site_id_from_filename(p: &Path) -> Result<String, GggError> {
+    let name = p
+        .file_name()
+        .ok_or_else(|| {
+            GggError::Custom(format!("Could not get base name of file {}", p.display()))
+        })?
+        .to_str()
+        .ok_or_else(|| {
+            GggError::Custom(format!(
+                "Could not convert base name of file {} to UTF-8",
+                p.display()
+            ))
+        })?;
+    let site_id = name.chars().take(2).join("");
+    Ok(site_id)
 }
 
 /// The various apodization functions allowed by GGG

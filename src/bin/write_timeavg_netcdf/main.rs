@@ -6,6 +6,7 @@ use ggg_rs::logging::init_logging;
 
 mod average_site;
 mod data_structures;
+mod station_ids;
 
 fn main() -> ExitCode {
     let clargs = Cli::parse();
@@ -59,7 +60,11 @@ struct AvgSiteCli {
 
 impl AvgSiteCli {
     fn driver(&self) -> error_stack::Result<(), CliError> {
-        Ok(())
+        average_site::average_site_driver(
+            &self.level2_file,
+            self.get_timeavg_file()?.as_path(),
+            self.get_time_bin(),
+        )
     }
 
     fn get_timeavg_file(&self) -> Result<PathBuf, CliError> {
@@ -89,16 +94,32 @@ impl AvgSiteCli {
             .with_extension(format!("avg{}min.nc", self.time_bin_minutes));
         Ok(output_file)
     }
+
+    fn get_time_bin(&self) -> chrono::Duration {
+        chrono::Duration::minutes(self.time_bin_minutes as i64)
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
 enum CliError {
     #[error("Bad argument: {0}")]
     UserError(String),
+    #[error("{0}")]
+    Custom(String),
+    #[error("{0}")]
+    Context(String),
 }
 
 impl CliError {
     fn user_error<S: ToString>(msg: S) -> Self {
         Self::UserError(msg.to_string())
+    }
+
+    fn custom<S: ToString>(msg: S) -> Self {
+        Self::Custom(msg.to_string())
+    }
+
+    fn context<S: ToString>(ctx: S) -> Self {
+        Self::Context(ctx.to_string())
     }
 }

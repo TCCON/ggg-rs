@@ -1,13 +1,18 @@
-use std::{io::Read, path::Path};
+use std::{
+    io::Read,
+    ops::{Add, Mul},
+    path::Path,
+    str::FromStr,
+};
 
 use error_stack::ResultExt;
 use indexmap::IndexMap;
 use interp::interp_slice;
 use itertools::Itertools;
-use ndarray::{Array1, Array2, ArrayD, ArrayView1, ArrayView2, ArrayViewD};
+use ndarray::{Array, Array1, Array2, ArrayD, ArrayView1, ArrayView2, ArrayViewD};
 use netcdf::{
-    types::{FloatType, IntType},
-    Extents,
+    types::{FloatType, IntType, NcVariableType},
+    Extents, NcTypeDescriptor,
 };
 use num_traits::Zero;
 use serde::{de::Error, Deserialize};
@@ -16,6 +21,63 @@ use crate::{
     units::{unit_conv_factor, Quantity},
     utils::{GggError, GggNcError},
 };
+
+/// Wrapper around unsigned bytes to represent a netCDF character type
+///
+/// From <https://docs.rs/netcdf/0.11.0/netcdf/trait.NcTypeDescriptor.html#char-type>,
+/// in netCDF v0.11, i8 and u8 are not considered equivalent to an NC_CHAR type.
+/// Therefore, to read an NC_CHAR-type variable, we create this structure to
+/// hold a byte as a character.
+#[repr(transparent)]
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct NcChar(u8);
+unsafe impl NcTypeDescriptor for NcChar {
+    fn type_descriptor() -> NcVariableType {
+        NcVariableType::Char
+    }
+}
+
+impl From<NcChar> for u8 {
+    fn from(value: NcChar) -> Self {
+        value.0
+    }
+}
+
+impl From<&NcChar> for u8 {
+    fn from(value: &NcChar) -> Self {
+        value.0
+    }
+}
+
+impl From<&NcChar> for char {
+    fn from(value: &NcChar) -> Self {
+        char::from(value.0)
+    }
+}
+
+impl Zero for NcChar {
+    fn zero() -> Self {
+        Self(0)
+    }
+
+    fn is_zero(&self) -> bool {
+        self.0 == 0
+    }
+}
+
+impl Add for NcChar {
+    type Output = NcChar;
+
+    fn add(self, rhs: Self) -> Self::Output {
+        Self(self.0 + rhs.0)
+    }
+}
+
+pub fn chars_to_string(char_arr: ArrayView1<NcChar>) -> String {
+    let byte_it = char_arr.into_iter().map(|c| char::from(c));
+    let s = String::from_iter(byte_it);
+    s.trim_end_matches('\0').to_string()
+}
 
 /// A type that can hold a variety of arrays that might be stored
 /// in a netCDF file. It is best created by reading from a netCDF
@@ -172,12 +234,25 @@ impl NcArray {
     }
 }
 
+// ----------------------- //
+// Variable naming helpers //
+// ----------------------- //
+
+/// Return the variable name for the error of the given Xgas variable.
+pub fn error_var_name(xgas_var: &str) -> String {
+    if let Some((xgas, suffix)) = xgas_var.split_once('_') {
+        format!("{xgas}_error_{suffix}")
+    } else {
+        format!("{xgas_var}_error")
+    }
+}
+
 // ----------------------------------------- //
 // Helper functions for expanding the priors //
 // ----------------------------------------- //
 
-/// Convert priors in the condensed format used in GGG2020.0 private
-/// files (with one profile per time) to a full set of one profile
+/// Convert priors from the condensed format used in GGG2020.0 & .1 private
+/// files (with one profile per prior time) to a full set of one profile
 /// per spectrum.
 ///
 /// `compact_priors` is the array of priors in the
@@ -188,6 +263,10 @@ impl NcArray {
 /// # Errors
 /// A custom [`GggError`] if any prior index is out of bounds for the
 /// `compact_priors` array's first dimension.
+///
+/// # See also
+/// [`expand_priors_2d`] if using concrete 2D arrays instead of dynamically
+/// dimensioned arrays.
 pub fn expand_priors<T: Zero + Copy>(
     compact_priors: ArrayViewD<T>,
     prior_index: ArrayView1<usize>,
@@ -210,6 +289,27 @@ pub fn expand_priors<T: Zero + Copy>(
             .assign(&orig_prof);
     }
     Ok(expanded_priors)
+}
+
+/// Convert priors from the condensed format in GGG2020.0 & .1 private
+/// files (with one profile per prior time) to a set of one profile per
+/// spectrum.
+///
+/// Unlike [`expand_priors`] which used dynamically dimensioned arrays,
+/// this requires that the input `compact_priors` be a 2D array view,
+/// and will return a 2D array.
+pub fn expand_priors_2d<T: Zero + Copy>(
+    compact_priors: ArrayView2<T>,
+    prior_index: ArrayView1<usize>,
+) -> Result<Array2<T>, GggError> {
+    let expanded_dyn = expand_priors(compact_priors.into_dyn(), prior_index)?;
+    expanded_dyn
+        .into_dimensionality::<ndarray::Ix2>()
+        .map_err(|e| {
+            GggError::custom(format!(
+                "Could not convert expanded priors variable to 2D: {e}"
+            ))
+        })
 }
 
 // -------------------------------------- //
@@ -454,6 +554,58 @@ pub fn interp_aks_to_new_pressures(
     Ok(aks_out)
 }
 
+/// Extract the traceability (WMO) scale from a variable in the private file
+///
+/// This ensures that the scale is the same for all spectra.
+pub fn get_traceability_scale(
+    private_file: &netcdf::File,
+    scale_varname: &str,
+) -> error_stack::Result<String, GggNcError> {
+    let scale_var = private_file
+        .variable(scale_varname)
+        .ok_or_else(|| GggNcError::MissingVar {
+            variable: scale_varname.to_string(),
+            group: None,
+        })?;
+    // In the GGG2020.1 private files, these variables should be characters (not strings),
+    // we also aren't subsetting by time because this *should* be the same for all spectra.
+    let scale_chars = scale_var
+        .get::<NcChar, _>(Extents::All)
+        .change_context_lazy(|| {
+            GggNcError::Context(format!(
+                "getting traceability scale variable '{scale_varname}' data"
+            ))
+        })?
+        .into_dimensionality::<ndarray::Ix2>()
+        .change_context_lazy(|| {
+            GggNcError::Context(format!(
+                "converting traceability scale variable '{scale_varname}' to 2D"
+            ))
+        })?;
+
+    // Check that all slices match the first one - we require that all of the spectra are on the same scale to collapse it into
+    // an attribute.
+    let (nspec, _) = scale_chars.dim();
+    if nspec < 1 {
+        return Err(GggNcError::Custom(format!(
+            "Traceability scale variable '{scale_varname}' is length 0 along the first dimension"
+        ))
+        .into());
+    }
+
+    let scale_bytes = scale_chars.row(0);
+    for (i, r) in scale_chars.rows().into_iter().enumerate() {
+        if scale_bytes != r {
+            return Err(GggNcError::Custom(format!(
+                "{scale_varname} has different values between spectrum 0 and {i}"
+            ))
+            .into());
+        }
+    }
+    let scale = chars_to_string(scale_bytes.view());
+    Ok(scale)
+}
+
 // ---------------- //
 // Metadata helpers //
 // ---------------- //
@@ -607,6 +759,92 @@ fn read_nc_site_metadata_json(
     serde_json::from_reader(f)
 }
 
+/// Read data from a variable into an array.
+///
+/// The generic parameter `T` is the type that the returned array
+/// will have (e.g., `i32`, `f64`), and it must be a valid netCDF
+/// type. `D` defines the dimensionality that the returned array
+/// will have (usually [`ndarray::Ix1`], [`ndarray::IxDyn`],
+/// or similar).
+///
+/// This can return an error if the variable does not exist in the
+/// netCDF file [`GggNcError::MissingVar`], reading the data fails
+/// [`GggNcError::NcErr`], or the array does not match the requested
+/// dimensionality `D` [`GggNcError::WrongDimensionality`].
+pub fn get_var_data<T: Copy + NcTypeDescriptor, D: ndarray::Dimension>(
+    ds: &netcdf::File,
+    varname: &str,
+) -> error_stack::Result<Array<T, D>, GggNcError> {
+    let var = ds.variable(varname).ok_or_else(|| GggNcError::MissingVar {
+        variable: varname.to_owned(),
+        group: None,
+    })?;
+
+    let arr = var
+        .get::<T, _>(Extents::All)
+        .map_err(|e| GggNcError::NcErr(e))?
+        .into_dimensionality::<D>()
+        .map_err(|e| GggNcError::WrongDimensionality {
+            variable: varname.to_string(),
+            group: None,
+            shape_err: e,
+        })?;
+    Ok(arr)
+}
+
+/// Read data from a variable into a [`uom::si::Quantity`].
+///
+/// Like [`get_var_data`], the generic parameter `T`
+/// is the type that the returned array will have (e.g., `i32`, `f64`),
+/// and it must be a valid netCDF type. `D` defines the dimensionality
+/// that the returned array will have (usually [`ndarray::Ix1`], [`ndarray::IxDyn`],
+/// or similar). The additional generic parameter `Q` is the quantity
+/// that the array is converted to, e.g. [`uom::si::f32::Pressure`].
+/// Since [`uom`] defines different quantities for different numeric
+/// types, be sure that the `uom` numeric type matches `T`, i.e.,
+/// if `T = f32` then use quantities under [`uom::si::f32`].
+///
+/// The netCDF variable must have a "units" attribute and the value
+/// of that attribute must be understood by [`crate::units::convert_array`].
+/// If the units cannot be understood, this will return the underlying
+/// [`crate::units::UnknownUnitError`] wrapped in a [`GggNcError::Context`].
+/// The other errors are the same as [`get_var_data`].
+pub fn get_var_data_quantity<T, D, Q>(
+    ds: &netcdf::File,
+    varname: &str,
+) -> error_stack::Result<Array<Q, D>, GggNcError>
+where
+    T: Copy + NcTypeDescriptor,
+    D: ndarray::Dimension,
+    Q: FromStr<Err = uom::str::ParseQuantityError> + Copy + Mul<T, Output = Q>,
+{
+    // We need the variable anyway, so we duplicate the code of get_var_data rather
+    // than calling it
+    let var = ds.variable(varname).ok_or_else(|| GggNcError::MissingVar {
+        variable: varname.to_owned(),
+        group: None,
+    })?;
+
+    let arr = var
+        .get::<T, _>(Extents::All)
+        .map_err(|e| GggNcError::NcErr(e))?
+        .into_dimensionality::<D>()
+        .map_err(|e| GggNcError::WrongDimensionality {
+            variable: varname.to_string(),
+            group: None,
+            shape_err: e,
+        })?;
+
+    let orig_units = get_string_attr(&var, "units")?;
+    let arr = crate::units::convert_array(arr, &orig_units).change_context_lazy(|| {
+        GggNcError::context(format!(
+            "Error converting variable '{varname}' to base units"
+        ))
+    })?;
+
+    Ok(arr)
+}
+
 /// Retrieve the value of a string attribute on a netCDF variable, group, or file.
 ///
 /// # See also
@@ -627,6 +865,40 @@ pub fn get_string_attr<O: GetNcAttr>(
             object.description()
         ))
     })
+}
+
+/// Retrieve a string attribute on a variable in an open dataset.
+///
+/// This is useful if you are not holding a reference to a
+/// [`netcdf::Variable`]. If you are, then [`get_string_attr`]
+/// will be more efficient.
+///
+/// Note that non-root variables are not yet implemented,
+/// calling with `grpname = Some(...)` will panic.
+///
+/// # Errors
+/// Returns an error if the variable is missing or otherwise cannot
+/// be accessed or likewise for the attribute.
+///
+/// # See also
+/// - [`get_string_attr`] if you already have the variable or other
+///   object with an attribute (e.g., the dataset itself)
+/// - [`get_string_attr_from_file`] if you want to get an attribute
+///   from a file path.
+pub fn get_string_attr_on_var(
+    ds: &netcdf::File,
+    varname: &str,
+    grpname: Option<&str>,
+    attr: &str,
+) -> error_stack::Result<String, GggNcError> {
+    if grpname.is_some() {
+        unimplemented!("getting string attribute on non-root variable");
+    }
+    let var = ds.variable(varname).ok_or_else(|| GggNcError::MissingVar {
+        variable: varname.to_string(),
+        group: None,
+    })?;
+    get_string_attr(&var, attr)
 }
 
 /// Retrieve a string attribute's value from a variable in an open file.
@@ -704,4 +976,31 @@ impl GetNcAttr for &netcdf::File {
 pub fn convert_nc_timestamp(ts: f64) -> chrono::DateTime<chrono::Utc> {
     let nanos = (ts * 1e9).trunc() as i64;
     chrono::DateTime::from_timestamp_nanos(nanos)
+}
+
+/// Parse the release lag string into a duration.
+///
+/// # Errors
+/// Returns an error is the release lag is not formatted as "NUMBER UNITS"
+/// (e.g., "180 days") or if the units cannot be interpreted.
+pub fn parse_release_lag(release_lag: &str) -> Result<chrono::Duration, GggNcError> {
+    if let Some((n_str, units)) = release_lag.split_once(' ') {
+        // Parsing units with i64 quantities didn't work - it kept saying "days"
+        // was an unknown unit, but it works for f64. So keeping f64 for now.
+        let n = n_str.trim().parse::<f64>().map_err(|_| {
+            GggNcError::Custom(format!(
+                "Could not parse the numeric part of '{release_lag}' as an integer"
+            ))
+        })?;
+        let units = units.trim();
+        let q = crate::units::convert_scalar::<uom::si::f64::Time, _>(n, units).map_err(|e| {
+            GggNcError::Custom(format!("Could not parse the units of '{release_lag}': {e}"))
+        })?;
+        let seconds = q.get::<uom::si::time::second>();
+        Ok(chrono::Duration::seconds(seconds as i64))
+    } else {
+        Err(GggNcError::Custom(format!(
+            "Incorrect format for release lag, expected 'NUMBER UNITS', got '{release_lag}'"
+        )))
+    }
 }

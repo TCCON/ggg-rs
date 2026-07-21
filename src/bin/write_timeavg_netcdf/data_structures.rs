@@ -1,3 +1,5 @@
+use std::fmt::Debug;
+
 use chrono::{DateTime, NaiveDateTime, Utc};
 use ndarray::{Array1, Array2};
 use uom::si::f32::{Angle, Pressure, Ratio};
@@ -97,10 +99,14 @@ pub(crate) struct Level2Data {
     /// The surface pressure of each observation.
     pub(crate) p_surf: Array1<Pressure>,
 
-    /// The pressure levels of the priors and AK. These must
-    /// be expanded to one row per observation (not on prior times),
-    /// and must be unified between the priors and AKs.
-    pub(crate) p_levels: Array2<Pressure>,
+    /// The pressure levels of the priors. These must
+    /// be expanded to one row per observation (not on prior times).
+    pub(crate) p_levels_prior: Array2<Pressure>,
+
+    /// The pressure levels of the AKs. In the future, this will
+    /// be removed once the private files unified the AK and prior
+    /// pressure levels.
+    pub(crate) p_levels_ak: Array1<Pressure>,
 
     /// The water profile in wet mole fraction. These must be
     /// expanded to one row per observation (not on prior time).
@@ -127,6 +133,37 @@ pub(crate) struct Level2Data {
 
     /// The WMO or equivalent scale to which the `Xgas` variables are tied.
     pub(crate) xgas_wmo_scale: String,
+}
+
+impl Debug for Level2Data {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let ii = ndarray::s![0..5];
+        let ii2 = ndarray::s![0..5, 0..2];
+        let jj = ndarray::s![0..2];
+        f.debug_struct("Level2Data")
+            .field("utc_time", &self.utc_time.slice(ii))
+            .field("solar_time", &self.solar_time.slice(ii))
+            .field("station_id", &self.station_id)
+            .field("is_public", &self.is_public.slice(ii))
+            .field("latitude", &self.latitude.slice(ii))
+            .field("longitude", &self.longitude.slice(ii))
+            .field("sza", &self.sza.slice(ii))
+            .field("p_surf", &self.p_surf.slice(ii))
+            .field("p_levels_prior", &self.p_levels_prior.slice(ii2))
+            .field("p_levels_ak", &self.p_levels_ak.slice(jj))
+            .field("prior_h2o_wet", &self.prior_h2o_wet.slice(ii2))
+            .field("prior_dry", &self.prior_dry.slice(ii2))
+            .field("prior_wet", &self.prior_wet.slice(ii2))
+            .field("avg_kernel", &self.avg_kernel.slice(ii2))
+            .field("xgas", &self.xgas.slice(ii))
+            .field("xgas_error", &self.xgas_error.slice(ii))
+            .field("xgas_wmo_scale", &self.xgas_wmo_scale)
+            .field(
+                "-- note --",
+                &"fields truncated to at most 5 times, 2 levels",
+            )
+            .finish()
+    }
 }
 
 pub(crate) struct StationMetaAttrs {

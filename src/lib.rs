@@ -26,6 +26,8 @@ pub mod readers;
 pub mod tccon;
 /// Code used in multiple tests
 pub mod test_utils;
+/// Utils for calculating time-related quantities
+pub mod time_utils;
 /// Helper functions for unit conversions
 pub mod units;
 /// General common utilities

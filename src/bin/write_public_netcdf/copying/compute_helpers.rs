@@ -3,18 +3,14 @@
 use std::i8;
 
 use error_stack::ResultExt;
-use ggg_rs::nc_utils;
+use ggg_rs::nc_utils::{self, chars_to_string, NcChar};
 use itertools::Itertools;
 use ndarray::{Array1, Ix1};
 use netcdf::Extents;
 
-use crate::{
-    constants::PRIOR_INDEX_VARNAME,
-    copying::{copy_utils::chars_to_string, find_subset_dim},
-    TIME_DIM_NAME,
-};
+use crate::{constants::PRIOR_INDEX_VARNAME, copying::find_subset_dim, TIME_DIM_NAME};
 
-use super::{copy_utils::NcChar, CopyError, Subsetter};
+use super::{CopyError, Subsetter};
 
 const FPIT_MET_FPIT_CHM: i8 = 0;
 const IT_MET_IT_CHM: i8 = 1;
