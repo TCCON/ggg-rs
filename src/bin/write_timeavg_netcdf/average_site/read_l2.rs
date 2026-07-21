@@ -82,6 +82,9 @@ fn read_private_file(
         var_def.xgas_var,
     )?;
 
+    // Replace the fill value flag array with the actual values
+    data.flag = get_var_data(ds, "flag")?;
+
     // Expand the prior variables
     log::debug!("Expanding priors");
     let prior_index = get_var_data::<u32, Ix1>(ds, "prior_index")?.mapv(|i| i as usize);
@@ -160,6 +163,8 @@ fn read_public_file(
     )?;
     data.xgas_wmo_scale =
         get_string_attr_on_var(ds, var_def.xgas_var, None, "wmo_or_analogous_scale")?;
+    // Replace the flag fill values with 0s, since public files only contain flag == 0 values (as of GGG2020.1).
+    data.flag.mapv_inplace(|_| 0);
     Ok(data)
 }
 
@@ -211,6 +216,10 @@ fn read_either_file(
             .map(|(t, x)| time_utils::solar_apparent_time(*x, *t)),
     );
 
+    // flag is only found in private files; set it to fill values here, and require the file-specific functions
+    // to replace it
+    let flag = Array1::<i32>::from_elem(utc_time.dim(), i32::MIN);
+
     Ok(Level2Data {
         utc_time,
         solar_time,
@@ -218,6 +227,7 @@ fn read_either_file(
         is_public,
         latitude,
         longitude,
+        flag,
         sza,
         p_surf,
         p_levels_prior,

@@ -1,7 +1,7 @@
 use std::fmt::Debug;
 
 use chrono::{DateTime, NaiveDateTime, Utc};
-use ndarray::{Array1, Array2};
+use ndarray::{Array1, Array2, Axis};
 use uom::si::f32::{Angle, Pressure, Ratio};
 
 /// A structure representing time-averaged data from one or more TCCON sites.
@@ -87,6 +87,9 @@ pub(crate) struct Level2Data {
     /// current time
     pub(crate) is_public: Array1<i8>,
 
+    /// L2 quality flag for each spectrum
+    pub(crate) flag: Array1<i32>,
+
     /// The latitude of each observation
     pub(crate) latitude: Array1<Angle>,
 
@@ -163,6 +166,32 @@ impl Debug for Level2Data {
                 &"fields truncated to at most 5 times, 2 levels",
             )
             .finish()
+    }
+}
+
+impl Level2Data {
+    pub(crate) fn subset(self, indices: &[usize]) -> Self {
+        // TODO: maybe this can be a macro that catches any new fields?
+        Self {
+            utc_time: self.utc_time.select(Axis(0), indices),
+            solar_time: self.solar_time.select(Axis(0), indices),
+            station_id: self.station_id,
+            is_public: self.is_public.select(Axis(0), indices),
+            flag: self.flag.select(Axis(0), indices),
+            latitude: self.latitude.select(Axis(0), indices),
+            longitude: self.longitude.select(Axis(0), indices),
+            sza: self.sza.select(Axis(0), indices),
+            p_surf: self.p_surf.select(Axis(0), indices),
+            p_levels_prior: self.p_levels_prior.select(Axis(0), indices),
+            p_levels_ak: self.p_levels_ak.select(Axis(0), indices),
+            prior_h2o_wet: self.prior_h2o_wet.select(Axis(0), indices),
+            prior_dry: self.prior_dry.select(Axis(0), indices),
+            prior_wet: self.prior_wet.select(Axis(0), indices),
+            avg_kernel: self.avg_kernel.select(Axis(0), indices),
+            xgas: self.xgas.select(Axis(0), indices),
+            xgas_error: self.xgas_error.select(Axis(0), indices),
+            xgas_wmo_scale: self.xgas_wmo_scale,
+        }
     }
 }
 
