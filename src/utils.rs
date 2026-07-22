@@ -15,7 +15,7 @@ use error_stack::ResultExt;
 use fortformat::format_specs::FortFormat;
 use itertools::Itertools;
 use log::debug;
-use ndarray::{Array1, ArrayView1};
+use ndarray::{Array1, ArrayView, ArrayView1};
 use serde::Serialize;
 use serde::{de::Error as DeserError, Deserialize, Deserializer};
 
@@ -1517,6 +1517,13 @@ pub fn iter_dates(start_date: chrono::NaiveDate, end_date: chrono::NaiveDate) ->
         end: end_date,
     }
 }
+
+// pub fn array_median_skipnan<F: num_traits::Float + From<f64>, D: ndarray::Dimension>(arr: Array<F, D>) {
+//     let q = noisy_float::NoisyFloat::<F, noisy_float::checkers::NumChecker>::new(0.5.into());
+//     let n_arr =
+//         arr.mapv(|v| noisy_float::NoisyFloat::<F, noisy_float::checkers::NumChecker>::new(v));
+
+// }
 
 #[derive(Debug, thiserror::Error)]
 pub enum EncodingError {

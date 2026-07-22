@@ -1,3 +1,5 @@
+/// Utilities for array math
+pub mod array_ops;
 /// Utilities for interpreting spectra named following the Caltech TCCON convention
 pub mod cit_spectrum_name;
 /// Common code for `collate-*-results` programs.

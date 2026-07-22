@@ -43,6 +43,8 @@ indicatif = "0.17.11"
 interp = "2.0.2"
 glob = "0.3.2"
 uom = "0.38.0" # NB: tried adding i64 feature, but parsing units of "d" or "days" with i64 didn't work, so sticking to floats only
+ndarray-stats = "0.7.0"
+noisy_float = "0.2.1"
 
 [dev-dependencies]
 rstest = "0.18.2"

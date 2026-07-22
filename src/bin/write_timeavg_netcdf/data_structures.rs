@@ -1,22 +1,21 @@
 use std::fmt::Debug;
 
-use chrono::{DateTime, NaiveDateTime, Utc};
+use chrono::{DateTime, NaiveDateTime, TimeZone, Utc};
 use ndarray::{Array1, Array2, Axis};
 use uom::si::f32::{Angle, Pressure, Ratio};
 
 /// A structure representing time-averaged data from one or more TCCON sites.
 pub(crate) struct TimeAvgData {
+    /// The midpoint of each solar time bin bin.
+    pub(crate) solar_mid_time: Array1<NaiveDateTime>,
+
     /// The mean UTC time of the bin, weighted by the uncertainty in the column
     /// averages.
     pub(crate) utc_mean_time: Array1<DateTime<Utc>>,
 
-    /// The mean solar time of each bin. TODO: confirm that this should be
-    /// a naive date time, i.e., it is relative to solar noon for each site
-    pub(crate) solar_mean_time: Array1<NaiveDateTime>,
-
     /// A unique identifier for each bin in the format YYYYmmddHHMMSSII, where
-    /// II is the station ID and the rest is the time string of the
-    pub(crate) obs_id: Array1<String>,
+    /// II is the station ID and the rest is the time string of the solar mean time.
+    pub(crate) obs_id: Array1<i64>,
 
     /// The numeric ID of the TCCON station from which each bin was derived.
     pub(crate) station_id: Array1<i8>,
@@ -39,9 +38,14 @@ pub(crate) struct TimeAvgData {
     /// averages.
     pub(crate) p_surf: Array1<Pressure>,
 
-    /// The TCCON pressure levels for the AKs and priors, weighted by the
-    /// uncertainty in the column averages.
-    pub(crate) p_levels: Array2<Pressure>,
+    /// The pressure levels of the priors, with one row per bin.
+    pub(crate) p_levels_prior: Array2<Pressure>,
+
+    /// The pressure levels of the AKs. In the future, this will
+    /// be removed once the private files unified the AK and prior
+    /// pressure levels. Since these do not change, there is a
+    /// single vector for all bins.
+    pub(crate) p_levels_ak: Array1<Pressure>,
 
     /// The TCCON H2O priors in wet mole fraction, weighted by the uncertainty
     /// in the column averages.
@@ -67,6 +71,54 @@ pub(crate) struct TimeAvgData {
 
     /// The WMO or analagous calibration scale to which the column mixing values are tied.
     pub(crate) wmo_or_analagous_scale: String,
+}
+
+impl TimeAvgData {
+    pub(crate) fn new_with_bins(
+        solar_mid_time: Array1<NaiveDateTime>,
+        nlev: usize,
+        wmo_scale: String,
+    ) -> Self {
+        let nbin = solar_mid_time.len();
+        Self {
+            solar_mid_time,
+            utc_mean_time: Array1::from_elem(nbin, chrono::DateTime::from_timestamp_nanos(0)),
+            obs_id: Array1::from_elem(nbin, i64::MIN),
+            station_id: Array1::from_elem(nbin, i8::MIN),
+            public: Array1::from_elem(nbin, i8::MIN),
+            latitude: Array1::from_elem(nbin, Angle::new::<uom::si::angle::degree>(f32::MIN)),
+            longitude: Array1::from_elem(nbin, Angle::new::<uom::si::angle::degree>(f32::MIN)),
+            sza: Array1::from_elem(nbin, Angle::new::<uom::si::angle::degree>(f32::MIN)),
+            p_surf: Array1::from_elem(nbin, Pressure::new::<uom::si::pressure::pascal>(f32::MIN)),
+            p_levels_prior: Array2::from_elem(
+                [nbin, nlev],
+                Pressure::new::<uom::si::pressure::pascal>(f32::MIN),
+            ),
+            p_levels_ak: Array1::from_elem(
+                nlev,
+                Pressure::new::<uom::si::pressure::pascal>(f32::MIN),
+            ),
+            prior_h2o: Array2::from_elem(
+                [nbin, nlev],
+                Ratio::new::<uom::si::ratio::ratio>(f32::MIN),
+            ),
+            prior_mixing: Array2::from_elem(
+                [nbin, nlev],
+                Ratio::new::<uom::si::ratio::ratio>(f32::MIN),
+            ),
+            prior_mixing_tccon: Array2::from_elem(
+                [nbin, nlev],
+                Ratio::new::<uom::si::ratio::ratio>(f32::MIN),
+            ),
+            avg_kernel: Array2::from_elem([nbin, nlev], f32::MIN),
+            column_mixing: Array1::from_elem(nbin, Ratio::new::<uom::si::ratio::ratio>(f32::MIN)),
+            sigma_column_mixing: Array1::from_elem(
+                nbin,
+                Ratio::new::<uom::si::ratio::ratio>(f32::MIN),
+            ),
+            wmo_or_analagous_scale: wmo_scale,
+        }
+    }
 }
 
 /// A structure representing level 2 data from a single TCCON site.
