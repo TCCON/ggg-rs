@@ -1,6 +1,4 @@
-use std::todo;
-
-use ndarray::Array1;
+use itertools::izip;
 use uom::si::{angle::degree, f32::Angle};
 
 use crate::data_structures::Level2Data;
@@ -35,8 +33,20 @@ impl Default for BaseDataFilterer {
 impl L2DataFilterer for BaseDataFilterer {
     fn get_good_spectra(&self, data: &Level2Data) -> Vec<usize> {
         let mut indices = vec![];
-        for (i, (&flag, &sza)) in data.flag.iter().zip(data.sza.iter()).enumerate() {
-            if flag == 0 && sza <= self.sza_upper_limit {
+        for (i, &flag, &sza, &xgas, &xgas_error) in izip!(
+            0..data.utc_time.len(),
+            data.flag.iter(),
+            data.sza.iter(),
+            data.xgas.iter(),
+            data.xgas_error.iter()
+        ) {
+            // Excluding NaN and infinities in xgas and xgas_error should help avoid
+            // issues with averaging down the road.
+            if flag == 0
+                && sza <= self.sza_upper_limit
+                && xgas.is_finite()
+                && xgas_error.is_finite()
+            {
                 indices.push(i);
             }
         }

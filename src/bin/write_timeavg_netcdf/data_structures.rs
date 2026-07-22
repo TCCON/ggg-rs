@@ -1,6 +1,6 @@
 use std::fmt::Debug;
 
-use chrono::{DateTime, NaiveDateTime, TimeZone, Utc};
+use chrono::{DateTime, NaiveDateTime, Utc};
 use ndarray::{Array1, Array2, Axis};
 use uom::si::f32::{Angle, Pressure, Ratio};
 
