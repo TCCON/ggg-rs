@@ -15,7 +15,7 @@ use error_stack::ResultExt;
 use fortformat::format_specs::FortFormat;
 use itertools::Itertools;
 use log::debug;
-use ndarray::{Array1, ArrayView, ArrayView1};
+use ndarray::{Array1, ArrayView1};
 use serde::Serialize;
 use serde::{de::Error as DeserError, Deserialize, Deserializer};
 
@@ -77,48 +77,45 @@ pub enum GggError {
 impl Display for GggError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::GggPathError(inner) => {
-                write!(f, "Error getting GGGPATH: {inner}")
-            }
-            Self::UnknownApodization(a) => {
-                write!(f, "Unknown apodization type: '{a}'")
-            }
+            Self::GggPathError(inner) => write!(f, "Error getting GGGPATH: {inner}"),
+            Self::UnknownApodization(a) => write!(f, "Unknown apodization type: '{a}'"),
+
             Self::CouldNotOpen {
                 descr,
                 path,
                 reason,
-            } => {
-                write!(
-                    f,
-                    "Could not open {descr} at {} because: {reason}",
-                    path.display()
-                )
-            }
-            Self::CouldNotRead { path, reason } => {
-                write!(
-                    f,
-                    "Could not read from {} because: {reason}",
-                    path.display()
-                )
-            }
+            } => write!(
+                f,
+                "Could not open {descr} at {} because: {reason}",
+                path.display()
+            ),
+
+            Self::CouldNotRead { path, reason } => write!(
+                f,
+                "Could not read from {} because: {reason}",
+                path.display()
+            ),
+
             Self::CouldNotWrite { path, reason } => {
-                write!(f, "Could not write to {} because: {reason}", path.display())
+                // WORKAROUND: vscode's rust-analyzer is improperly handling macro expansion,
+                // causing a type mismatch if the write! returns directly. Try removing the let r
+                // and return directly in the future
+                let r = write!(f, "Could not write to {} because: {reason}", path.display());
+                r
             }
-            Self::HeaderError(err) => {
-                write!(f, "{err}")
-            }
+
+            Self::HeaderError(err) => write!(f, "{err}"),
             Self::DataError { path, cause } => {
-                write!(f, "Error in data format of {}: {cause}", path.display())
+                // WORKAROUND: same as above
+                let r = write!(f, "Error in data format of {}: {cause}", path.display());
+                r
             }
-            Self::NotImplemented(case) => {
-                write!(f, "Not implemented: {case}")
-            }
-            Self::Context(msg) => {
-                write!(f, "{msg}")
-            }
-            Self::Custom(msg) => {
-                write!(f, "{msg}")
-            }
+
+            Self::NotImplemented(case) => write!(f, "Not implemented: {case}"),
+
+            Self::Context(msg) => write!(f, "{msg}"),
+
+            Self::Custom(msg) => write!(f, "{msg}"),
         }
     }
 }
@@ -168,15 +165,11 @@ pub enum GggPathErrorKind {
 impl Display for GggPathErrorKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::NotSet => {
-                write!(f, "GGGPATH/gggpath environmental variables not set")
-            }
-            Self::DoesNotExist(p) => {
-                write!(f, "Current GGGPATH ({}) does not exist", p.display())
-            }
-            Self::IsNotDir(p) => {
-                write!(f, "Current GGGPATH ({}) is not a directory", p.display())
-            }
+            Self::NotSet => write!(f, "GGGPATH/gggpath environmental variables not set"),
+
+            Self::DoesNotExist(p) => write!(f, "Current GGGPATH ({}) does not exist", p.display()),
+
+            Self::IsNotDir(p) => write!(f, "Current GGGPATH ({}) is not a directory", p.display()),
         }
     }
 }
@@ -244,26 +237,37 @@ impl Display for GggNcError {
                 variable,
                 group,
             } => {
+                // WORKAROUND: vscode's rust-analyzer is improperly handling macro expansion,
+                // causing a type mismatch if the write! returns directly. Try removing the let r
+                // and return directly in the future
                 if let Some(grp) = group {
-                    write!(
+                    let r = write!(
                         f,
                         "Attribute '{attribute}' not found on variable '{grp}/{variable}'"
-                    )
+                    );
+                    r
                 } else {
-                    write!(
+                    let r = write!(
                         f,
                         "Attribute '{attribute}' not found on variable '{variable}'"
-                    )
+                    );
+                    r
                 }
             }
             GggNcError::MissingGroupAttr { attribute, group } => {
-                write!(f, "Attribute '{attribute}' not found on group '{group}'")
+                // WORKAROUND: As above
+                let r = write!(f, "Attribute '{attribute}' not found on group '{group}'");
+                r
             }
+
             GggNcError::MissingVar { variable, group } => {
+                // WORKAROUND: As above
                 if let Some(grp) = group {
-                    write!(f, "Variable '{variable}' not found in group '{grp}'")
+                    let r = write!(f, "Variable '{variable}' not found in group '{grp}'");
+                    r
                 } else {
-                    write!(f, "Variable '{variable}' not found")
+                    let r = write!(f, "Variable '{variable}' not found");
+                    r
                 }
             }
             GggNcError::WrongDimensionality {
@@ -271,24 +275,23 @@ impl Display for GggNcError {
                 group,
                 shape_err,
             } => {
+                // WORKAROUND: As above
                 if let Some(grp) = group {
-                    write!(
+                    let r = write!(
                         f,
                         "Variable '{variable}' in group '{grp}' has wrong number of dimensions, underlying error was: {shape_err}"
-                    )
+                    );
+                    r
                 } else {
-                    write!(f, "Variable '{variable}' has wrong number of dimensions, underlying error was: {shape_err}")
+                    let r = write!(f, "Variable '{variable}' has wrong number of dimensions, underlying error was: {shape_err}");
+                    r
                 }
             }
-            GggNcError::NcErr(error) => {
-                write!(f, "{error}")
-            }
-            GggNcError::Custom(msg) => {
-                write!(f, "{msg}")
-            }
-            GggNcError::Context(msg) => {
-                write!(f, "{msg}")
-            }
+            GggNcError::NcErr(error) => write!(f, "{error}"),
+
+            GggNcError::Custom(msg) => write!(f, "{msg}"),
+
+            GggNcError::Context(msg) => write!(f, "{msg}"),
         }
     }
 }
@@ -434,7 +437,11 @@ impl Display for ApodizationFxn {
             ApodizationFxn::StrongNortonBeer => "N3",
             ApodizationFxn::Triangular => "TR",
         };
-        write!(f, "{s}")
+        // WORKAROUND: vscode's rust-analyzer is improperly handling macro expansion,
+        // causing a type mismatch if the write! returns directly. Try removing the let r
+        // and return directly in the future
+        let r = write!(f, "{s}");
+        r
     }
 }
 
