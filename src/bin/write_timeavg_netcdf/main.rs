@@ -5,6 +5,8 @@ use clap_verbosity_flag::{InfoLevel, Verbosity};
 use ggg_rs::logging::init_logging;
 
 mod average_site;
+#[cfg(test)]
+mod common_test;
 mod data_structures;
 mod station_ids;
 

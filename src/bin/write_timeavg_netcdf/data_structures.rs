@@ -235,7 +235,9 @@ impl Level2Data {
             sza: self.sza.select(Axis(0), indices),
             p_surf: self.p_surf.select(Axis(0), indices),
             p_levels_prior: self.p_levels_prior.select(Axis(0), indices),
-            p_levels_ak: self.p_levels_ak.select(Axis(0), indices),
+            // p_levels_ak are a 1D vector of consistent pressures, so they don't
+            // get subset.
+            p_levels_ak: self.p_levels_ak,
             prior_h2o_wet: self.prior_h2o_wet.select(Axis(0), indices),
             prior_dry: self.prior_dry.select(Axis(0), indices),
             prior_wet: self.prior_wet.select(Axis(0), indices),
