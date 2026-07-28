@@ -77,48 +77,45 @@ pub enum GggError {
 impl Display for GggError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::GggPathError(inner) => {
-                write!(f, "Error getting GGGPATH: {inner}")
-            }
-            Self::UnknownApodization(a) => {
-                write!(f, "Unknown apodization type: '{a}'")
-            }
+            Self::GggPathError(inner) => write!(f, "Error getting GGGPATH: {inner}"),
+            Self::UnknownApodization(a) => write!(f, "Unknown apodization type: '{a}'"),
+
             Self::CouldNotOpen {
                 descr,
                 path,
                 reason,
-            } => {
-                write!(
-                    f,
-                    "Could not open {descr} at {} because: {reason}",
-                    path.display()
-                )
-            }
-            Self::CouldNotRead { path, reason } => {
-                write!(
-                    f,
-                    "Could not read from {} because: {reason}",
-                    path.display()
-                )
-            }
+            } => write!(
+                f,
+                "Could not open {descr} at {} because: {reason}",
+                path.display()
+            ),
+
+            Self::CouldNotRead { path, reason } => write!(
+                f,
+                "Could not read from {} because: {reason}",
+                path.display()
+            ),
+
             Self::CouldNotWrite { path, reason } => {
-                write!(f, "Could not write to {} because: {reason}", path.display())
+                // WORKAROUND: vscode's rust-analyzer is improperly handling macro expansion,
+                // causing a type mismatch if the write! returns directly. Try removing the let r
+                // and return directly in the future
+                let r = write!(f, "Could not write to {} because: {reason}", path.display());
+                r
             }
-            Self::HeaderError(err) => {
-                write!(f, "{err}")
-            }
+
+            Self::HeaderError(err) => write!(f, "{err}"),
             Self::DataError { path, cause } => {
-                write!(f, "Error in data format of {}: {cause}", path.display())
+                // WORKAROUND: same as above
+                let r = write!(f, "Error in data format of {}: {cause}", path.display());
+                r
             }
-            Self::NotImplemented(case) => {
-                write!(f, "Not implemented: {case}")
-            }
-            Self::Context(msg) => {
-                write!(f, "{msg}")
-            }
-            Self::Custom(msg) => {
-                write!(f, "{msg}")
-            }
+
+            Self::NotImplemented(case) => write!(f, "Not implemented: {case}"),
+
+            Self::Context(msg) => write!(f, "{msg}"),
+
+            Self::Custom(msg) => write!(f, "{msg}"),
         }
     }
 }
@@ -168,15 +165,11 @@ pub enum GggPathErrorKind {
 impl Display for GggPathErrorKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::NotSet => {
-                write!(f, "GGGPATH/gggpath environmental variables not set")
-            }
-            Self::DoesNotExist(p) => {
-                write!(f, "Current GGGPATH ({}) does not exist", p.display())
-            }
-            Self::IsNotDir(p) => {
-                write!(f, "Current GGGPATH ({}) is not a directory", p.display())
-            }
+            Self::NotSet => write!(f, "GGGPATH/gggpath environmental variables not set"),
+
+            Self::DoesNotExist(p) => write!(f, "Current GGGPATH ({}) does not exist", p.display()),
+
+            Self::IsNotDir(p) => write!(f, "Current GGGPATH ({}) is not a directory", p.display()),
         }
     }
 }
@@ -187,20 +180,44 @@ impl Display for GggPathErrorKind {
 #[cfg(feature = "netcdf")]
 #[derive(Debug)]
 pub enum GggNcError {
+    /// Indicates that an attribute expected on a variable is missing.
+    ///
+    /// If `group` is `None`, then the variable was in the root group.
     MissingVarAttr {
         attribute: String,
         variable: String,
         group: Option<String>,
     },
-    MissingGroupAttr {
-        attribute: String,
-        group: String,
-    },
+
+    /// Indicates that an attribute expected on a group is missing.
+    MissingGroupAttr { attribute: String, group: String },
+
+    /// Indicates that a variable was missing.
+    ///
+    /// If `group` is `None`, the variable was expected to be in the
+    /// root group.
     MissingVar {
         variable: String,
         group: Option<String>,
     },
+
+    /// Indicates that a variable had a different number of dimensions than expected.
+    ///
+    /// If `group` is `None`, the variable was expected to be in the
+    /// root group.
+    WrongDimensionality {
+        variable: String,
+        group: Option<String>,
+        shape_err: ndarray::ShapeError,
+    },
+
+    /// Wraps a netCDF error.
     NcErr(netcdf::Error),
+
+    /// A custom error for other problems that are uncommon.
+    Custom(String),
+
+    /// Provides additional context for lower-level error via [`error_stack`].
     Context(String),
 }
 
@@ -220,34 +237,61 @@ impl Display for GggNcError {
                 variable,
                 group,
             } => {
+                // WORKAROUND: vscode's rust-analyzer is improperly handling macro expansion,
+                // causing a type mismatch if the write! returns directly. Try removing the let r
+                // and return directly in the future
                 if let Some(grp) = group {
-                    write!(
+                    let r = write!(
                         f,
                         "Attribute '{attribute}' not found on variable '{grp}/{variable}'"
-                    )
+                    );
+                    r
                 } else {
-                    write!(
+                    let r = write!(
                         f,
                         "Attribute '{attribute}' not found on variable '{variable}'"
-                    )
+                    );
+                    r
                 }
             }
             GggNcError::MissingGroupAttr { attribute, group } => {
-                write!(f, "Attribute '{attribute}' not found on group '{group}'")
+                // WORKAROUND: As above
+                let r = write!(f, "Attribute '{attribute}' not found on group '{group}'");
+                r
             }
+
             GggNcError::MissingVar { variable, group } => {
+                // WORKAROUND: As above
                 if let Some(grp) = group {
-                    write!(f, "Variable '{variable}' not found in group '{grp}'")
+                    let r = write!(f, "Variable '{variable}' not found in group '{grp}'");
+                    r
                 } else {
-                    write!(f, "Variable '{variable}' not found")
+                    let r = write!(f, "Variable '{variable}' not found");
+                    r
                 }
             }
-            GggNcError::NcErr(error) => {
-                write!(f, "{error}")
+            GggNcError::WrongDimensionality {
+                variable,
+                group,
+                shape_err,
+            } => {
+                // WORKAROUND: As above
+                if let Some(grp) = group {
+                    let r = write!(
+                        f,
+                        "Variable '{variable}' in group '{grp}' has wrong number of dimensions, underlying error was: {shape_err}"
+                    );
+                    r
+                } else {
+                    let r = write!(f, "Variable '{variable}' has wrong number of dimensions, underlying error was: {shape_err}");
+                    r
+                }
             }
-            GggNcError::Context(msg) => {
-                write!(f, "{msg}")
-            }
+            GggNcError::NcErr(error) => write!(f, "{error}"),
+
+            GggNcError::Custom(msg) => write!(f, "{msg}"),
+
+            GggNcError::Context(msg) => write!(f, "{msg}"),
         }
     }
 }
@@ -289,10 +333,37 @@ impl GggNcError {
         }
     }
 
+    /// Construct a variant with a general error message for uncommon error cases.
+    pub fn custom<C: ToString>(msg: C) -> Self {
+        Self::Custom(msg.to_string())
+    }
+
     /// Construct a variant useful for adding context to a lower-level error.
     pub fn context<C: ToString>(msg: C) -> Self {
         Self::Context(msg.to_string())
     }
+}
+
+/// Derive the TCCON site ID from a filename.
+///
+/// Currently, this assumes that the site ID will be the first two characters of the
+/// file's base name. However, all code should use this function rather than directly
+/// extracting the site ID, since this could change in the future.
+pub fn site_id_from_filename(p: &Path) -> Result<String, GggError> {
+    let name = p
+        .file_name()
+        .ok_or_else(|| {
+            GggError::Custom(format!("Could not get base name of file {}", p.display()))
+        })?
+        .to_str()
+        .ok_or_else(|| {
+            GggError::Custom(format!(
+                "Could not convert base name of file {} to UTF-8",
+                p.display()
+            ))
+        })?;
+    let site_id = name.chars().take(2).join("");
+    Ok(site_id)
 }
 
 /// The various apodization functions allowed by GGG
@@ -366,7 +437,11 @@ impl Display for ApodizationFxn {
             ApodizationFxn::StrongNortonBeer => "N3",
             ApodizationFxn::Triangular => "TR",
         };
-        write!(f, "{s}")
+        // WORKAROUND: vscode's rust-analyzer is improperly handling macro expansion,
+        // causing a type mismatch if the write! returns directly. Try removing the let r
+        // and return directly in the future
+        let r = write!(f, "{s}");
+        r
     }
 }
 
@@ -1449,6 +1524,13 @@ pub fn iter_dates(start_date: chrono::NaiveDate, end_date: chrono::NaiveDate) ->
         end: end_date,
     }
 }
+
+// pub fn array_median_skipnan<F: num_traits::Float + From<f64>, D: ndarray::Dimension>(arr: Array<F, D>) {
+//     let q = noisy_float::NoisyFloat::<F, noisy_float::checkers::NumChecker>::new(0.5.into());
+//     let n_arr =
+//         arr.mapv(|v| noisy_float::NoisyFloat::<F, noisy_float::checkers::NumChecker>::new(v));
+
+// }
 
 #[derive(Debug, thiserror::Error)]
 pub enum EncodingError {

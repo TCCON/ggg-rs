@@ -1,3 +1,5 @@
+/// Utilities for array math
+pub mod array_ops;
 /// Common code for averaging windows
 pub mod averaging;
 /// Utilities for interpreting spectra named following the Caltech TCCON convention
@@ -28,6 +30,8 @@ pub mod readers;
 pub mod tccon;
 /// Code used in multiple tests
 pub mod test_utils;
+/// Utils for calculating time-related quantities
+pub mod time_utils;
 /// Helper functions for unit conversions
 pub mod units;
 /// General common utilities

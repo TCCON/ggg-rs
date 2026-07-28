@@ -1,11 +1,18 @@
+#[cfg(feature = "netcdf")]
+use std::{eprintln, fmt::Debug, format, ops::Mul, str::FromStr};
 use std::{
     io::{BufRead, BufReader, Lines},
     path::{Path, PathBuf},
     process::{Command, Stdio},
 };
 
+#[cfg(feature = "netcdf")]
+use approx::AbsDiffEq;
+#[cfg(feature = "netcdf")]
+use netcdf::NcTypeDescriptor;
+
 #[allow(dead_code)]
-pub(crate) fn test_data_dir() -> PathBuf {
+pub fn test_data_dir() -> PathBuf {
     let crate_root = env!("CARGO_MANIFEST_DIR");
     PathBuf::from(crate_root).join("test-data")
 }
@@ -32,6 +39,127 @@ pub fn compare_output_text_files(expected_dir: &Path, output_dir: &Path, out_fil
         .expect("Waiting for diff process should not fail")
         .success();
     assert!(is_same, "{out_file_name} did not match expected.");
+}
+
+/// Compare two arrays with [`approx::relative_eq!`].
+///
+/// # Parameters
+/// - The first parameter is the array with the expected values
+/// - The second parameter is the array with the actual values
+/// - The third parameter is the max relative different. [`approx`]
+///   will compare the absolute differences to the larger value times
+///   this multiplier.
+///
+/// # Side effects
+/// If the two arrays do not agree to within the default EPSILON for their
+/// type and the given relative error, this will panic, display the two
+/// arrays' debug representations, and save them as Numpy binaries to
+/// the current directory.
+macro_rules! assert_arrays_rel_eq {
+    ($expected:expr, $actual:expr, $max_relative:expr) => {
+        if !approx::relative_eq!($actual, $expected, max_relative = $max_relative) {
+
+            // Dump to disk (ignoring Result so it doesn't mask the panic)
+            let _ = ndarray_npy::write_npy("debug_actual.npy", $actual);
+            let _ = ndarray_npy::write_npy("debug_expected.npy", $expected);
+
+            panic!(
+                "Array assertion failed!\nleft = {:?}\nright = {:?} \nActual and Expected arrays have been dumped to 'debug_actual.npy' and 'debug_expected.npy', access with numpy.load.",
+                $actual, $expected
+            );
+        }
+    };
+}
+
+/// Compare an array of plain floats to expected values in a [`netcdf::File`].
+///
+/// This will use a relative comparison of 1e-7 times the larger value in each comparison.
+/// That was necessary for comparing the CO2 prior loaded from L2 files in the `write-timeavg-netcdf`
+/// code.
+///
+/// # See also
+/// [`compare_to_netcdf_values_eq`] - for integer arrays
+/// [`compare_to_netcdf_quantities`] - for [`uom::si::Quantity`] arrays
+#[cfg(feature = "netcdf")]
+pub fn compare_to_netcdf_values_approx<T, D>(
+    expected_ds: &netcdf::File,
+    nc_var: &str,
+    data: &ndarray::Array<T, D>,
+) where
+    T: Copy
+        + NcTypeDescriptor
+        + approx::RelativeEq
+        + Debug
+        + ndarray_npy::WritableElement
+        + From<f32>,
+    <T as approx::AbsDiffEq>::Epsilon: Clone + From<f32>,
+    D: ndarray::Dimension,
+{
+    let expected_data = crate::nc_utils::get_var_data::<T, D>(expected_ds, nc_var).expect(
+        &format!("Could not get variable '{nc_var}' from the validation netCDF file"),
+    );
+    eprintln!("Checking against {nc_var}");
+
+    // The relative tolerance of 1e-7 was selected for timeavg read_l2 tests of the CO2 prior
+    let rtol: <T as AbsDiffEq>::Epsilon = 1e-7.into();
+    assert_arrays_rel_eq!(&expected_data, data, rtol)
+}
+
+/// Compare an array of plain numbers to expected values in a [`netcdf::File`].
+///
+/// This will use exact equality, so is only useful for integers. Hence, `T`
+/// is limited to types that implement `Eq`, not just `PartialEq`.
+///
+/// # See also
+/// [`compare_to_netcdf_values_approx`] - for float arrays
+/// [`compare_to_netcdf_quantities`] - for [`uom::si::Quantity`] arrays
+#[cfg(feature = "netcdf")]
+pub fn compare_to_netcdf_values_eq<T, D>(
+    expected_ds: &netcdf::File,
+    nc_var: &str,
+    data: &ndarray::Array<T, D>,
+) where
+    T: Copy + NcTypeDescriptor + Eq + Debug,
+    D: ndarray::Dimension,
+{
+    let expected_data = crate::nc_utils::get_var_data::<T, D>(expected_ds, nc_var).expect(
+        &format!("Could not get variable '{nc_var}' from the validation netCDF file"),
+    );
+    eprintln!("Checking against {nc_var}");
+    assert_eq!(expected_data, data)
+}
+
+/// Compare an array of [`uom::si::Quantity`] values to expected values in a [`netcdf::File`].
+///
+/// This uses the same relative comparison as [`compare_to_netcdf_values_approx`] for the
+/// same reason. Note that this requires the netCDF variable read to have the "units" attribute
+/// and for those units to be parseable by [`crate::nc_utils::get_var_data_quantity`].
+///
+/// The actual comparison is done by converting the quantities back to `f64` values in their
+/// base units. This keeps the trait bounds simpler and ensures that we do an apples-to-apples
+/// comparison, but if the quantities contained `f32` values, you could see some value drift.
+#[cfg(feature = "netcdf")]
+pub fn compare_to_netcdf_quantities<T, D, Q>(
+    expected_ds: &netcdf::File,
+    nc_var: &str,
+    data: &ndarray::ArrayRef<Q, D>,
+) where
+    T: Copy + NcTypeDescriptor,
+    D: ndarray::Dimension,
+    Q: FromStr<Err = uom::str::ParseQuantityError>
+        + Copy
+        + Mul<T, Output = Q>
+        + crate::array_ops::FloatConversion,
+{
+    let expected_data = crate::nc_utils::get_var_data_quantity::<T, D, Q>(expected_ds, nc_var)
+        .expect(&format!(
+            "Could not get variable '{nc_var}' from the validation netCDF file"
+        ));
+    let expected_data = expected_data.mapv(|q| q.into_f64());
+    let data = data.mapv(|q| q.into_f64());
+    eprintln!("Checking against {nc_var}");
+    // The relative tolerance of 1e-7 was selected for timeavg read_l2 tests of the CO2 prior
+    assert_arrays_rel_eq!(&expected_data, &data, 1e-7)
 }
 
 /// Iterate over fenced blocks in a Markdown file.

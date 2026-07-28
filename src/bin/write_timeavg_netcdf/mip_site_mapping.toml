@@ -1,0 +1,184 @@
+[site_mapping.an]
+tccon_name = "anmyeondo01"
+mip_name = "anmyeondo"
+mip_site_id = 1
+
+[site_mapping.ae]
+tccon_name = "ascension01"
+mip_name = "ascension"
+mip_site_id = 2
+
+[site_mapping.bi]
+tccon_name = "bialystok01"
+mip_name = "bialystok"
+mip_site_id = 3
+
+[site_mapping.br]
+tccon_name = "bremen01"
+mip_name = "bremen"
+mip_site_id = 4
+
+[site_mapping.bu]
+tccon_name = "burgos01"
+mip_name = "burgos"
+mip_site_id = 5
+
+[site_mapping.ci]
+tccon_name = "pasadena01"
+mip_name = "caltech"
+mip_site_id = 6
+
+[site_mapping.db]
+tccon_name = "darwin01"
+mip_name = "darwin"
+mip_site_id = 7
+
+[site_mapping.df]
+tccon_name = "edwards01"
+mip_name = "dryden"
+mip_site_id = 8
+
+[site_mapping.et]
+tccon_name = "easttroutlake01"
+mip_name = "easttroutlake"
+mip_site_id = 9
+
+[site_mapping.eu]
+tccon_name = "eureka01"
+mip_name = "eureka"
+mip_site_id = 10
+
+[site_mapping.fc]
+tccon_name = "fourcorners01"
+mip_name = "fourcorners"
+mip_site_id = 11
+
+[site_mapping.gm]
+tccon_name = "garmisch01"
+mip_name = "garmisch"
+mip_site_id = 12
+
+[site_mapping.hf]
+tccon_name = "hefei01"
+mip_name = "hefei"
+mip_site_id = 13
+
+[site_mapping.hw]
+tccon_name = "harwell01"
+mip_name = "harwell"
+mip_site_id = 14
+
+[site_mapping.if]
+tccon_name = "indianapolis01"
+mip_name = "influx"
+mip_site_id = 15
+
+[site_mapping.iz]
+tccon_name = "izana01"
+mip_name = "izana"
+mip_site_id = 16
+
+[site_mapping.jc]
+tccon_name = "jpl01"
+mip_name = "jpl2007"
+mip_site_id = 17
+
+[site_mapping.jf]
+tccon_name = "jpl02"
+mip_name = "jpl2011"
+mip_site_id = 18
+
+[site_mapping.ka]
+tccon_name = "karlsruhe01"
+mip_name = "karlsruhe"
+mip_site_id = 19
+
+[site_mapping.oc]
+tccon_name = "lamont01"
+mip_name = "lamont"
+mip_site_id = 20
+
+[site_mapping.lh]
+tccon_name = "lauder01"
+mip_name = "lauder120"
+mip_site_id = 21
+
+[site_mapping.ll]
+tccon_name = "lauder02"
+mip_name = "lauder125"
+mip_site_id = 22
+
+[site_mapping.lr]
+tccon_name = "lauder03"
+mip_name = "lauder125"
+mip_site_id = 23
+
+[site_mapping.ma]
+tccon_name = "manaus01"
+mip_name = "manaus"
+mip_site_id = 24
+
+[site_mapping.ni]
+tccon_name = "nicosia01"
+mip_name = "nicosia"
+mip_site_id = 25
+
+[site_mapping.ny]
+tccon_name = "nyalesund01"
+mip_name = "nyalesund"
+mip_site_id = 26
+
+[site_mapping.or]
+tccon_name = "orleans01"
+mip_name = "orleans"
+mip_site_id = 27
+
+[site_mapping.pr]
+tccon_name = "paris01"
+mip_name = "paris"
+mip_site_id = 28
+
+[site_mapping.pa]
+tccon_name = "parkfalls01"
+mip_name = "parkfalls"
+mip_site_id = 29
+
+[site_mapping.ra]
+tccon_name = "reunion01"
+mip_name = "reunion"
+mip_site_id = 30
+
+[site_mapping.rj]
+tccon_name = "rikubetsu01"
+mip_name = "rikubetsu"
+mip_site_id = 31
+
+[site_mapping.js]
+tccon_name = "saga01"
+mip_name = "saga"
+mip_site_id = 32
+
+[site_mapping.so]
+tccon_name = "sodankyla01"
+mip_name = "sodankyla"
+mip_site_id = 33
+
+[site_mapping.tk]
+tccon_name = "tsukuba02"
+mip_name = "tsukuba125"
+mip_site_id = 34
+
+[site_mapping.wg]
+tccon_name = "wollongong01"
+mip_name = "wollongong"
+mip_site_id = 35
+
+[site_mapping.xh]
+tccon_name = "xianghe01"
+mip_name = "xianghe"
+mip_site_id = 36
+
+[site_mapping.zs]
+tccon_name = "zugspitze01"
+mip_name = "zugspitze"
+mip_site_id = 37

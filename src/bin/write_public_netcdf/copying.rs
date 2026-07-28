@@ -2,7 +2,7 @@ use chrono::NaiveDate;
 use compute_helpers::add_geos_version_variable;
 use error_stack::ResultExt;
 use ggg_rs::{
-    nc_utils::{get_string_attr, GetNcAttr, NcArray},
+    nc_utils::{get_string_attr, get_traceability_scale, NcArray},
     units::{dmf_long_name, Quantity},
     utils::GggNcError,
 };
@@ -22,7 +22,7 @@ use copy_helpers::{copy_variable_general, copy_variable_new_data, copy_vmr_varia
 use copy_utils::{add_needed_dims, add_needed_new_dims, find_subset_dim};
 use xgas_helpers::{
     convert_array_units, expand_prior_profiles_from_file, expand_slant_xgas_binned_aks_from_file,
-    get_traceability_scale, write_extrapolation_flags,
+    write_extrapolation_flags,
 };
 
 mod compute_helpers;
@@ -54,13 +54,6 @@ pub(crate) enum CopyError {
         dim_len_in_var: usize,
     },
 
-    #[error("Variable '{varname}' has an inconsistent value at index {index} along dimension {dimension} (both 0-based)")]
-    InconsistentValue {
-        varname: String,
-        dimension: usize,
-        index: usize,
-    },
-
     /// This is a wrapper error used to provide more context to an underlying error.    
     #[error("An error occurred while {0}")]
     Context(String),
@@ -89,14 +82,6 @@ impl CopyError {
             varname: varname.to_string(),
             dim_len_in_file: len_in_file,
             dim_len_in_var: len_in_var,
-        }
-    }
-
-    fn inconsistent_value<V: ToString>(varname: V, dimension: usize, index: usize) -> Self {
-        Self::InconsistentValue {
-            varname: varname.to_string(),
-            dimension,
-            index,
         }
     }
 
@@ -821,7 +806,10 @@ impl XgasCopy {
                 "Getting {} traceability scale from {private_scale_name}",
                 self.xgas
             );
-            let scale = get_traceability_scale(private_file, &private_scale_name)?;
+            let scale = get_traceability_scale(private_file, &private_scale_name)
+                .change_context_lazy(|| {
+                    CopyError::context("Error while getting traceability scale")
+                })?;
             if !scale.is_empty() {
                 attr_overrides.insert("wmo_or_analogous_scale".to_string(), scale.into());
             }

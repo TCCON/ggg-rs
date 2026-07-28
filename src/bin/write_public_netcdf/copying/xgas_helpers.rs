@@ -3,7 +3,7 @@ use std::ops::Mul;
 
 use error_stack::ResultExt;
 use ggg_rs::{
-    nc_utils,
+    nc_utils::{self},
     units::{unit_conv_factor, Quantity, UnknownUnitError},
 };
 use ndarray::{Array1, Array2, ArrayD, ArrayView1, Ix1, Ix2};
@@ -12,12 +12,11 @@ use num_traits::Zero;
 
 use crate::{
     constants::{AK_PRESSURE_VARNAME, PRIOR_INDEX_VARNAME, PRIOR_PRESSURE_VARNAME},
-    copying::copy_utils::NcChar,
     TIME_DIM_NAME,
 };
 
 use super::{
-    copy_utils::{chars_to_string, read_and_subset_req_var, read_req_var},
+    copy_utils::{read_and_subset_req_var, read_req_var},
     find_subset_dim, get_string_attr, CopyError, Subsetter,
 };
 
@@ -261,47 +260,4 @@ clamped_to_max_slant_xgas"#;
             CopyError::context(format!("writing data for variable '{extrap_flag_varname}'"))
         })?;
     Ok(())
-}
-
-pub(super) fn get_traceability_scale(
-    private_file: &netcdf::File,
-    scale_varname: &str,
-) -> error_stack::Result<String, CopyError> {
-    let scale_var = private_file
-        .variable(scale_varname)
-        .ok_or_else(|| CopyError::MissingReqVar(scale_varname.to_string()))?;
-    // In the GGG2020.1 private files, these variables should be characters (not strings),
-    // we also aren't subsetting by time because this *should* be the same for all spectra.
-    let scale_chars = scale_var
-        .get::<NcChar, _>(Extents::All)
-        .change_context_lazy(|| {
-            CopyError::context(format!(
-                "getting traceability scale variable '{scale_varname}' data"
-            ))
-        })?
-        .into_dimensionality::<Ix2>()
-        .change_context_lazy(|| {
-            CopyError::context(format!(
-                "converting traceability scale variable '{scale_varname}' to 2D"
-            ))
-        })?;
-
-    // Check that all slices match the first one - we require that all of the spectra are on the same scale to collapse it into
-    // an attribute.
-    let (nspec, _) = scale_chars.dim();
-    if nspec < 1 {
-        return Err(CopyError::custom(format!(
-            "Traceability scale variable '{scale_varname}' is length 0 along the first dimension"
-        ))
-        .into());
-    }
-
-    let scale_bytes = scale_chars.row(0);
-    for (i, r) in scale_chars.rows().into_iter().enumerate() {
-        if scale_bytes != r {
-            return Err(CopyError::inconsistent_value(scale_varname, 0, i).into());
-        }
-    }
-    let scale = chars_to_string(scale_bytes.view());
-    Ok(scale)
 }
