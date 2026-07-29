@@ -13,14 +13,18 @@ use crate::{
     readers::runlogs,
     utils::{self, GggError},
 };
+use chrono::{TimeZone, Utc};
 use itertools::Itertools;
 use ndarray::Array1;
+use regex::Regex;
 
 use self::constants::bruker::{BrukerBlockType, BrukerParValue};
 
 pub mod constants;
 
 pub type OpusResult<T> = Result<T, OpusError>;
+
+static TZ_OFFSET_RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
 
 #[derive(Debug, thiserror::Error)]
 pub enum OpusError {
@@ -756,6 +760,84 @@ impl IgramHeader {
                 panic!("{e}")
             }
         }
+    }
+
+    /// Retrieve a ZPD time from the header.
+    ///
+    /// Note that for files with multiple times in the header (e.g., an
+    /// interferogram that contains the primary and secondary detector),
+    /// there is **no guarantee** which will be returned. For files where
+    /// these do not agree, do not use this function.
+    pub fn get_zpd_time(&self) -> Result<chrono::DateTime<Utc>, GggError> {
+        // Oh the joys of inconsistency. The date can be in any of the
+        // status blocks (igram or spectrum, primary or secondary), and can
+        // be in YYYY/MM/DD or DD/MM/YYYY format. Fortunately, we have
+        // a function that finds the parameter whatever block it is in!
+        let datstr = self
+            .get_value_any_block("DAT")
+            .map_err(|e| GggError::custom(e.to_string()))?
+            .as_str()
+            .map_err(|e| {
+                GggError::custom(format!(
+                    "Could not convert 'DAT' parameter to a string: {e}"
+                ))
+            })?;
+        let datfmt = match datstr.find("/") {
+            Some(2) => "%d/%m/%Y",
+            Some(4) => "%Y/%m/%d",
+            _ => return Err(GggError::Custom(format!("'DAT' parameter had an unexpected format instead of YYYY/MM/DD or DD/MM/YYYY: {datstr}")))
+        };
+
+        let date = chrono::NaiveDate::parse_from_str(datstr, datfmt).map_err(|e| {
+            GggError::custom(format!(
+                "Failed to parse DAT string '{datstr}', error was: {e}"
+            ))
+        })?;
+
+        // read_opus_header handles two time formats, HH:MM:SS.fff or HH:MM:SS. It ignores the (UTC+X) or (GMT+X).
+        // We're not going to ignore that, because time zones matter, and while the spectra should be UTC, this function
+        // can be called on an interferogram.
+        let timstr = self
+            .get_value_any_block("TIM")
+            .map_err(|e| GggError::custom(e.to_string()))?
+            .as_str()
+            .map_err(|e| {
+                GggError::custom(format!(
+                    "Could not convert 'TIM' parameter to a string: {e}"
+                ))
+            })?;
+
+        let (naive_time_str, utc_offset_str) = timstr.split_once(" ").ok_or_else(|| {
+            GggError::custom(format!(
+                "time string did not have a space, as was expected. String was: '{timstr}'"
+            ))
+        })?;
+
+        let time_fmt = if naive_time_str.contains(".") {
+            "%H:%M:%S.%3f"
+        } else {
+            "%H:%M:%S"
+        };
+        let time = chrono::NaiveTime::parse_from_str(naive_time_str, time_fmt)
+            .map_err(|e| GggError::Custom(format!("Naive part of TIM string did not match inferred format. Inferred '{time_fmt}', got '{naive_time_str}'. Inner error was: {e}")))?;
+
+        // Deal with a potential UTC offset. TODO: fractional time zones. Need an example.
+        let re = TZ_OFFSET_RE.get_or_init(|| Regex::new(r"\((GMT|UTC)([+\-][0-9]+)\)").unwrap());
+        let offset_hours: i32 = re.captures(utc_offset_str).map(|c| c.get(2)).flatten()
+            .ok_or_else(|| GggError::custom(format!("Offset value in TIM string had unexpected format: '{utc_offset_str}. Expected (UTC+x), (UTC-x), (GMT+x) or (GMT-x)")))?
+            .as_str()
+            .parse()
+            .expect("UTC offset string should be a valid integer because the regex selects integers only");
+        let offset = chrono::FixedOffset::east_opt(offset_hours * 3600).ok_or_else(|| {
+            GggError::custom(format!(
+                "UTC offset ({offset_hours}) from TIM string ({timstr}) was out of bounds"
+            ))
+        })?;
+        let naive_dt = date.and_time(time);
+        let datetime = offset.from_local_datetime(&naive_dt)
+            .single()
+            .ok_or_else(|| GggError::custom("Mapping local time {naive_dt} to timezone {offset} failed, there are multiple occurrences of this time in the timezone"))?;
+        Ok(datetime.to_utc())
     }
 }
 

@@ -11,6 +11,7 @@ use clap_verbosity_flag::{InfoLevel, Verbosity};
 use error_stack::ResultExt;
 use ggg_rs::{logging::init_logging, sunrun, utils::RunType};
 
+mod edit_row;
 mod site_config;
 
 fn main() -> ExitCode {
@@ -83,6 +84,7 @@ fn driver(clargs: Cli) -> error_stack::Result<(), CliError> {
     })?;
 
     let mut nspec = 0;
+    let row_editor = edit_row::RowEditor::default();
     for (ispec, line) in list_rdr.lines().enumerate() {
         if ispec > 0 && ispec % 1000 == 0 {
             log::info!("Processed {ispec} spectra");
@@ -97,7 +99,7 @@ fn driver(clargs: Cli) -> error_stack::Result<(), CliError> {
         let (nus, nue) = sunrun_cfg
             .get_nus_nue(specname)
             .change_context_lazy(|| CliError::custom("Error getting nus & nue for spectrum"))?;
-        let row = sunrun::SunrunRow::build_from_spectrum(
+        let row = sunrun::ExpandedSunrunRow::build_from_spectrum(
             &specpath,
             sunrun_cfg.constants.instrument,
             run_type.is_lamp(),
@@ -113,9 +115,15 @@ fn driver(clargs: Cli) -> error_stack::Result<(), CliError> {
             ))
         })?;
 
-        // Everything else is handled in the `build_from_spectrum` function,
-        // but I kept nus & nue
+        let row = row_editor
+            .edit_row(row, &sunrun_cfg.edits)
+            .change_context_lazy(|| {
+                CliError::custom(format!("Error editing sunrun for spectrum '{specname}'"))
+            })?;
 
+        // Convert to the struct that only has the fields we output,
+        // not the extra fields useful for filtering.
+        let row = sunrun::SunrunRow::from(row);
         log::debug!("Writing {row:?}");
         row.write(&mut output_f).change_context_lazy(|| {
             CliError::custom("Error during writing of line to the sunrun file")

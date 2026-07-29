@@ -1,5 +1,6 @@
 use std::{io::Write, path::Path, unimplemented};
 
+use chrono::{Datelike, Timelike, Utc};
 use error_stack::ResultExt;
 use fortformat::FortFormat;
 use serde::{Deserialize, Serialize};
@@ -18,6 +19,7 @@ fn sunrun_missing() -> f64 {
     SUNRUN_MISSING
 }
 
+/// A struct representing values found in a row of a sunrun file
 #[derive(Debug, Clone, Serialize, Deserialize, field_names::FieldNames)]
 pub struct SunrunRow {
     pub spectrum_name: String,
@@ -46,6 +48,112 @@ pub struct SunrunRow {
 }
 
 impl SunrunRow {
+    /// Serialize the row and write it out.
+    ///
+    /// Usually `f` will be a file handle (from [`std::fs::File::create`]),
+    /// but any writable object will do.
+    pub fn write<W: std::io::Write>(&self, f: W) -> error_stack::Result<(), GggError> {
+        let fmt = SUNRUN_FMT.get_or_init(|| {
+            FortFormat::parse(SUNRUN_FMT_STR)
+                .expect("The predefined sunrun format string must be a valid fortran format")
+        });
+        let settings = fortformat::ser::SerSettings::default().align_left_str(true);
+        fortformat::ser::to_writer_custom(self, fmt, Some(&SunrunRow::FIELDS), &settings, f)
+            .change_context_lazy(|| {
+                GggError::context(format!(
+                    "Error writing or serializing the sunrun row for spectrum {}",
+                    self.spectrum_name
+                ))
+            })?;
+        Ok(())
+    }
+}
+
+impl From<ExpandedSunrunRow> for SunrunRow {
+    fn from(value: ExpandedSunrunRow) -> Self {
+        Self {
+            spectrum_name: value.spectrum_file_name,
+            object: value.obj,
+            tcorr: value.tcorr,
+            oblat: value.oblat,
+            oblon: value.oblon,
+            obalt: value.obalt,
+            tins: value.tins,
+            pins: value.pins,
+            hins: value.hins,
+            tout: value.tout,
+            pout: value.pout,
+            hout: value.hout,
+            sia: value.sia,
+            fvsi: value.fvsi,
+            wspd: value.wspd,
+            wdir: value.wdir,
+            nus: value.nus,
+            nue: value.nue,
+            fsf: value.fsf,
+            lasf: value.lasf,
+            wavtkr: value.wavtkr,
+            aipl: value.aipl,
+            tm: value.tm,
+        }
+    }
+}
+
+/// A struct containing values of a sunrun row plus extra information useful for editing the rows.
+///
+/// Currently, this structure adds the ZPD time as both a [`chrono::DateTime`]
+/// and with the individual parts (year, month, day, etc.) as fields. The latter
+/// is intended to make it easier to write simple Lua lines that depend on the date & time.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExpandedSunrunRow {
+    pub spectrum_file_name: String,
+
+    /// The ZPD time of the spectrum.
+    pub zpd_time: chrono::DateTime<Utc>,
+    pub year: i32,
+    pub month: i32,
+    pub day: i32,
+    pub hour: i32,
+    pub minute: i32,
+    pub second: i32,
+    pub obj: Object,
+    pub tcorr: f64,
+    pub oblat: f64,
+    pub oblon: f64,
+    pub obalt: f64,
+    pub tins: f64,
+    pub pins: f64,
+    pub hins: f64,
+    pub tout: f64,
+    pub pout: f64,
+    pub hout: f64,
+    pub sia: f64,
+    pub fvsi: f64,
+    pub wspd: f64,
+    pub wdir: f64,
+    pub nus: f64,
+    pub nue: f64,
+    pub fsf: f64,
+    pub lasf: f64,
+    pub wavtkr: f64,
+    pub aipl: f64,
+    pub tm: f64,
+}
+
+impl ExpandedSunrunRow {
+    /// Create an instance from a spectrum and ancillary data.
+    ///
+    /// # Parameters
+    /// - `spectrum`: path to the binary spectrum file to read.
+    /// - `instrument`: used to determine how to read the headers.
+    /// - `is_lamp`: `true` is this is for a lamp (a.k.a. lab) run.
+    ///   Determines how FVSI is calculated.
+    /// - `defaults`: the set of default values to use in the row
+    ///   if that value is not available from the spectrum header.
+    /// - `object`: what celestial object the instrument was pointed
+    ///   towards.
+    /// - `nus`: lower wavenumber bound for this spectrum, in cm-1.
+    /// - `nue`: upper wavenumber bound for the spectrum, in cm-1.
     pub fn build_from_spectrum(
         spectrum: &Path,
         instrument: Instrument,
@@ -54,7 +162,7 @@ impl SunrunRow {
         object: Object,
         nus: f64,
         nue: f64,
-    ) -> Result<SunrunRow, GggError> {
+    ) -> Result<ExpandedSunrunRow, GggError> {
         // TODO: switch to spectrum types? Or make the `opus` module names reflect that this can be a spectrum or interferogram?
         let spec_header =
             IgramHeader::read_full_igram_header(&spectrum).map_err(|e| GggError::CouldNotRead {
@@ -86,24 +194,14 @@ impl SunrunRow {
 
         row
     }
-
-    pub fn write<W: std::io::Write>(&self, f: W) -> error_stack::Result<(), GggError> {
-        let fmt = SUNRUN_FMT.get_or_init(|| {
-            FortFormat::parse(SUNRUN_FMT_STR)
-                .expect("The predefined sunrun format string must be a valid fortran format")
-        });
-        let settings = fortformat::ser::SerSettings::default().align_left_str(true);
-        fortformat::ser::to_writer_custom(self, fmt, Some(&SunrunRow::FIELDS), &settings, f)
-            .change_context_lazy(|| {
-                GggError::context(format!(
-                    "Error writing or serializing the sunrun row for spectrum {}",
-                    self.spectrum_name
-                ))
-            })?;
-        Ok(())
-    }
 }
 
+/// A set of default values to use in a sunrun if the information is not present in a spectrum header.
+///
+/// For configuration, `oblat`, `oblon`, `obalt`, and `aipl` are required. The others
+/// will default to the [`SUNRUN_MISSING`] constant, though note that this
+/// value is too wide for some of the fields, and several really cannot be left
+/// as fill values.
 #[derive(Debug, Deserialize)]
 pub struct SunrunDefaults {
     #[serde(default)]
@@ -112,6 +210,7 @@ pub struct SunrunDefaults {
     pub oblat: f64,
     pub oblon: f64,
     pub obalt: f64,
+    pub aipl: f64,
     // The rest are null values, which we can default to allow
     // as missing.
     #[serde(default = "sunrun_missing")]
@@ -145,8 +244,6 @@ pub struct SunrunDefaults {
     #[serde(default = "sunrun_missing")]
     pub wavtkr: f64,
     #[serde(default = "sunrun_missing")]
-    pub aipl: f64,
-    #[serde(default = "sunrun_missing")]
     pub tm: f64,
 }
 
@@ -178,13 +275,20 @@ impl Default for SunrunDefaults {
     }
 }
 
+/// Write the sunrun file header.
 pub fn write_header<W: Write>(mut f: W) -> error_stack::Result<(), std::io::Error> {
-    write!(f, "          3          23\n")?;
-    write!(f, "create_sunrun_rs    Version 1.0   2026-07-28   JLL\n")?;
-    write!(f, "Spectrum_File_Name                                        Obj  tcorr   oblat    oblon   obalt   tins   pins   hins  tout  pout   hout    sia    fvsi   wspd   wdir   Nus    Nue      FSF      lasf    wavtkr   AIPL   TM\n")?;
+    // TODO: the replacement code uses these column names. Find a way
+    // to link that to this function so that I don't have to maintain
+    // the column names in two locations in the future.
+    write!(f, "           3          23\n")?;
+    write!(f, " create_sunrun_rs    Version 1.0   2026-07-28   JLL\n")?;
+    write!(f, " Spectrum_File_Name                                        Obj  tcorr   oblat    oblon   obalt   tins   pins   hins  tout  pout   hout    sia    fvsi   wspd   wdir   Nus    Nue      FSF      lasf    wavtkr   AIPL   TM\n")?;
     Ok(())
 }
 
+/// Helper function that copies data from an Opus header into a sunrun row.
+///
+/// Assumes the layout of an Opus header for TCCON.
 fn assign_tccon_spectrum_header_info(
     specname: &str,
     header: &IgramHeader,
@@ -193,7 +297,9 @@ fn assign_tccon_spectrum_header_info(
     object: Object,
     nus: f64,
     nue: f64,
-) -> Result<SunrunRow, GggError> {
+) -> Result<ExpandedSunrunRow, GggError> {
+    let zpd_time = header.get_zpd_time()?;
+
     let oblat = get_float(
         specname,
         header,
@@ -290,9 +396,16 @@ fn assign_tccon_spectrum_header_info(
     let lasf = get_float(specname, header, BrukerBlockType::InstrumentStatus, "LWN")?
         .unwrap_or(defaults.lasf);
 
-    Ok(SunrunRow {
-        spectrum_name: specname.to_string(),
-        object,
+    Ok(ExpandedSunrunRow {
+        spectrum_file_name: specname.to_string(),
+        zpd_time,
+        year: zpd_time.year(),
+        month: zpd_time.month() as i32,
+        day: zpd_time.day() as i32,
+        hour: zpd_time.hour() as i32,
+        minute: zpd_time.minute() as i32,
+        second: zpd_time.second() as i32,
+        obj: object,
         tcorr: defaults.tcorr,
         oblat,
         oblon,
@@ -394,6 +507,7 @@ fn get_fvsi(specname: &str, hdr: &IgramHeader, is_lamp: bool) -> Result<Option<f
     }
 }
 
+/// Get a float from a specific block in the header.
 fn get_float(
     specname: &str,
     hdr: &IgramHeader,
@@ -416,6 +530,9 @@ fn get_float(
     Ok(Some(val))
 }
 
+/// An enum indicating which instrument this sunrun is for.
+///
+/// This is used to determine how to read the spectrum headers.
 #[derive(Debug, Deserialize, Clone, Copy)]
 #[serde(from = "i8")]
 #[repr(i8)]
@@ -435,6 +552,7 @@ impl From<i8> for Instrument {
     }
 }
 
+/// An enum indicating which celestial object the instrument was pointing at.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(try_from = "i8", into = "i8")]
 #[repr(i8)]
