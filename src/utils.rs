@@ -366,6 +366,85 @@ pub fn site_id_from_filename(p: &Path) -> Result<String, GggError> {
     Ok(site_id)
 }
 
+/// An enum describing what kind of fitting run this is, e.g. ground-based or laboratory.
+///
+/// This can be created from a path to a file where the first letter of the extension
+/// corresponds to this type. Examples are spectra lists, sunruns, and runlogs.
+#[derive(Debug, Clone, Copy)]
+pub enum RunType {
+    Air,
+    Bal,
+    Gnd,
+    Lab,
+    Orb,
+    Syn,
+    Other(char),
+}
+
+impl RunType {
+    /// Return the subdirectory sunruns and runlogs for this run type should go in.
+    pub fn subdir(&self) -> Result<&'static str, GggError> {
+        match self {
+            Self::Air => Ok("air"),
+            Self::Bal => Ok("bal"),
+            Self::Gnd => Ok("gnd"),
+            Self::Lab => Ok("lab"),
+            Self::Orb => Ok("orb"),
+            Self::Syn => Ok("syn"),
+            Self::Other(c) => Err(GggError::custom(format!(
+                "Starting character '{c}' does not have a defined subdirectory"
+            ))),
+        }
+    }
+
+    /// Return `true` if this is a lamp run.
+    pub fn is_lamp(&self) -> bool {
+        if let Self::Lab = self {
+            true
+        } else {
+            false
+        }
+    }
+}
+
+impl TryFrom<PathBuf> for RunType {
+    type Error = GggError;
+
+    fn try_from(value: PathBuf) -> Result<Self, Self::Error> {
+        Self::try_from(value.as_path())
+    }
+}
+
+impl TryFrom<&Path> for RunType {
+    type Error = GggError;
+
+    fn try_from(p: &Path) -> Result<Self, Self::Error> {
+        let ext = p
+            .extension()
+            .ok_or_else(|| {
+                GggError::custom(format!("Could not get extension from {}", p.display()))
+            })?
+            .as_encoded_bytes()
+            .get(0)
+            .ok_or_else(|| {
+                GggError::custom(format!(
+                    "Could not get first character of extension from {}",
+                    p.display()
+                ))
+            })?;
+
+        match ext {
+            b'a' => Ok(Self::Air),
+            b'b' => Ok(Self::Bal),
+            b'g' => Ok(Self::Gnd),
+            b'l' => Ok(Self::Lab),
+            b'o' => Ok(Self::Orb),
+            b's' => Ok(Self::Syn),
+            _ => Ok(Self::Other(char::from(*ext))),
+        }
+    }
+}
+
 /// The various apodization functions allowed by GGG
 ///
 /// [`FromStr`] and [`ToString`] are implemented to convert
@@ -1553,6 +1632,34 @@ pub fn read_unknown_encoding_file<P: AsRef<Path>>(filepath: P) -> Result<String,
     content_result.map_err(|e| EncodingError::ConversionError(e.into_owned()))
 }
 
+/// Directly read and deserialize a TOML file.
+///
+/// Since the [`toml`] crate only provides a `from_str` method to deserialize,
+/// this helper function handles reading the given file to a string and then
+/// deserializing. Note that, like most deserialization functions, you will need
+/// to specify the type by either annotating the receiving variable's type,
+/// e.g. `let cfg: T = read_toml_file(...)`, or using the "turbofish" syntax,
+/// e.g. `let cfg = read_toml_file::<T>(...)`. In both examples, you would replace
+/// `T` with the specific type you wish returned.
+pub fn read_toml_file<T: serde::de::DeserializeOwned>(file: &Path) -> Result<T, GggError> {
+    let mut f = std::fs::File::open(file).map_err(|e| GggError::CouldNotOpen {
+        descr: "TOML file".to_string(),
+        path: file.to_path_buf(),
+        reason: e.to_string(),
+    })?;
+    let mut s = String::new();
+    f.read_to_string(&mut s)
+        .map_err(|e| GggError::CouldNotRead {
+            path: file.to_path_buf(),
+            reason: e.to_string(),
+        })?;
+    let obj: T = toml::from_str(&s).map_err(|e| GggError::CouldNotRead {
+        path: file.to_path_buf(),
+        reason: format!("Error deserializing TOML:\n{e}"),
+    })?;
+    Ok(obj)
+}
+
 /// Remove a comment from a line
 ///
 /// GGG often (though not always) considers anything after a
@@ -1794,6 +1901,8 @@ fn make_path_abs(p: PathBuf) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
+    use std::assert_eq;
+
     use super::*;
 
     #[test]
@@ -1942,5 +2051,27 @@ mod tests {
             d,
             vpath,
         })
+    }
+
+    #[test]
+    fn test_subdir_from_ext() {
+        let p = PathBuf::from("pa_ggg_benchmark.gnd");
+        let subdir = RunType::try_from(p.as_path()).unwrap().subdir().unwrap();
+        assert_eq!("gnd", subdir);
+
+        // Since we keep the extension as u8 values, make sure the error
+        // tells us the actual character, not the byte value.
+        let p = PathBuf::from("pa_ggg_benchmark.xnd");
+        let e = RunType::try_from(p.as_path())
+            .unwrap()
+            .subdir()
+            .unwrap_err();
+        match e {
+            GggError::Custom(msg) => assert_eq!(
+                "Starting character 'x' does not have a defined subdirectory",
+                msg
+            ),
+            _ => panic!("Unexpected GggError type"),
+        }
     }
 }

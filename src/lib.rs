@@ -26,6 +26,8 @@ pub mod o2_dmf;
 pub mod opus;
 /// Utilities for reading GGG files.
 pub mod readers;
+/// Utilities for working with the sunrun files.
+pub mod sunrun;
 /// Code supporting TCCON-focused programs
 pub mod tccon;
 /// Code used in multiple tests

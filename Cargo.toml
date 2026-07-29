@@ -16,6 +16,7 @@ itertools = "0.14.0"
 log = "0.4.27"
 log4rs = "1.2.0"
 error-stack = "0.5.0"
+field_names = "0.2.0"
 figment = { version = "0.10.19", features = ["toml"] }
 fortformat = { version = "0.2.0", features = ["serde"] }
 indexmap = { version = "2.9", features = ["serde"] }
@@ -78,6 +79,9 @@ name = "apply_tccon_insitu_correction"
 name = "list_spectra"
 
 [[bin]]
+name = "create_sunrun_rs"
+
+[[bin]]
 name = "add_nc_flags"
 required-features = ["netcdf"]
 
@@ -88,6 +92,9 @@ required-features = ["netcdf"]
 [[bin]]
 name = "plot_spt"
 required-features = ["plotting"]
+
+[[bin]]
+name = "opus_hdr_rs"
 
 [[bin]]
 name = "query_output"

@@ -1,6 +1,7 @@
 #[cfg(feature = "netcdf")]
 use std::{eprintln, fmt::Debug, format, ops::Mul, str::FromStr};
 use std::{
+    fmt::Display,
     io::{BufRead, BufReader, Lines},
     path::{Path, PathBuf},
     process::{Command, Stdio},
@@ -15,6 +16,15 @@ use netcdf::NcTypeDescriptor;
 pub fn test_data_dir() -> PathBuf {
     let crate_root = env!("CARGO_MANIFEST_DIR");
     PathBuf::from(crate_root).join("test-data")
+}
+
+/// Test helper function to quickly create a UTC datetime.
+pub fn utc_dt_ymd(year: i32, month: u32, day: u32) -> chrono::DateTime<chrono::Utc> {
+    chrono::NaiveDate::from_ymd_opt(year, month, day)
+        .unwrap()
+        .and_hms_opt(0, 0, 0)
+        .unwrap()
+        .and_utc()
 }
 
 pub fn remove_file_if_exists(file: &Path) -> std::io::Result<()> {
@@ -39,6 +49,30 @@ pub fn compare_output_text_files(expected_dir: &Path, output_dir: &Path, out_fil
         .expect("Waiting for diff process should not fail")
         .success();
     assert!(is_same, "{out_file_name} did not match expected.");
+}
+
+/// Extension trait for `Result` types to aid test debugging.
+///
+/// Some errors are much easier to read when formatted using the
+/// [`Display`] trait, but `.unwrap()` formats using the [`Debug`]
+/// trait. (TOML deserialization errors are an example.) Using the
+/// `unwrap_print` method from this trait will first print the
+/// `Display`-formatted error, then call `.unwrap()` to produce the
+/// normal backtrace.
+pub trait TestResult<T> {
+    fn unwrap_print(self) -> T;
+}
+
+impl<T, E: Debug + Display> TestResult<T> for Result<T, E> {
+    fn unwrap_print(self) -> T {
+        match self {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!("ERROR: {e}");
+                Err(e).unwrap()
+            }
+        }
+    }
 }
 
 /// Compare two arrays with [`approx::relative_eq!`].

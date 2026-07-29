@@ -553,8 +553,8 @@ impl IgramHeaderMetadata {
 
 #[derive(Debug)]
 pub struct IgramHeader {
-    metadata: IgramHeaderMetadata,
-    parameter_blocks: HashMap<BrukerBlockType, HashMap<String, BrukerParValue>>,
+    pub metadata: IgramHeaderMetadata,
+    pub parameter_blocks: HashMap<BrukerBlockType, HashMap<String, BrukerParValue>>,
 }
 
 impl IgramHeader {
