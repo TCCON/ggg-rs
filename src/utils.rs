@@ -1,4 +1,5 @@
 //! General GGG utilities, not particular to any program or I/O step.
+use std::borrow::Cow;
 use std::error::Error;
 use std::ffi::{OsStr, OsString};
 use std::fmt::Display;
@@ -1896,6 +1897,54 @@ fn make_path_abs(p: PathBuf) -> PathBuf {
     } else {
         let cwd = std::env::current_dir().expect("Could not get current working directory.");
         cwd.join(p)
+    }
+}
+
+/// Convert bytes to either a UTF-8 string or a hex representation.
+///
+/// This tries to convert the given bytes to a UTF-8 string. If that
+/// fails, it returns a hex string version of the bytes instead.
+/// If `omit_trailing_nulls` is `true`, then any trailing 0s will be ignored
+/// in the byte slice will not be included when converting to a string.
+/// However, this parameter is ignored if a hex string is returned.
+///
+/// If the bytes can be interpreted as UTF-8, then a string slice is
+/// returned to avoid an allocation. A hex string does require an
+/// allocation, however.
+///
+/// ```rust
+/// # use ggg_rs::utils::utf_or_hex;
+/// // Trailing 0s are ignored
+/// let s = utf_or_hex(&[97, 98, 99, 0, 0, 0], true);
+/// assert_eq!(&s, "abc");
+///
+/// // Trailing 0s are encoded as nulls
+/// let s = utf_or_hex(&[97, 98, 99, 0, 0, 0], false);
+/// assert_eq!(&s, "abc\0\0\0");
+///
+/// // Bytes above 127 that aren't valid UTF-8 trigger
+/// // this to be written as a hex string. This will
+/// // always include the trailing 0s.
+/// let s = utf_or_hex(&[128, 129, 130, 0], true);
+/// assert_eq!(&s, "0x80818200");
+/// let s = utf_or_hex(&[128, 129, 130, 0], false);
+/// assert_eq!(&s, "0x80818200");
+/// ```
+pub fn utf_or_hex(bytes: &[u8], omit_trailing_nulls: bool) -> Cow<'_, str> {
+    let i = if omit_trailing_nulls {
+        bytes
+            .iter()
+            .position(|b| *b == 0)
+            .unwrap_or_else(|| bytes.len())
+    } else {
+        bytes.len()
+    };
+
+    if let Ok(s) = str::from_utf8(&bytes[..i]) {
+        Cow::Borrowed(s)
+    } else {
+        let s = hex::encode(bytes);
+        Cow::Owned(format!("0x{s}"))
     }
 }
 

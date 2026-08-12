@@ -2,6 +2,7 @@ pub mod bruker {
     use std::fmt::Display;
 
     use crate::opus::{OpusError, OpusResult, OpusTypeError};
+    use crate::utils::utf_or_hex;
 
     /// Maximum number of directory blocks
     pub const MDB: i32 = 32;
@@ -295,6 +296,94 @@ pub mod bruker {
                 BrukerParValue::Enum(_) => BrukerParType::Enum,
                 BrukerParValue::Senum(_) => BrukerParType::Senum,
                 BrukerParValue::Unknown(_, i) => BrukerParType::Unknown(*i),
+            }
+        }
+
+        /// Return an object that implements [`Display`] in a way that includes
+        /// the enum type and the human-readable value.
+        ///
+        /// `BrukerParValue` implements both [`Debug`] and [`Display`]. The debug
+        /// representation shows the enum type and contained value, but for values
+        /// containing bytes, it shows the raw bytes. The display representation
+        /// converts the bytes to a string if possible, and their hexadecimal representation
+        /// if not, but omits the enum type. The object returned by this method
+        /// includes the enum type with the display representation of the value.
+        pub fn display_with_type(&self) -> BpvTypeDisplay<'_> {
+            BpvTypeDisplay(self)
+        }
+
+        /// Return an object that implements [`serde::Serialize`] for human-readable
+        /// Bruker header values.
+        ///
+        /// Essentially, this will serialize the [`Display`] version of the value,
+        /// meaning that variants containing raw bytes will be converted to strings
+        /// or hexadecimal values. That is useful for programs like `opus_hdr_rs`
+        /// that want to write values that other programs can easily read. However,
+        /// in the future, we may need to be able to serialize the raw bytes, so
+        /// the direct serialization of [`BrukerParValue`] is reserved for that use.
+        pub fn ser_export(self) -> BpvExportSerialization {
+            BpvExportSerialization(self)
+        }
+    }
+
+    impl Display for BrukerParValue {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                BrukerParValue::Integer(v) => write!(f, "{v}"),
+                BrukerParValue::Float(v) => write!(f, "{v}"),
+                BrukerParValue::String(s) => write!(f, "{s}"),
+                BrukerParValue::Enum(bytes) => write!(f, "{}", utf_or_hex(bytes, true)),
+                BrukerParValue::Senum(bytes) => write!(f, "{}", utf_or_hex(bytes, true)),
+                BrukerParValue::Unknown(bytes, _) => write!(f, "{}", utf_or_hex(bytes, true)),
+            }
+        }
+    }
+
+    /// A struct providing a display implementation for [`BrukerParValue`]
+    /// that include the enum variant and human-readable value.
+    /// See [`BrukerParValue::display_with_type`] for more information.
+    pub struct BpvTypeDisplay<'v>(&'v BrukerParValue);
+
+    impl<'v> Display for BpvTypeDisplay<'v> {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            let ty = match self.0 {
+                BrukerParValue::Integer(_) => "Integer",
+                BrukerParValue::Float(_) => "Float",
+                BrukerParValue::String(_) => "String",
+                BrukerParValue::Enum(_) => "Enum",
+                BrukerParValue::Senum(_) => "Senum",
+                BrukerParValue::Unknown(_, _) => "Unknown",
+            };
+            write!(f, "{ty}({})", self.0)
+        }
+    }
+
+    /// A struct providing serialization of Bruker values in human-readable formats.
+    /// See [`BrukerParValue::ser_export`] for details. For now, this owns the inner
+    /// value to support the use case in `opus_hdr_rs` where these need to be collected
+    /// in data structures for serialization.
+    pub struct BpvExportSerialization(BrukerParValue);
+
+    impl BpvExportSerialization {
+        pub fn new(val: BrukerParValue) -> Self {
+            Self(val)
+        }
+    }
+
+    impl serde::Serialize for BpvExportSerialization {
+        fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: serde::Serializer,
+        {
+            match &self.0 {
+                BrukerParValue::Integer(v) => serializer.serialize_i32(*v),
+                BrukerParValue::Float(v) => serializer.serialize_f64(*v),
+                BrukerParValue::String(s) => serializer.serialize_str(s),
+                BrukerParValue::Enum(bytes) => serializer.serialize_str(&utf_or_hex(bytes, true)),
+                BrukerParValue::Senum(bytes) => serializer.serialize_str(&utf_or_hex(bytes, true)),
+                BrukerParValue::Unknown(bytes, _) => {
+                    serializer.serialize_str(&utf_or_hex(bytes, true))
+                }
             }
         }
     }

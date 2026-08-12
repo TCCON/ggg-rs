@@ -772,8 +772,6 @@ mod tests {
                     toml::from_str::<OnlyDetectors>(&block.text).map(|_| None)
                 }
                 Some("edits") => {
-                    // TODO: test blocks with Lua to make sure the lua is valid -
-                    //
                     eprintln!("Deserializing as OnlyEdits");
                     toml::from_str::<OnlyEdits>(&block.text).map(|v| Some(v.edits))
                 }

@@ -53,6 +53,7 @@ ndarray-stats = "0.7.0"
 noisy_float = "0.2.1"
 # Needed v0.11 (not 0.12, which was available at the time) to match an `ffi` version.
 mlua = {version = "0.11.0", features = ["lua55", "serde", "vendored"]}
+csv = "1.4.0"
 
 [dev-dependencies]
 rstest = "0.18.2"
@@ -118,6 +119,10 @@ required-features = ["netcdf", "inprogress"]
 
 [[bin]]
 name = "write_public_netcdf"
+required-features = ["netcdf"]
+
+[[bin]]
+name = "write_timeavg_netcdf"
 required-features = ["netcdf"]
 
 [[bin]]
