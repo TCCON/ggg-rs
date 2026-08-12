@@ -104,7 +104,7 @@ impl From<ExpandedSunrunRow> for SunrunRow {
 /// Currently, this structure adds the ZPD time as both a [`chrono::DateTime`]
 /// and with the individual parts (year, month, day, etc.) as fields. The latter
 /// is intended to make it easier to write simple Lua lines that depend on the date & time.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ExpandedSunrunRow {
     pub spectrum_file_name: String,
 
@@ -206,13 +206,12 @@ impl ExpandedSunrunRow {
 pub struct SunrunDefaults {
     #[serde(default)]
     pub tcorr: f64,
-    // Site coordinates must be given in configuration files
+    #[serde(default = "sunrun_missing")]
     pub oblat: f64,
+    #[serde(default = "sunrun_missing")]
     pub oblon: f64,
+    #[serde(default = "sunrun_missing")]
     pub obalt: f64,
-    pub aipl: f64,
-    // The rest are null values, which we can default to allow
-    // as missing.
     #[serde(default = "sunrun_missing")]
     pub tins: f64,
     #[serde(default = "sunrun_missing")]
@@ -243,6 +242,8 @@ pub struct SunrunDefaults {
     pub lasf: f64,
     #[serde(default = "sunrun_missing")]
     pub wavtkr: f64,
+    #[serde(default = "sunrun_missing")]
+    pub aipl: f64,
     #[serde(default = "sunrun_missing")]
     pub tm: f64,
 }
@@ -559,6 +560,12 @@ impl From<i8> for Instrument {
 pub enum Object {
     Moon = 1,
     Sun = 2,
+}
+
+impl Default for Object {
+    fn default() -> Self {
+        Self::Sun
+    }
 }
 
 impl TryFrom<i8> for Object {

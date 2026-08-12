@@ -11,6 +11,10 @@ approx = "0.5.1"
 chrono = { version = "0.4.40", features = ["serde"] }
 clap = { version = "4", features = ["derive"] }
 clap-verbosity-flag = "2.2.0"
+# If in the future I need a dynamic builder pattern, use this crate.
+# derive_builder = "0.20.2"
+# If in the future I need a typed builder pattern, use this crate.
+# typed-builder = "0.23.2"
 encoding = "0.2.33"
 itertools = "0.14.0"
 log = "0.4.27"
@@ -18,7 +22,7 @@ log4rs = "1.2.0"
 error-stack = "0.5.0"
 field_names = "0.2.0"
 figment = { version = "0.10.19", features = ["toml"] }
-fortformat = { version = "0.2.0", features = ["serde"] }
+fortformat = { version = "0.2.1", features = ["serde"] }
 indexmap = { version = "2.9", features = ["serde"] }
 ndarray = { version = "0.17", features = ["approx"] }
 ndarray-npy = "0.10.0"
@@ -52,6 +56,7 @@ mlua = {version = "0.11.0", features = ["lua55", "serde", "vendored"]}
 
 [dev-dependencies]
 rstest = "0.18.2"
+static_assertions = "1.1.0"
 
 [features]
 inprogress = []

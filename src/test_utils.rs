@@ -63,7 +63,7 @@ pub trait TestResult<T> {
     fn unwrap_print(self) -> T;
 }
 
-impl<T, E: Debug + Display> TestResult<T> for Result<T, E> {
+impl<T, E: std::fmt::Debug + Display> TestResult<T> for Result<T, E> {
     fn unwrap_print(self) -> T {
         match self {
             Ok(v) => v,
@@ -101,6 +101,137 @@ macro_rules! assert_arrays_rel_eq {
                 "Array assertion failed!\nleft = {:?}\nright = {:?} \nActual and Expected arrays have been dumped to 'debug_actual.npy' and 'debug_expected.npy', access with numpy.load.",
                 $actual, $expected
             );
+        }
+    };
+}
+
+/// Create a structure and verify its fields are contained in another struct.
+///
+/// This is meant to support testing configuration examples from the mdbook.
+/// Sometimes in the book we want to show only a small snippet of a configuration
+/// file, but still check that the fields are correct. For example, let's say
+/// our full config object looked like this:
+///
+/// ```rust
+/// # use std::path::PathBuf;
+/// #[derive(serde::Deserialize)]
+/// struct Config {
+///     user: String,
+///     source: PathBuf,
+///     allowed_flags: Vec<i32>
+/// }
+/// ```
+///
+/// but we only wanted to focus on how to write the list of flags. If we
+/// had this TOML:
+///
+/// ```toml
+/// allowed_flags = [0, 1000]
+/// ```
+///
+/// deserializing it to `Config` won't work, because it's missing the `user`
+/// and `source` fields. So, for testing, we might make a `ConfigOnlyFlags`
+/// struct:
+///
+/// ```rust
+/// #[derive(serde::Deserialize)]
+/// struct ConfigOnlyFlags {
+///     allowed_flags: Vec<i32>
+/// }
+/// ```
+///
+/// which will let us test this example. But if we later change `Config` so that
+/// field is now named `good_flags`, our example in the book is wrong, and the
+/// test won't catch it (because we defined a separate struct to deserialize that
+/// test).
+///
+/// That's where this macro comes in. It lets you define a struct like normal, but
+/// also specify what struct this one "subsets". For our example, that would be:
+///
+/// ```ignore
+/// # // test ignored because it is triggering a weird netCDF linking failure,
+/// # // not sure why it affects this one.
+/// # use ggg_rs::test_struct_check_fields;
+/// # use std::path::PathBuf;
+///
+/// struct Config { allowed_flags: Vec<i32> }
+///
+/// test_struct_check_fields! {
+///     #[derive(serde::Deserialize)]
+///     struct ConfigOnlyFlags {
+///         allowed_flags: Vec<i32>
+///     } : Config
+/// }
+/// ```
+///
+/// By specifying the `: Config` at the end, this will require that all fields in
+/// `ConfigOnlyFlags` also exist in `Config`. If that stops being true (e.g., because
+/// we changed the name in `Config`), this will generate a compile-time error.
+///
+/// If you want to verify the types of the fields as well, use [`test_struct_check_field_types!`]
+/// instead.
+///
+/// Note that this macro can only be used in a `#[cfg(test)]`, as it relies on the
+/// `static_assertions` crate, which is a dev dependency for ggg-rs. Also, as this is
+/// macro exported, it must be `use`d from the `ggg_rs` root: `use ggg_rs::test_struct_check_fields`.
+#[macro_export]
+macro_rules! test_struct_check_fields {
+    (
+        $(#[$meta:meta])*
+        struct $name:ident {
+            $( $field:ident : $ty:ty ),* $(,)?
+        } : $other:path
+    ) => {
+        static_assertions::assert_fields!($other: $($field),*);
+
+        $(#[$meta])*
+        struct $name {
+            $( $field: $ty ),*
+        }
+    };
+}
+
+/// As [`test_struct_check_fields!`], but checks field types, not just names.
+///
+/// This has the same invocation as [`test_struct_check_fields!`], so see that
+/// macro for examples. Here, we cause a compiler error if the type of the fields
+/// does not match as well as the name. The former error will seem backwards;
+/// if the defined structure has type `A` and the original structure has type `B`,
+/// you'll see "expected `A`, found `B`".
+///
+/// You will not want to use this when mocking a struct with a different subtype
+/// that has limited fields, e.g., if your normal `Config` structure was:
+///
+/// ```rust
+/// ```
+///
+/// Also note that the fields of the original structure must be accessible where
+/// this macro is called. This should be the case in most tests.
+#[macro_export]
+macro_rules! test_struct_check_field_types {
+    (
+        $(#[$meta:meta])*
+        struct $name:ident {
+            $( $field:ident : $ty:ty ),* $(,)?
+        } : $other:path
+    ) => {
+        // Redundant with the type check, but clearer if the field name is wrong
+        static_assertions::assert_fields!($other: $($field),*);
+
+        // CLAUDE CODE, OPUS 4.8: Type check: never called, exists only so the compiler verifies
+        // each field in `$other` has exactly the type declared here.
+        // Anonymous `const _` avoids name collisions across invocations.
+        // Caveats: struct can't implement `Drop` and fields must be accessible at the call site.
+        const _: () = {
+            #[allow(dead_code)]
+            fn assert_field_types(other: $other) {
+                $( let _: $ty = other.$field; )*
+            }
+        };
+
+        $(#[$meta])*
+        struct $name {
+            $( $field: $ty ),*
         }
     };
 }
@@ -204,6 +335,25 @@ pub fn compare_to_netcdf_quantities<T, D, Q>(
 /// that returns each fenced block tagged with `tag` in each of the files
 /// listed in `files`. `files` may be anything that can become an iterator
 /// over pathlike objects.
+///
+/// This also recognizes two subtag types. If the starting line includes
+/// `#notest`, then that fenced block will be skipped by the iterator:
+///
+/// ````markdown
+/// ```toml #notest
+/// ...
+/// ```
+/// ````
+///
+/// If it include something starting with a `+`, that will be returned
+/// as the `subtag` field of [`FencedBlock`] (without the leading `+`):
+///
+/// ````markdown
+/// ```toml +constants
+/// ...
+/// ```
+/// ````
+
 pub fn iter_fenced_blocks<P, F, I>(tag: &str, files: I) -> FencedBlocks<P, F>
 where
     P: AsRef<Path>,
@@ -215,6 +365,7 @@ where
 
 pub struct FencedBlock {
     pub text: String,
+    pub subtag: Option<String>,
     pub file: PathBuf,
     pub line: usize,
 }
@@ -257,7 +408,13 @@ where
 
             if let Some(line) = opt_line {
                 if line.starts_with(&self.fence_start) && !line.contains("#notest") {
-                    return Some(self.get_block(self.line_num));
+                    // Get the first thing that starts with a "+"
+                    let subtag = line
+                        .split_ascii_whitespace()
+                        .filter(|s| s.starts_with('+'))
+                        .next()
+                        .map(|s| s.trim_start_matches('+').to_string());
+                    return Some(self.get_block(self.line_num, subtag));
                 }
             } else {
                 // Ran out of lines in the file, so set lines back to None so that we advance to the next file
@@ -296,7 +453,11 @@ where
         Some(Ok(()))
     }
 
-    fn get_block(&mut self, starting_line: usize) -> std::io::Result<FencedBlock> {
+    fn get_block(
+        &mut self,
+        starting_line_num: usize,
+        subtag: Option<String>,
+    ) -> std::io::Result<FencedBlock> {
         let mut text = String::new();
         // We should only be here if we found a line starting with the opening of
         // a fenced block, so the next line should be the actual first line of the fenced
@@ -306,7 +467,7 @@ where
                 Some(Ok(line)) => line,
                 Some(Err(e)) => return Err(e),
                 None => {
-                    let msg = format!("fenced block starting at line {starting_line} was still unclosed at the end of the file");
+                    let msg = format!("fenced block starting at line {starting_line_num} was still unclosed at the end of the file");
                     return Err(std::io::Error::other(msg));
                 }
             };
@@ -314,6 +475,7 @@ where
             if next_line.starts_with("```") {
                 let block = FencedBlock {
                     text,
+                    subtag,
                     file: self.curr_file.clone().unwrap(),
                     line: self.line_num,
                 };

@@ -1,3 +1,5 @@
+use std::cell::Cell;
+
 use chrono::Utc;
 use fortformat::de::FortValue;
 use indexmap::IndexMap;
@@ -105,7 +107,7 @@ impl ModRow {
         row: ExpandedSunrunRow,
         lua_engine: &mlua::Lua,
     ) -> Result<ExpandedSunrunRow, GggError> {
-        if !self.target.applies_to_row(&row) {
+        if !self.target.applies_to_row(&row, lua_engine)? {
             Ok(row)
         } else {
             self.change.apply(row, lua_engine)
@@ -132,30 +134,74 @@ pub(crate) enum ModRowTarget {
     },
 
     /// This edit applies to one specific spectrum.
-    Spectrum { spectrum: String },
+    Spectrum {
+        #[serde(deserialize_with = "de_glob_pattern")]
+        spectrum: glob::Pattern,
+    },
+
+    /// This edit applies if the lua condition given returns "true"
+    LuaCondition { condition: String },
+}
+
+fn de_glob_pattern<'de, D>(deserializer: D) -> Result<glob::Pattern, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let s = String::deserialize(deserializer)?;
+    glob::Pattern::new(&s).map_err(|e| serde::de::Error::custom(e.to_string()))
 }
 
 impl ModRowTarget {
-    fn applies_to_row(&self, row: &ExpandedSunrunRow) -> bool {
+    fn applies_to_row(
+        &self,
+        row: &ExpandedSunrunRow,
+        lua_engine: &mlua::Lua,
+    ) -> Result<bool, GggError> {
         match self {
             ModRowTarget::Range {
                 time_range,
                 lat_range,
                 lon_range,
             } => {
+                if time_range.1 <= time_range.0 {
+                    return Err(GggError::Custom(format!(
+                        "End time ({}) is less than or equal to the start time ({}) of an edit block",
+                        time_range.1, time_range.0
+                    )));
+                }
+                if lat_range.1 <= lat_range.0 {
+                    return Err(GggError::Custom(format!(
+                        "Max latitude ({}) is less than or equal to the min latitude ({}) of an edit block",
+                        lat_range.1, lat_range.0
+                    )));
+                }
+                if lon_range.1 <= lon_range.0 {
+                    return Err(GggError::Custom(format!(
+                        "Max longitude ({}) is less than or equal to the min longitude ({}) of an edit block",
+                        lon_range.1, lon_range.0
+                    )));
+                }
+
                 if row.zpd_time < time_range.0 || row.zpd_time > time_range.1 {
-                    return false;
+                    return Ok(false);
                 }
                 if row.oblat < lat_range.0 || row.oblat > lat_range.1 {
-                    return false;
+                    return Ok(false);
                 }
                 if row.oblon < lon_range.0 || row.oblon > lon_range.1 {
-                    return false;
+                    return Ok(false);
                 }
-                return true;
+                return Ok(true);
             }
-            // TODO: allow glob-like matching
-            ModRowTarget::Spectrum { spectrum } => return spectrum == &row.spectrum_file_name,
+            ModRowTarget::Spectrum { spectrum } => {
+                return Ok(spectrum.matches(&row.spectrum_file_name))
+            }
+            ModRowTarget::LuaCondition { condition } => {
+                set_row_in_lua(row, lua_engine)?;
+                let applies: bool = lua_engine.load(condition.as_str()).eval()
+                .map_err(|e| GggError::custom(format!("Error executing Lua condition code on sunrun row {:?}.\nCode was:\n\n{condition}\n\nError was:\n\n{e}", row)))?;
+                Ok(applies)
+            }
         }
     }
 }
@@ -177,6 +223,16 @@ pub(crate) struct ModRowValues {
     ///
     #[serde(default)]
     pub(crate) replace: IndexMap<String, FortValue>,
+
+    /// A string of Lua code that will be executed immediately before the first time it edits any row.
+    ///
+    /// This will only run once through the entirety of `create_sunrun_rs`. Any variables defined
+    /// here will be available to access in the `lua` string.
+    #[serde(default)]
+    pub(crate) init_lua: Option<String>,
+    #[serde(default)]
+    lua_init_run: Cell<bool>,
+
     /// A string of Lua code that edits the row.
     ///
     /// The row will be passed as the `r` variable, and the columns can be accessed
@@ -195,6 +251,19 @@ pub(crate) struct ModRowValues {
 }
 
 impl ModRowValues {
+    #[allow(unused)] // used in tests
+    fn new(
+        replace: IndexMap<String, FortValue>,
+        lua: Option<String>,
+        init_lua: Option<String>,
+    ) -> Self {
+        Self {
+            replace,
+            init_lua,
+            lua_init_run: Cell::new(false),
+            lua,
+        }
+    }
     /// Apply the defined edits to this row.
     ///
     /// Note that if this modification specifies multiple
@@ -255,18 +324,16 @@ impl ModRowValues {
         row: ExpandedSunrunRow,
         lua_engine: &mlua::Lua,
     ) -> Result<ExpandedSunrunRow, GggError> {
+        let globals = set_row_in_lua(&row, lua_engine)?;
+        if let (Some(init_str), false) = (self.init_lua.as_deref(), self.lua_init_run.get()) {
+            lua_engine.load(init_str).exec().map_err(|e| {
+                GggError::custom(format!(
+                    "Error initializing lua.\nCode was:\n\n{init_str}\n\nError was:\n\n{e}"
+                ))
+            })?;
+            self.lua_init_run.set(true);
+        }
         if let Some(lua_str) = self.lua.as_deref() {
-            let row_table = lua_engine.to_value(&row).map_err(|e| {
-                GggError::custom(format!(
-                    "Could not convert row into a Lua table, error was: {e}"
-                ))
-            })?;
-            let globals = lua_engine.globals();
-            globals.set("r", row_table).map_err(|e| {
-                GggError::custom(format!(
-                    "Error setting sunrun row as global variable in Lua, error was: {e}"
-                ))
-            })?;
             lua_engine.load(lua_str).exec().map_err(|e| {
                 GggError::custom(format!("Error executing Lua code on sunrun row {:?}.\nCode was:\n\n{lua_str}\n\nError was:\n\n{e}", row))
             })?;
@@ -286,6 +353,24 @@ impl ModRowValues {
             Ok(row)
         }
     }
+}
+
+fn set_row_in_lua(
+    row: &ExpandedSunrunRow,
+    lua_engine: &mlua::Lua,
+) -> Result<mlua::Table, GggError> {
+    let row_table = lua_engine.to_value(&row).map_err(|e| {
+        GggError::custom(format!(
+            "Could not convert row into a Lua table, error was: {e}"
+        ))
+    })?;
+    let globals = lua_engine.globals();
+    globals.set("r", row_table).map_err(|e| {
+        GggError::custom(format!(
+            "Error setting sunrun row as global variable in Lua, error was: {e}"
+        ))
+    })?;
+    Ok(globals)
 }
 
 /// Helper function to replace a string value in a row with one from the edit replacements map.
@@ -352,9 +437,10 @@ fn replace_float(
 
 #[cfg(test)]
 mod tests {
-    use std::assert_eq;
+    use std::{assert_eq, eprintln, path::PathBuf};
 
     use super::*;
+    use approx::assert_abs_diff_eq;
     use ggg_rs::test_utils::{utc_dt_ymd, TestResult};
 
     #[test]
@@ -383,13 +469,14 @@ mod tests {
                 lat_range: default_lat_range(),
                 lon_range: default_lon_range(),
             },
-            change: ModRowValues {
-                replace: IndexMap::from_iter([
+            change: ModRowValues::new(
+                IndexMap::from_iter([
                     ("tout".to_string(), FortValue::Real(25.0)),
                     ("pout".to_string(), FortValue::Real(1000.0)),
                 ]),
-                lua: Some("r.lasf = 1.1 * r.lasf".to_string()),
-            },
+                Some("r.lasf = 1.1 * r.lasf".to_string()),
+                None,
+            ),
         };
         assert_eq!(expected_mod_row, de_mod_row)
     }
@@ -410,13 +497,14 @@ mod tests {
                 lat_range: (45.0, 46.0),
                 lon_range: (-91.0, -90.0),
             },
-            change: ModRowValues {
-                replace: IndexMap::from_iter([
+            change: ModRowValues::new(
+                IndexMap::from_iter([
                     ("tout".to_string(), FortValue::Real(25.0)),
                     ("pout".to_string(), FortValue::Real(1000.0)),
                 ]),
-                lua: Some("r.lasf = 1.1 * r.lasf".to_string()),
-            },
+                Some("r.lasf = 1.1 * r.lasf".to_string()),
+                None,
+            ),
         };
         assert_eq!(expected_mod_row, de_mod_row)
     }
@@ -430,16 +518,302 @@ mod tests {
         let de_mod_row: ModRow = toml::from_str(toml_str).unwrap_print();
         let expected_mod_row = ModRow {
             target: ModRowTarget::Spectrum {
-                spectrum: "pa20040721saaaaa.043".to_string(),
+                spectrum: glob::Pattern::new("pa20040721saaaaa.043").unwrap(),
             },
-            change: ModRowValues {
-                replace: IndexMap::from_iter([
+            change: ModRowValues::new(
+                IndexMap::from_iter([
                     ("tout".to_string(), FortValue::Real(25.0)),
                     ("pout".to_string(), FortValue::Real(1000.0)),
                 ]),
-                lua: None,
-            },
+                None,
+                None,
+            ),
         };
         assert_eq!(expected_mod_row, de_mod_row)
+    }
+
+    #[test]
+    fn test_match_glob_pattern() {
+        let lua = mlua::Lua::new();
+
+        let test_matcher = ModRowTarget::Spectrum {
+            spectrum: glob::Pattern::new("pa20040721saaaa?.001").unwrap(),
+        };
+        let mut sunrun_row = ggg_rs::sunrun::ExpandedSunrunRow::default();
+        sunrun_row.spectrum_file_name = "pa20040721saaaaa.001".to_string();
+        assert!(
+            test_matcher.applies_to_row(&sunrun_row, &lua).unwrap(),
+            "Glob pattern did not match 'a' spectrum"
+        );
+        sunrun_row.spectrum_file_name = "pa20040721saaaab.001".to_string();
+        assert!(
+            test_matcher.applies_to_row(&sunrun_row, &lua).unwrap(),
+            "Glob pattern did not match 'b' spectrum"
+        );
+        sunrun_row.spectrum_file_name = "pa20040721saaaaa.002".to_string();
+        assert!(
+            !test_matcher.applies_to_row(&sunrun_row, &lua).unwrap(),
+            "Glob pattern incorrectly matched spectrum with different run number"
+        );
+
+        let test_matcher = ModRowTarget::Spectrum {
+            spectrum: glob::Pattern::new("pa20040721saaaa?.*").unwrap(),
+        };
+        for i in 1..10 {
+            sunrun_row.spectrum_file_name = format!("pa20040721saaaaa.{i:03}");
+            assert!(
+                test_matcher.applies_to_row(&sunrun_row, &lua).unwrap(),
+                "Glob * pattern did not match 'a' spectrum with varying extension: {}",
+                sunrun_row.spectrum_file_name
+            );
+
+            sunrun_row.spectrum_file_name = format!("oc20040721saaaaa.{i:03}");
+            assert!(
+                !test_matcher.applies_to_row(&sunrun_row, &lua).unwrap(),
+                "Glob * pattern incorrectly matched spectrum from different site with varying extension: {}",
+                sunrun_row.spectrum_file_name
+            );
+        }
+    }
+
+    #[test]
+    fn test_conditional_lua() {
+        let lua = mlua::Lua::new();
+        let mut sunrun_row = ggg_rs::sunrun::ExpandedSunrunRow::default();
+        sunrun_row.pout = 1000.0;
+        sunrun_row.tout = 25.0;
+        let test_matcher = ModRowTarget::LuaCondition {
+            condition: "r.pout > 900".to_string(),
+        };
+        assert!(
+            test_matcher.applies_to_row(&sunrun_row, &lua).unwrap(),
+            "Simple pout condition did not work"
+        );
+        let test_matcher = ModRowTarget::LuaCondition {
+            condition: "r.pout < 900 or r.tout > 20".to_string(),
+        };
+        assert!(
+            dbg!(test_matcher.applies_to_row(&sunrun_row, &lua).unwrap()),
+            "pout or tout condition did not work"
+        );
+        let test_matcher = ModRowTarget::LuaCondition {
+            condition: "r.pout > 900 and r.pout < 1100".to_string(),
+        };
+        assert!(
+            test_matcher.applies_to_row(&sunrun_row, &lua).unwrap(),
+            "pout and condition did not work"
+        );
+        let test_matcher = ModRowTarget::LuaCondition {
+            condition: "return r.pout > 900 and r.pout < 1100".to_string(),
+        };
+        assert!(
+            test_matcher.applies_to_row(&sunrun_row, &lua).unwrap(),
+            "statement with return did not work"
+        );
+        let test_matcher = ModRowTarget::LuaCondition {
+            condition: "   return r.pout > 900 and r.pout < 1100".to_string(),
+        };
+        assert!(
+            test_matcher.applies_to_row(&sunrun_row, &lua).unwrap(),
+            "statement with return and leading whitespace did not work"
+        );
+
+        let test_matcher = ModRowTarget::LuaCondition {
+            condition: "r.pout < 900".to_string(),
+        };
+        assert!(
+            !test_matcher.applies_to_row(&sunrun_row, &lua).unwrap(),
+            "negated statement did not work"
+        );
+
+        // NB, return is required for multi line conditions
+        let test_matcher = ModRowTarget::LuaCondition {
+            condition: "plim = 900\nreturn r.pout > plim".to_string(),
+        };
+        assert!(
+            test_matcher.applies_to_row(&sunrun_row, &lua).unwrap(),
+            "multiline statement did not work"
+        );
+
+        let test_matcher = ModRowTarget::LuaCondition {
+            condition: r#"
+            if r.pout > 900 then
+                return true
+            end
+            return r.tout < 20 or r.tout > 30
+            "#
+            .to_string(),
+        };
+        assert!(
+            test_matcher.applies_to_row(&sunrun_row, &lua).unwrap(),
+            "multiline statement with early return did not work"
+        );
+    }
+
+    #[test]
+    fn test_lua_edit_string() {
+        // construct a sunrun row to run through a Lua edit
+        let row = ExpandedSunrunRow::default();
+        let edit = ModRow {
+            target: ModRowTarget::LuaCondition {
+                condition: "true".to_string(),
+            },
+            change: ModRowValues::new(IndexMap::new(), Some("r.pout = 500.0".to_string()), None),
+        };
+        let lua = mlua::Lua::new();
+        let new_row = edit.apply(row, &lua).unwrap();
+        assert_abs_diff_eq!(new_row.pout, 500.0);
+    }
+
+    #[test]
+    fn test_lua_init() {
+        // use the lua init option to set a value used to edit
+        // rows
+        let row = ExpandedSunrunRow::default();
+        let edit = ModRow {
+            target: ModRowTarget::LuaCondition {
+                condition: "true".to_string(),
+            },
+            change: ModRowValues::new(
+                IndexMap::new(),
+                Some("r.pout = new_p".to_string()),
+                Some("new_p = 750.0".to_string()),
+            ),
+        };
+        let lua = mlua::Lua::new();
+        let new_row = edit.apply(row, &lua).unwrap();
+        assert_abs_diff_eq!(new_row.pout, 750.0);
+    }
+
+    #[test]
+    fn test_book_examples() {
+        // Since the book shows snippets of the configuration, we need to define
+        // structures that those snippets can deserialize into. (We don't want to
+        // make the fields in the main module optional, since they must be provided
+        // in normal use). Where possible, we check that both field names and types
+        // match the real structures. When we have to use a different type that has
+        // only the included fields, we have to just check the field names.
+        ggg_rs::test_struct_check_field_types! {
+            #[derive(Debug, Deserialize)]
+            struct InstrObj {
+                instrument: Instrument,
+                object: Object,
+            } : StaticSiteInfo
+        }
+
+        ggg_rs::test_struct_check_field_types! {
+            #[derive(Debug, Deserialize)]
+            struct Defaults {
+                defaults: SunrunDefaults,
+            } : StaticSiteInfo
+        }
+
+        ggg_rs::test_struct_check_field_types! {
+            #[derive(Debug, Deserialize)]
+            struct Detectors {
+                detectors: Vec<Detector>
+            } : StaticSiteInfo
+        }
+
+        ggg_rs::test_struct_check_fields! {
+            #[derive(Debug, Deserialize)]
+            struct OnlyInstObj {
+                constants: InstrObj
+            } : SiteConfig
+        }
+        ggg_rs::test_struct_check_fields! {
+            #[derive(Debug, Deserialize)]
+            struct OnlyDefaults {
+                constants: Defaults
+            } : SiteConfig
+        }
+
+        ggg_rs::test_struct_check_fields! {
+            #[derive(Debug, Deserialize)]
+            struct OnlyDetectors {
+                constants: Detectors
+            } : SiteConfig
+        }
+
+        ggg_rs::test_struct_check_field_types! {
+            #[derive(Debug, Deserialize)]
+            struct OnlyEdits {
+                edits: Vec<ModRow>
+            } : SiteConfig
+        }
+
+        // Now actually check the blocks, using the tags (e.g., "+defaults")
+        // in the fenced blocks to choose which structure to deserialize as.
+        let lua = mlua::Lua::new();
+        let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let book_subdir = crate_root.join("book/src/setup/create_sunrun_rs");
+        let md_files = book_subdir
+            .read_dir()
+            .expect("should be able to get files from the book subdir")
+            .map(|e| e.expect("should be able to get md files from book").path());
+        let block_iter = ggg_rs::test_utils::iter_fenced_blocks("toml", md_files);
+        for block in block_iter {
+            let block = block.expect("should be able to read fenced block");
+            let res = match block.subtag.as_deref() {
+                None => {
+                    eprintln!("Deserializing as full configuration");
+                    toml::from_str::<SiteConfig>(&block.text).map(|_| None)
+                }
+                Some("constants") => {
+                    eprintln!("Deserializing as OnlyConstants");
+                    toml::from_str::<OnlyInstObj>(&block.text).map(|_| None)
+                }
+                Some("defaults") => {
+                    eprintln!("Deserializing as OnlyDefaults");
+                    toml::from_str::<OnlyDefaults>(&block.text).map(|_| None)
+                }
+                Some("detectors") => {
+                    eprintln!("Deserializing as OnlyDetectors");
+                    toml::from_str::<OnlyDetectors>(&block.text).map(|_| None)
+                }
+                Some("edits") => {
+                    // TODO: test blocks with Lua to make sure the lua is valid -
+                    //
+                    eprintln!("Deserializing as OnlyEdits");
+                    toml::from_str::<OnlyEdits>(&block.text).map(|v| Some(v.edits))
+                }
+                Some(s) => {
+                    unimplemented!("Unimplemented subtag for site_config deserialization: {s}");
+                }
+            };
+            assert!(
+                res.is_ok(),
+                "could not deserialize an example in line {} of file {}:\n\n{}\n\nerror was\n\n{}",
+                block.line,
+                block.file.display(),
+                block.text,
+                res.unwrap_err()
+            );
+
+            if let Ok(Some(edits)) = res {
+                let lua_res = test_book_lua_snippet(&edits, &lua);
+                assert!(
+                    lua_res.is_ok(),
+                    "could not execute lua in example at line {} of file {}:\n\n{}\n\nerror was\n\n{}",
+                    block.line,
+                    block.file.display(),
+                    block.text,
+                    lua_res.unwrap_err()
+                )
+            }
+        }
+    }
+
+    fn test_book_lua_snippet(edits: &[ModRow], lua_engine: &mlua::Lua) -> Result<(), GggError> {
+        // We're not trying to check if the Lua gives the right values, just
+        // that it runs successfully.
+        let dummy_row = ExpandedSunrunRow::default();
+        for edit in edits {
+            if let ModRowTarget::LuaCondition { condition: _ } = edit.target {
+                edit.target.applies_to_row(&dummy_row, lua_engine)?;
+            }
+            edit.change.do_lua(dummy_row.clone(), lua_engine)?;
+        }
+        Ok(())
     }
 }

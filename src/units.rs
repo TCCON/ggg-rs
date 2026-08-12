@@ -81,7 +81,7 @@ pub fn convert_array<Q, T, D>(
     units: &str,
 ) -> Result<ndarray::Array<Q, D>, UnknownUnitError>
 where
-    T: Copy + netcdf::NcTypeDescriptor,
+    T: Copy,
     D: ndarray::Dimension,
     Q: std::str::FromStr<Err = uom::str::ParseQuantityError> + Copy + std::ops::Mul<T, Output = Q>,
 {
@@ -98,7 +98,7 @@ where
 /// scalar quantity rather than an array.
 pub fn convert_scalar<Q, T>(value: T, units: &str) -> Result<Q, UnknownUnitError>
 where
-    T: Copy + netcdf::NcTypeDescriptor,
+    T: Copy,
     Q: std::str::FromStr<Err = uom::str::ParseQuantityError> + Copy + std::ops::Mul<T, Output = Q>,
 {
     let uom_units = crate::units::uom_unit(&units);
