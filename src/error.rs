@@ -229,3 +229,57 @@ impl WriteError {
         Self::ConvertError(reason.into())
     }
 }
+
+/// An adaptor trait that allows converting [`error_stack::Report`] errors into standard error types.
+///
+/// This makes `error_stack::Report`s easier to convert into errors that crates
+/// like `eyre` or `anyhow` can wrap; a `Report` does not implement [`std::error::Error`],
+/// but calling `.adapt_err()` from this trait on a `Result<_, Report>` will convert
+/// it to a `Result` with a standard error-compatible error type that retains
+/// as much of the report's context as possible.
+pub trait ErrStackAdaptor<T, C: error_stack::Context + std::error::Error> {
+    fn adapt_err(self) -> Result<T, ErrStackCompat<C>>;
+}
+
+impl<T, C: error_stack::Context + std::error::Error> ErrStackAdaptor<T, C>
+    for Result<T, error_stack::Report<C>>
+{
+    fn adapt_err(self) -> Result<T, ErrStackCompat<C>> {
+        match self {
+            Ok(val) => Ok(val),
+            Err(err) => Err(ErrStackCompat::from(err)),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct ErrStackCompat<C>(pub error_stack::Report<C>);
+
+impl<C> Display for ErrStackCompat<C> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl<C: error_stack::Context + std::error::Error> std::error::Error for ErrStackCompat<C> {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        // We can't expose error_stack's internal frames as `dyn Error`
+        // (attachments can be arbitrary types), but we can at least
+        // surface the innermost context as the "cause".
+        Some(self.0.current_context())
+    }
+}
+
+impl<C> From<error_stack::Report<C>> for ErrStackCompat<C> {
+    fn from(report: error_stack::Report<C>) -> Self {
+        ErrStackCompat(report)
+    }
+}
+
+// Lets you call `.current_context()`, `.frames()`, etc. straight through.
+impl<C> std::ops::Deref for ErrStackCompat<C> {
+    type Target = error_stack::Report<C>;
+    fn deref(&self) -> &error_stack::Report<C> {
+        &self.0
+    }
+}
