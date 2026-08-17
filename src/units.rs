@@ -1,4 +1,6 @@
-use std::fmt::Display;
+use std::{fmt::Display, str::FromStr};
+
+use serde_with::serde_as;
 
 #[derive(Debug)]
 pub struct UnknownUnitError {
@@ -52,6 +54,75 @@ pub(crate) fn uom_unit(orig_unit: &str) -> &str {
         "degrees_north" => "°",
         "degrees_east" => "°",
         _ => orig_unit,
+    }
+}
+
+/// A marker type for deserializing unit-aware quantities.
+///
+/// [`uom`] does not provide `serde` implementations for its
+/// quantities. To deserialize these from configuration files,
+/// we need to use an intermediate type like this.
+///
+/// To use, you will need the [`serde_with`] crate and to annotate
+/// the structure being deserialized with the `#[serde_with::serde_as]`
+/// attribute before the `#[derive(serde::Deserialize)]` one.
+/// Then annotate the fields containing `uom` `Quantity` types
+/// with `#[serde_as(as = ...)` like in the following example:
+///
+/// ```rust
+/// # use ggg_rs::units::DeQuantity;
+/// #[serde_with::serde_as]
+/// #[derive(serde::Deserialize)]
+/// struct UnitAwareConfig {
+///     #[serde_as(as = "DeQuantity")]
+///     p_scalar: uom::si::f64::Pressure,
+///     #[serde_as(as = "Vec<DeQuantity>")]
+///     p_vector: Vec<uom::si::f64::Pressure>,
+///     #[serde_as(as = "Option<DeQuantity>")]
+///     p_option: Option<uom::si::f64::Ratio>,
+///     #[serde_as(as = "[DeQuantity; 3]")]
+///     p_array: [uom::si::f64::Ratio; 3],
+/// }
+/// ```
+///
+/// Note that `serde_as` only natively supports standard Rust types,
+/// so deserializing to an [`ndarray::Array`] can't be done, for instance.
+pub struct DeQuantity;
+
+impl<'de, Q> serde_with::DeserializeAs<'de, Q> for DeQuantity
+where
+    Q: FromStr<Err = uom::str::ParseQuantityError>,
+{
+    fn deserialize_as<D>(deserializer: D) -> Result<Q, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let s: std::borrow::Cow<'de, str> = serde::Deserialize::deserialize(deserializer)?;
+        let res1 = Q::from_str(&s);
+
+        let err1 = match res1 {
+            Ok(q) => return Ok(q),
+            Err(e) => e,
+        };
+
+        if let Some((valstr, unitstr)) = s.split_once(char::is_whitespace) {
+            let newunit = uom_unit(unitstr);
+            if newunit != unitstr {
+                let newstr = format!("{valstr} {newunit}");
+                match Q::from_str(&newstr) {
+                        Ok(q) => return Ok(q),
+                        Err(_) => {
+                            return Err(serde::de::Error::custom(format!(
+                                "Unable to parse value strings '{s}' or '{newstr}' as a unit-aware quantity: {err1}"
+                            )))
+                        }
+                    }
+            }
+        }
+
+        Err(serde::de::Error::custom(format!(
+            "Unable to parse value string '{s}' as a unit-aware quantity: {err1}"
+        )))
     }
 }
 
@@ -163,6 +234,7 @@ fn pascals_to(pres_unit: &str) -> Result<f32, UnknownUnitError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use uom::si::pressure::hectopascal;
 
     #[test]
     fn test_convert_scalar() {
@@ -170,5 +242,70 @@ mod tests {
         let n_hr = n.get::<uom::si::time::hour>();
         eprintln!("n = {n:?}, n_hr = {n_hr}");
         assert_eq!(n_hr, 24.0);
+    }
+
+    // #[test]
+    // fn test_deserialize_sq() {
+    //     #[derive(serde::Deserialize)]
+    //     struct Test {
+    //         q: SerdeQuantity<uom::si::f64::Pressure>,
+    //     }
+    //     let s = "q = '1013.0 hPa'";
+    //     let test_struct: Test = toml::from_str(s).unwrap();
+    //     assert_eq!(
+    //         test_struct.q.0,
+    //         uom::si::f64::Pressure::new::<hectopascal>(1013.0)
+    //     )
+    // }
+
+    #[test]
+    fn test_deserialize_quantity_via_as() {
+        #[serde_with::serde_as]
+        #[derive(serde::Deserialize)]
+        struct Test {
+            #[serde_as(as = "DeQuantity")]
+            q: uom::si::f64::Pressure,
+        }
+
+        // Check that units are accounted for, and the deserialized
+        // value equals the expected.
+        let s = "q = '1013.0 hPa'";
+        let test_struct: Test = toml::from_str(s).unwrap();
+        assert_eq!(
+            test_struct.q,
+            uom::si::f64::Pressure::new::<hectopascal>(1013.0)
+        );
+
+        // Check the converse, that deserializing with the wrong
+        // units results in a mismatch...
+        let s = "q = '1013.0 Pa'";
+        let test_struct: Test = toml::from_str(s).unwrap();
+        assert_ne!(
+            test_struct.q,
+            uom::si::f64::Pressure::new::<hectopascal>(1013.0)
+        );
+
+        // ...but that magnitudes are equal after proper unit conversion.
+        let s = "q = '101300.0 Pa'";
+        let test_struct: Test = toml::from_str(s).unwrap();
+        assert_eq!(
+            test_struct.q,
+            uom::si::f64::Pressure::new::<hectopascal>(1013.0)
+        );
+
+        // And finally, check that this works inside a container.
+        #[serde_with::serde_as]
+        #[derive(serde::Deserialize)]
+        struct TestVec {
+            #[serde_as(as = "Vec<DeQuantity>")]
+            v: Vec<uom::si::f64::Pressure>,
+        }
+        let s = "v = ['1013.0 hPa', '101300.0 Pa']";
+        let test_struct: TestVec = toml::from_str(s).unwrap();
+        let expected = vec![
+            uom::si::f64::Pressure::new::<hectopascal>(1013.0),
+            uom::si::f64::Pressure::new::<hectopascal>(1013.0),
+        ];
+        assert_eq!(test_struct.v, expected);
     }
 }
