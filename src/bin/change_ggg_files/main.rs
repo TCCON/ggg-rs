@@ -1,15 +1,15 @@
 use std::{
     ffi::OsString,
-    io::{BufRead, BufReader, Write},
+    fmt::Write as _,
+    io::{BufRead, Seek, SeekFrom, Write},
     os::unix::ffi::OsStrExt,
     path::{Path, PathBuf},
     process::ExitCode,
 };
 
-use clap::Parser;
+use clap::{ArgAction, Parser};
 use error_stack::ResultExt;
 use ggg_rs::utils;
-use itertools::Itertools;
 
 fn main() -> ExitCode {
     let args = Cli::parse();
@@ -52,7 +52,7 @@ struct Cli {
     /// Directory, or directory pattern, to save the spectral fit files
     /// under. The substring {WINDOW} will be replaced with the window name
     /// for the current .ggg file, e.g. "co2_6220".
-    #[clap(short = 's', long)]
+    #[clap(long, visible_alias = "spt-pattern")]
     spt_output_pattern: Option<String>,
 
     /// The maximum number of spectral fit files to allow GGG to write.
@@ -62,12 +62,25 @@ struct Cli {
     /// Directory, or directory pattern, to save the averaging kernel files
     /// under. The substring {WINDOW} will be replaced with the window name
     /// for the current .ggg file, e.g. "co2_6220"
-    #[clap(short = 'a', long)]
+    #[clap(long, visible_alias = "ak-pattern")]
     ak_output_pattern: Option<String>,
 
     /// The maximum number of averaging kernel files to allow GGG to write.
     #[clap(long, visible_alias = "ak-limit")]
     ak_output_limit: Option<u64>,
+
+    /// Add "ak" to the .ggg file(s)' command line to tell GFIT to output
+    /// Jacobian files. This is implied if either --ak-output-pattern or
+    /// --ak-output-limit are given.
+    #[clap(short = 'a', long, action = ArgAction::SetTrue)]
+    add_ak_cmd: bool,
+
+    /// Strictly do not add "ak" to the .ggg file(s)' command line so GFIT
+    /// will not output Jacobian files. This overrides both a previous
+    /// --add-ak-cmd and any implicit intent to do this if --ak-output-pattern
+    /// or --ak-output-limit are given.
+    #[clap(long, overrides_with = "add_ak_cmd", action = ArgAction::SetTrue)]
+    no_add_ak_cmd: bool,
 
     /// Set this flag to create the spectral fit and averaging kernel output
     /// directories if they don't exist.
@@ -114,6 +127,22 @@ impl Cli {
         Ok(out)
     }
 
+    /// Handles the interaction of the various AK-related flags to
+    /// determine if we add "ak" to the .ggg file(s) command line.
+    fn do_add_ak_cmd(&self) -> bool {
+        if self.add_ak_cmd {
+            return true;
+        }
+        if self.no_add_ak_cmd {
+            return false;
+        }
+        if self.ak_output_pattern.is_some() || self.ak_output_limit.is_some() {
+            return true;
+        }
+
+        false
+    }
+
     fn no_op(&self) -> bool {
         if self.ak_output_pattern.is_some() {
             return false;
@@ -125,6 +154,9 @@ impl Cli {
             return false;
         }
         if self.spt_output_limit.is_some() {
+            return false;
+        }
+        if self.do_add_ak_cmd() {
             return false;
         }
 
@@ -147,16 +179,6 @@ enum CliError {
 }
 
 fn modify_ggg_file(ggg_file: &Path, args: &Cli) -> error_stack::Result<(), CliError> {
-    let f = std::fs::File::open(ggg_file).change_context_lazy(|| CliError::IoError)?;
-    let f = BufReader::new(f);
-    let lines: Vec<String> = f
-        .lines()
-        .try_collect()
-        .change_context_lazy(|| CliError::IoError)
-        .attach_printable_lazy(|| format!("Could not read lines from {}", ggg_file.display()))?;
-
-    let mut out = std::fs::File::create(ggg_file).change_context_lazy(|| CliError::IoError)?;
-
     // This uses an unsafe operation, but since we only split the bytes of the file name on an ASCII .,
     // there is no reason that the slice of bytes leading up to that should be an invalid OsStr.
     let window = ggg_file
@@ -183,8 +205,20 @@ fn modify_ggg_file(ggg_file: &Path, args: &Cli) -> error_stack::Result<(), CliEr
         )
     })?;
 
-    for (i, line) in lines.into_iter().enumerate() {
-        let new_line = if i == 14 {
+    let mut f = ggg_rs::utils::FileBuf::open(ggg_file).change_context_lazy(|| CliError::IoError)?;
+
+    let nhead = ggg_rs::utils::get_nhead(&mut f).change_context_lazy(|| CliError::IoError)?;
+    f.seek(SeekFrom::Start(0))
+        .change_context_lazy(|| CliError::IoError)
+        .attach_printable_lazy(|| {
+            "Failed to rewrite .ggg file to start after reading number of lines"
+        })?;
+    let mut out_lines = vec![];
+
+    for (i, line) in f.lines().enumerate() {
+        let line = line.change_context_lazy(|| CliError::IoError)?;
+        let line_num = i + 1;
+        let new_line = if line_num == 15 {
             // AK line
             make_output_line(
                 &window,
@@ -194,7 +228,7 @@ fn modify_ggg_file(ggg_file: &Path, args: &Cli) -> error_stack::Result<(), CliEr
                 args.make_output_dirs,
             )
             .change_context_lazy(|| CliError::InFile(ggg_file.to_path_buf()))?
-        } else if i == 15 {
+        } else if line_num == 16 {
             // Spectral fit line
             make_output_line(
                 &window,
@@ -204,10 +238,18 @@ fn modify_ggg_file(ggg_file: &Path, args: &Cli) -> error_stack::Result<(), CliEr
                 args.make_output_dirs,
             )
             .change_context_lazy(|| CliError::InFile(ggg_file.to_path_buf()))?
+        } else if line_num == nhead && args.do_add_ak_cmd() {
+            add_to_cmd_line(&line, &["ak"])
+                .change_context_lazy(|| CliError::InFile(ggg_file.to_path_buf()))?
         } else {
             line
         };
 
+        out_lines.push(new_line);
+    }
+
+    let mut out = std::fs::File::create(ggg_file).change_context_lazy(|| CliError::IoError)?;
+    for (i, new_line) in out_lines.into_iter().enumerate() {
         writeln!(&mut out, "{new_line}")
             .change_context_lazy(|| CliError::IoError)
             .attach_printable_lazy(|| {
@@ -270,4 +312,28 @@ fn make_output_line(
     }
 
     Ok(new_line)
+}
+
+fn add_to_cmd_line(cmd_line: &str, new_cmds: &[&str]) -> error_stack::Result<String, CliError> {
+    let delim = if cmd_line.contains("sf=") {
+        "sf="
+    } else if cmd_line.contains(":") {
+        ":"
+    } else {
+        return Err(CliError::FileFormatError(
+            "Expected command line of .ggg file to contain 'sf=' or ':', but neither found"
+                .to_string(),
+        )
+        .into());
+    };
+
+    // We know that cmd_line was the delimiter in it, so safe to unwrap.
+    let (pre, post) = cmd_line.split_once(delim).unwrap();
+    let mut buf = String::new();
+    write!(&mut buf, "{}", pre.trim_end()).expect("Should be able to write to an in-memory string");
+    for cmd in new_cmds {
+        write!(&mut buf, " {cmd}").expect("Should be able to write to an in-memory string");
+    }
+    write!(&mut buf, " sf={post}").expect("Should be able to write to an in-memory string");
+    Ok(buf)
 }
