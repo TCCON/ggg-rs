@@ -29,9 +29,9 @@ jobs:
         with:
           crate: mdbook-linkcheck
       - run: mdbook build "./book"
-      - run: ls ./book/book/index.html
+      - run: ls ./book/book/html/index.html
       - name: Deploy
         uses: peaceiris/actions-gh-pages@4f9cc6602d3f66b9c108549d475ec49e8ef4d45e
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: "./book/book"
+          publish_dir: "./book/book/html"
