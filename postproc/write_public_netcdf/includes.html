@@ -209,6 +209,21 @@ If you have a global set of configuration files that use <code>include</code>, f
 it is best to use absolute paths in their respective <code>include</code> sections.</p>
 </div>
 </div>
+<h2 id="special-includes"><a class="header" href="#special-includes">Special includes</a></h2>
+<p>Four of the configurations under <code>included_configs</code> that are bundled with the
+public netCDF writer can be accessed with specials strings:</p>
+<ul>
+<li><code>"COMMON"</code> - <code>common.toml</code></li>
+<li><code>"TCCON_STANDARD"</code> - <code>tccon_standard.toml</code></li>
+<li><code>"TCCON_EXTENDED"</code> - <code>tccon_extended.toml</code></li>
+<li><code>"EM27SUN_STANDARD"</code> - <code>em27sum_standard.toml</code></li>
+</ul>
+<p>You would use these strings in the <code>include</code> option just like a path, e.g.:</p>
+<pre><code class="language-toml #notest">include = ["COMMON"]
+</code></pre>
+<p>These special configurations are compiled into <code>write_public_netcdf</code>, so accessing
+them via these strings means you do not need to worry about making sure the
+paths are correct.</p>
 <h2 id="how-configurations-are-combined"><a class="header" href="#how-configurations-are-combined">How configurations are combined</a></h2>
 <p>Internally, <code>write_public_netcdf</code> uses the <code>figment</code> crate to combine the configurations.
 Specifically, it uses the <a href="https://docs.rs/figment/latest/figment/struct.Figment.html#conflict-resolution">"adjoin" conflict resolution strategy</a>.
@@ -264,6 +279,7 @@ simply creating one large configuration file with the necessary parts of the oth
 files copied into it.</p>
 </div>
 </div>
+
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
