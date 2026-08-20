@@ -29,6 +29,26 @@ If you have a global set of configuration files that use `include`, for now,
 it is best to use absolute paths in their respective `include` sections.
 ```
 
+## Special includes
+
+Four of the configurations under `included_configs` that are bundled with the
+public netCDF writer can be accessed with specials strings:
+
+- `"COMMON"` - `common.toml`
+- `"TCCON_STANDARD"` - `tccon_standard.toml`
+- `"TCCON_EXTENDED"` - `tccon_extended.toml`
+- `"EM27SUN_STANDARD"` - `em27sum_standard.toml`
+
+You would use these strings in the `include` option just like a path, e.g.:
+
+```toml #notest
+include = ["COMMON"]
+```
+
+These special configurations are compiled into `write_public_netcdf`, so accessing
+them via these strings means you do not need to worry about making sure the
+paths are correct.
+
 ## How configurations are combined
 
 Internally, `write_public_netcdf` uses the `figment` crate to combine the configurations.
