@@ -14,7 +14,7 @@ A group will indicate an observation should be flagged if all of the filters in 
 it should be flagged.
 
 The first example shows how you would define a TOML file that duplicates the filter we used
-in the [quick filter example](/postproc/add_nc_flags.html#quick-flagging):
+in the [quick filter example](./add_nc_flags.md#quick-flagging):
 
 ```toml
 [[groups]]

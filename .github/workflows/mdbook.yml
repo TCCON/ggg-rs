@@ -23,6 +23,11 @@ jobs:
         uses: baptiste0928/cargo-install@f204293d9709061b7bc1756fec3ec4e2cd57dec0
         with:
           crate: mdbook-admonish
+      - name: Install mdbook-admonish
+        # Pinned to v3 commit on 26 Mar 2026
+        uses: baptiste0928/cargo-install@f204293d9709061b7bc1756fec3ec4e2cd57dec0
+        with:
+          crate: mdbook-linkcheck
       - run: mdbook build "./book"
       - run: ls ./book/book/index.html
       - name: Deploy

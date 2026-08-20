@@ -17,7 +17,7 @@ $GGGPATH/bin/apply_tccon_insitu_correction CORRECTION_FILE VAV_ADA_FILE
 ```
 
 The `CORRECTION_FILE` will usually be one of those supplied with GGG, in the `$GGGPATH/tccon` subdirectory.
-See [the configuration section](/postproc/corrections/insitu_correction_file.html) for the details of this
+See [the configuration section](./corrections/insitu_correction_file.md) for the details of this
 file's format if you need to modify one or create your own.
 
 ## Use in TCCON standard processing

@@ -50,7 +50,7 @@ If you need to customize which variables are copied, you must create your own co
 $GGGPATH/bin/write_public_netcdf --config CUSTOM_CONFIG.toml PRIVATE_NC_FILE
 ```
 
-For information on the configuration file format, see [its section of this book](/write_public_netcdf/configuration.html).
+For information on the configuration file format, see [its section of this book](./write_public_netcdf/configuration.html).
 
 To withhold the newest data from the public file, you can use the `--data-latency-date` or `--data-latency-days` options
 to specify either a number of days in the past from today or a specific date after which to withhold data.

@@ -92,7 +92,7 @@ or to a copy of it:
 $GGGPATH/bin/add_nc_flags toml TOML_FILE --output NEW_NC_FILE --nc-file PRIVATE_NC_FILE
 ```
 
-For details on the TOML file settings, see the [following section](/postproc/add_nc_flags_toml.html).
+For details on the TOML file settings, see the [following section](./add_nc_flags_toml.md).
 
 ## Use in TCCON standard processing
 
