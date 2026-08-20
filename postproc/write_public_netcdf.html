@@ -221,7 +221,7 @@ To use the extended TCCON configuration (which will include gases from the secon
 <p>If you need to customize which variables are copied, you must create your own configuration TOML file and pass it to the <code>--config</code> option:</p>
 <pre><code class="language-bash">$GGGPATH/bin/write_public_netcdf --config CUSTOM_CONFIG.toml PRIVATE_NC_FILE
 </code></pre>
-<p>For information on the configuration file format, see <a href="/write_public_netcdf/configuration.html">its section of this book</a>.</p>
+<p>For information on the configuration file format, see <a href="./write_public_netcdf/configuration.html">its section of this book</a>.</p>
 <p>To withhold the newest data from the public file, you can use the <code>--data-latency-date</code> or <code>--data-latency-days</code> options
 to specify either a number of days in the past from today or a specific date after which to withhold data.</p>
 <pre><code class="language-bash">$GGGPATH/bin/write_public_netcdf --data-latency-date 2025-01-01 PRIVATE_NC_FILE

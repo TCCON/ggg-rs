@@ -188,11 +188,12 @@ ch4 = "methane"
 co = "carbon monoxide"
 </code></pre>
 <p>Note that the keys are the gases, not Xgases.
-A default list is included if not turned off in the <a href="/write_public_netcdf/defaults.html"><code>[Defaults]</code></a> section.
+A default list is included if not turned off in the <a href="./defaults.html"><code>[Defaults]</code></a> section.
 See the source code for <a href="https://github.com/TCCON/ggg-rs/blob/main/src/bin/write_public_netcdf/constants.rs"><code>DEFAULT_GAS_LONG_NAMES</code></a> for the current list.
 You can override any of those without turning off the defaults; e.g., setting <code>h2o = "dihydrogen monoxide"</code> in this section will replace the default of "water".</p>
-<p>Of course, when <a href="/write_public_netcdf/explicit_xgases.html">explicitly defining an Xgas to copy</a>, you can write in the proper name as the <code>gas_long</code> value.
-The <code>[gas_long_names]</code> section is most useful for automatically discovered Xgases, but it can also be useful when defining multiple Xgas variables that refer to the same physical gas, as the <a href="https://github.com/TCCON/ggg-rs/blob/main/src/bin/write_public_netcdf/tccon_configs/standard.toml">standard TCCON configuration</a> does with CO2.</p>
+<p>Of course, when <a href="./explicit_xgases.html">explicitly defining an Xgas to copy</a>, you can write in the proper name as the <code>gas_long</code> value.
+The <code>[gas_long_names]</code> section is most useful for automatically discovered Xgases, but it can also be useful when defining multiple Xgas variables that refer
+to the same physical gas, as the <a href="https://github.com/TCCON/ggg-rs/blob/main/src/bin/write_public_netcdf/tccon_configs/standard.toml">standard TCCON configuration</a> does with CO<sub>2</sub>.</p>
 
                     </main>
 

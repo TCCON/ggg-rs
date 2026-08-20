@@ -430,7 +430,7 @@ by <code>average_results</code>):</p>
 <pre><code class="language-bash">$GGGPATH/bin/apply_tccon_airmass_correction CORRECTION_FILE VSW_OR_VAV_FILE
 </code></pre>
 <p>The <code>CORRECTION_FILE</code> will usually be one of those supplied with GGG, in the <code>$GGGPATH/tccon</code> subdirectory.
-See <a href="postproc//postproc/corrections/airmass_correction_file.html">the configuration section</a> for the details of this
+See <a href="postproc/./corrections/airmass_correction_file.html">the configuration section</a> for the details of this
 file's format if you need to modify one or create your own.</p>
 <h2 id="use-in-tccon-standard-processing-2"><a class="header" href="#use-in-tccon-standard-processing-2">Use in TCCON standard processing</a></h2>
 <p>For TCCON standard processing, the <code>CORRECTION_FILE</code> <em>must</em> be <code>$GGGPATH/tccon/corrections_airmass_preavg.dat</code>,
@@ -561,7 +561,7 @@ a path to either a <code>.vav.ada</code> file, created by <code>apply_tccon_airm
 <pre><code class="language-bash">$GGGPATH/bin/apply_tccon_insitu_correction CORRECTION_FILE VAV_ADA_FILE
 </code></pre>
 <p>The <code>CORRECTION_FILE</code> will usually be one of those supplied with GGG, in the <code>$GGGPATH/tccon</code> subdirectory.
-See <a href="postproc//postproc/corrections/insitu_correction_file.html">the configuration section</a> for the details of this
+See <a href="postproc/./corrections/insitu_correction_file.html">the configuration section</a> for the details of this
 file's format if you need to modify one or create your own.</p>
 <h2 id="use-in-tccon-standard-processing-3"><a class="header" href="#use-in-tccon-standard-processing-3">Use in TCCON standard processing</a></h2>
 <p>For TCCON standard processing, the <code>CORRECTION_FILE</code> <em>must</em> be <code>$GGGPATH/tccon/corrections_insitu_postavg.dat</code>,
@@ -704,7 +704,7 @@ As with the <code>quick</code> subcommand, flags can be applied to the existing 
 <p>or to a copy of it:</p>
 <pre><code class="language-bash">$GGGPATH/bin/add_nc_flags toml TOML_FILE --output NEW_NC_FILE --nc-file PRIVATE_NC_FILE
 </code></pre>
-<p>For details on the TOML file settings, see the <a href="postproc//postproc/add_nc_flags_toml.html">following section</a>.</p>
+<p>For details on the TOML file settings, see the <a href="postproc/./add_nc_flags_toml.html">following section</a>.</p>
 <h2 id="use-in-tccon-standard-processing-4"><a class="header" href="#use-in-tccon-standard-processing-4">Use in TCCON standard processing</a></h2>
 <p>This program is not used by default in TCCON post processing.
 (That is, it will not be included in the <code>post_processing.sh</code> script.)
@@ -726,7 +726,7 @@ indicate that it should be.
 A group will indicate an observation should be flagged if all of the filters in that group indicate
 it should be flagged.</p>
 <p>The first example shows how you would define a TOML file that duplicates the filter we used
-in the <a href="postproc//postproc/add_nc_flags.html#quick-flagging">quick filter example</a>:</p>
+in the <a href="postproc/./add_nc_flags.html#quick-flagging">quick filter example</a>:</p>
 <pre><code class="language-toml">[[groups]]
 [[groups.filters]]
 filter_var = "o2_7885_rmsocl"
@@ -931,7 +931,7 @@ To use the extended TCCON configuration (which will include gases from the secon
 <p>If you need to customize which variables are copied, you must create your own configuration TOML file and pass it to the <code>--config</code> option:</p>
 <pre><code class="language-bash">$GGGPATH/bin/write_public_netcdf --config CUSTOM_CONFIG.toml PRIVATE_NC_FILE
 </code></pre>
-<p>For information on the configuration file format, see <a href="postproc//write_public_netcdf/configuration.html">its section of this book</a>.</p>
+<p>For information on the configuration file format, see <a href="postproc/./write_public_netcdf/configuration.html">its section of this book</a>.</p>
 <p>To withhold the newest data from the public file, you can use the <code>--data-latency-date</code> or <code>--data-latency-days</code> options
 to specify either a number of days in the past from today or a specific date after which to withhold data.</p>
 <pre><code class="language-bash">$GGGPATH/bin/write_public_netcdf --data-latency-date 2025-01-01 PRIVATE_NC_FILE
@@ -1044,14 +1044,14 @@ These come in two variants:</p>
 <ol>
 <li>Suffix rules: these look for variables that start with something starting with an Xgas-like pattern
 and ending in the given suffix. The full regex is <code>^x([a-z][a-z0-9]*)_{suffix}$</code>, where <code>{suffix}</code> is the provided suffix.
-Note that the suffix is passed through [<code>regex::escape</code>] to ensure that any special characters are escaped; it will only
-be treated as a literal.</li>
+Note that the suffix is passed through <a href="https://docs.rs/regex/latest/regex/fn.escape.html"><code>regex::escape</code></a>
+to ensure that any special characters are escaped; it will only be treated as a literal.</li>
 <li>Regex rules: these allow you to specify a regular expression to match variables names. The regex <em>must</em> include a named
 capture group with the name "gas" that extracts the physical gas abbreviation (i.e., the <code>gas</code> value in an <code>Xgas</code> entry).
 This looks like <code>(?&lt;gas&gt;...)</code> where the <code>...</code> is the regular subexpression that matches that part of the string.</li>
 </ol>
 <p>By default, the configuration will add a single regex rule that matches the pattern <code>^x(?&lt;gas&gt;[a-z][a-z0-9]*)$</code>.
-You can disable this by setting <code>xgas_rules = false</code> in the <a href="postproc/write_public_netcdf//write_public_netcdf/defaults.html"><code>[defaults]</code></a> section of the config.
+You can disable this by setting <code>xgas_rules = false</code> in the <a href="postproc/write_public_netcdf/./defaults.html"><code>[defaults]</code></a> section of the config.
 This rule is designed to match basic Xgas variables, e.g., "xch4", "xn2o", etc.</p>
 <p>An example of a regular expression rule that uses the default ways to infer its ancillary variables is:</p>
 <pre><code class="language-toml">[[discovery.rule]]
@@ -1087,7 +1087,7 @@ traceability_scale = { type = "omit" }
 </code></pre>
 <h2 id="ancillary-variables"><a class="header" href="#ancillary-variables">Ancillary variables</a></h2>
 <p>The rules also include default settings for the prior profile, prior column average, averaging kernel (and its slant Xgas bins), and the traceability scale.
-These can be specified the same way as described <a href="postproc/write_public_netcdf//postproc/write_public_netcdf/explicit_xgases.html#ancillary-variable-specifications">in the Xgases ancillary subsection</a>,
+These can be specified the same way as described <a href="postproc/write_public_netcdf/./explicit_xgases.html#ancillary-variable-specifications">in the Xgases ancillary subsection</a>,
 and the defaults are the same as well.
 However only the <code>inferred</code> and <code>omit</code> types may be used, as <code>specified</code> does not make sense when a rule may apply to more than one Xgas.</p>
 <p>The following list gives the TOML <code>key</code> for that field and what variable it relates to.</p>
@@ -1100,7 +1100,7 @@ However only the <code>inferred</code> and <code>omit</code> types may be used, 
 <li><code>traceability_scale</code>: the metrological measurement scale to which the Xgas data are tied.</li>
 </ul>
 <p>Note that <code>slant_bin</code> is only needed if AKs are copied, so it behaves as if set to "inferred_if_first".
-How each of these variable names are inferred if needed is described in the <a href="postproc/write_public_netcdf//postproc/write_public_netcdf/explicit_xgases.html#ancillary-variable-name-inference">Xgas section</a>.</p>
+How each of these variable names are inferred if needed is described in the <a href="postproc/write_public_netcdf/./explicit_xgases.html#ancillary-variable-name-inference">Xgas section</a>.</p>
 <h2 id="exclusions"><a class="header" href="#exclusions">Exclusions</a></h2>
 <p>The second part of the discovery section are lists of gases or variables to exclude.
 The first option is <code>excluded_xgas_variables</code>.
@@ -1118,7 +1118,7 @@ However, O2 measured on a silicon detector may be useful, so we do not want to e
 "th2o" is temperature sensitive water, which is generally confusing for the average user, so we want to ensure that it is also excluded from every detector.</p>
 <div style="break-before: page; page-break-before: always;"></div><h1 id="explicitly-specified-xgases"><a class="header" href="#explicitly-specified-xgases">Explicitly specified Xgases</a></h1>
 <p>This section allows you to list specific Xgas variables to copy, along with some or all of the ancillary variables needed to properly interpret them.
-Usually, you will not specify each Xgas by hand, but instead will use the <a href="postproc/write_public_netcdf//write_public_netcdf/xgas_discovery.html">discovery</a> capability of the writer to automatically find each Xgas to copy.
+Usually, you will not specify each Xgas by hand, but instead will use the <a href="postproc/write_public_netcdf/./xgas_discovery.html">discovery</a> capability of the writer to automatically find each Xgas to copy.
 However, variables explicitly listed in this section take precedence over those found by the discovery rules.
 This leads to two cases where you might specify an Xgas in this section:</p>
 <ol>
@@ -1132,7 +1132,7 @@ to map from the Xgas variable to the ancillary variable.</li>
 <li><code>gas</code> (required): the physical gas name, e.g., "co2" for all the various CO2 variables (regular, <code>wco2</code>, and <code>lco2</code>).
 This is used to match up to, e.g., the priors which do not distinguish between the different spectra windows.</li>
 <li><code>gas_long</code> (optional): the full name of the gas instead of its abbreviation, e.g. "carbon dioxide" for CO2. If not given,
-then the configuration will try to find the <code>gas</code> value in its <a href="postproc/write_public_netcdf//write_public_netcdf/gas_proper_names.html"><code>[gas_long_names]</code></a> section and use that,
+then the configuration will try to find the <code>gas</code> value in its <a href="postproc/write_public_netcdf/./gas_proper_names.html"><code>[gas_long_names]</code></a> section and use that,
 falling back on the <code>gas</code> value if the gas is not defined in the gas long names section.</li>
 <li><code>xgas_attr_overrides</code> (optional): a table of attribute values that can override existing attribute values on the private Xgas variable.</li>
 <li><code>xgas_error_attr_overrides</code> (optional): a table of attribute values that can override existing attribute values on the private Xgas error variable.</li>
@@ -1174,13 +1174,13 @@ ak = { type = "specified", only_if_first = true, private_name = "ak_xwco2" }
 slant_bin = { type = "specified", private_name = "ak_slant_xwco2_bin" }
 </code></pre>
 <p>First we have <code>xluft</code>.
-This variable would be discovered by the <a href="postproc/write_public_netcdf//write_public_netcdf/xgas_discovery.html#rules">default rule</a>; however, that rule will require prior information and AKs.
+This variable would be discovered by the <a href="postproc/write_public_netcdf/./xgas_discovery.html#rules">default rule</a>; however, that rule will require prior information and AKs.
 The prior information is not useful for Xluft, so we want to avoid copying that to reduce the number of extraneous variables, and there are no AKs for Xluft.
 Thus we specify "omit" for each of these to tell the writer not to look for them.
 We do not have to tell it to omit <code>slant_bin</code>, because omitting the AKs implicitly skips that, and <code>traceability_scale</code> can be left as normal because there is an "aicf_xluft_scale" variable in the private netCDF files.</p>
 <p>Second we have <code>xco2_x2019</code> and <code>xwco2_x2019</code>.
 (We have omitted the x2007 variables and <code>lco2_x2019</code> from the above example for brevity).
-These would not be discovered by the <a href="postproc/write_public_netcdf//write_public_netcdf/xgas_discovery.html#rules">default rule</a>.
+These would not be discovered by the <a href="postproc/write_public_netcdf/./xgas_discovery.html#rules">default rule</a>.
 Further, the mapping to their prior and AK variables is unique: all the CO2 Xgas variables can share the prior profiles and column averages, and each "flavor" of CO2 (regular, wCO2, or lCO2) can use the same AKs whether it is on the X2007 or X2019 scale.
 Thus, we not only define that these variables need copied, but that we want to rename the prior variables to just "prior_co2" and "prior_xco2" and only copy these the first time we find them.
 We also ensure that the AKs and slant bins point to the correct variables.</p>
@@ -1218,7 +1218,7 @@ two options:
 variable if a variable with the same public name is already in the public file.
 <strong>Note that the writer does not check that the existing variable's data are equal to what would be written for the new variable!</strong></li>
 <li><code>required</code>: a boolean (<code>true</code> by default) that when set to <code>false</code> allows this variable to be missing
-from the private file. This is intended for <a href="postproc/write_public_netcdf//write_public_netcdf/xgas_discovery.html#rules">Xgas discovery rules</a>
+from the private file. This is intended for <a href="postproc/write_public_netcdf/./xgas_discovery.html#rules">Xgas discovery rules</a>
 more than explicit Xgas definitions.</li>
 </ul>
 </li>
@@ -1270,11 +1270,12 @@ ch4 = "methane"
 co = "carbon monoxide"
 </code></pre>
 <p>Note that the keys are the gases, not Xgases.
-A default list is included if not turned off in the <a href="postproc/write_public_netcdf//write_public_netcdf/defaults.html"><code>[Defaults]</code></a> section.
+A default list is included if not turned off in the <a href="postproc/write_public_netcdf/./defaults.html"><code>[Defaults]</code></a> section.
 See the source code for <a href="https://github.com/TCCON/ggg-rs/blob/main/src/bin/write_public_netcdf/constants.rs"><code>DEFAULT_GAS_LONG_NAMES</code></a> for the current list.
 You can override any of those without turning off the defaults; e.g., setting <code>h2o = "dihydrogen monoxide"</code> in this section will replace the default of "water".</p>
-<p>Of course, when <a href="postproc/write_public_netcdf//write_public_netcdf/explicit_xgases.html">explicitly defining an Xgas to copy</a>, you can write in the proper name as the <code>gas_long</code> value.
-The <code>[gas_long_names]</code> section is most useful for automatically discovered Xgases, but it can also be useful when defining multiple Xgas variables that refer to the same physical gas, as the <a href="https://github.com/TCCON/ggg-rs/blob/main/src/bin/write_public_netcdf/tccon_configs/standard.toml">standard TCCON configuration</a> does with CO2.</p>
+<p>Of course, when <a href="postproc/write_public_netcdf/./explicit_xgases.html">explicitly defining an Xgas to copy</a>, you can write in the proper name as the <code>gas_long</code> value.
+The <code>[gas_long_names]</code> section is most useful for automatically discovered Xgases, but it can also be useful when defining multiple Xgas variables that refer
+to the same physical gas, as the <a href="https://github.com/TCCON/ggg-rs/blob/main/src/bin/write_public_netcdf/tccon_configs/standard.toml">standard TCCON configuration</a> does with CO<sub>2</sub>.</p>
 <div style="break-before: page; page-break-before: always;"></div><h1 id="global-attributes"><a class="header" href="#global-attributes">Global attributes</a></h1>
 <p>What global attributes (i.e., attributes from the root group of the netCDF file) to copy to the public file are defined by the <code>[global_attributes]</code> section.
 This section contains two lists of strings:</p>
@@ -1417,7 +1418,7 @@ Thus, when it starts working, whatever section you commented out is the likely c
 or other problems when using a custom configuration, first run the writer with the <code>--check-config-only</code>
 flag and carefully examine the printed parsed version of the configuration.
 This can help check if the configuration is being interpreted as you intended,
-especially when using the <a href="postproc/write_public_netcdf//postproc/write_public_netcdf/includes.html">include feature</a></p>
+especially when using the <a href="postproc/write_public_netcdf/./includes.html">include feature</a></p>
 <h2 id="checking-on-xgas-discovery"><a class="header" href="#checking-on-xgas-discovery">Checking on Xgas discovery</a></h2>
 <p>If variables are not being copied correctly, increase the verbosity of <code>write_public_netcdf</code> by adding <code>-v</code>
 or <code>-vv</code> to the command line. The first will activate debug output, which includes a lot of information about

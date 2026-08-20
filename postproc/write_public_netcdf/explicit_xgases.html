@@ -181,7 +181,7 @@
                     <main>
                         <h1 id="explicitly-specified-xgases"><a class="header" href="#explicitly-specified-xgases">Explicitly specified Xgases</a></h1>
 <p>This section allows you to list specific Xgas variables to copy, along with some or all of the ancillary variables needed to properly interpret them.
-Usually, you will not specify each Xgas by hand, but instead will use the <a href="/write_public_netcdf/xgas_discovery.html">discovery</a> capability of the writer to automatically find each Xgas to copy.
+Usually, you will not specify each Xgas by hand, but instead will use the <a href="./xgas_discovery.html">discovery</a> capability of the writer to automatically find each Xgas to copy.
 However, variables explicitly listed in this section take precedence over those found by the discovery rules.
 This leads to two cases where you might specify an Xgas in this section:</p>
 <ol>
@@ -195,7 +195,7 @@ to map from the Xgas variable to the ancillary variable.</li>
 <li><code>gas</code> (required): the physical gas name, e.g., "co2" for all the various CO2 variables (regular, <code>wco2</code>, and <code>lco2</code>).
 This is used to match up to, e.g., the priors which do not distinguish between the different spectra windows.</li>
 <li><code>gas_long</code> (optional): the full name of the gas instead of its abbreviation, e.g. "carbon dioxide" for CO2. If not given,
-then the configuration will try to find the <code>gas</code> value in its <a href="/write_public_netcdf/gas_proper_names.html"><code>[gas_long_names]</code></a> section and use that,
+then the configuration will try to find the <code>gas</code> value in its <a href="./gas_proper_names.html"><code>[gas_long_names]</code></a> section and use that,
 falling back on the <code>gas</code> value if the gas is not defined in the gas long names section.</li>
 <li><code>xgas_attr_overrides</code> (optional): a table of attribute values that can override existing attribute values on the private Xgas variable.</li>
 <li><code>xgas_error_attr_overrides</code> (optional): a table of attribute values that can override existing attribute values on the private Xgas error variable.</li>
@@ -237,13 +237,13 @@ ak = { type = "specified", only_if_first = true, private_name = "ak_xwco2" }
 slant_bin = { type = "specified", private_name = "ak_slant_xwco2_bin" }
 </code></pre>
 <p>First we have <code>xluft</code>.
-This variable would be discovered by the <a href="/write_public_netcdf/xgas_discovery.html#rules">default rule</a>; however, that rule will require prior information and AKs.
+This variable would be discovered by the <a href="./xgas_discovery.html#rules">default rule</a>; however, that rule will require prior information and AKs.
 The prior information is not useful for Xluft, so we want to avoid copying that to reduce the number of extraneous variables, and there are no AKs for Xluft.
 Thus we specify "omit" for each of these to tell the writer not to look for them.
 We do not have to tell it to omit <code>slant_bin</code>, because omitting the AKs implicitly skips that, and <code>traceability_scale</code> can be left as normal because there is an "aicf_xluft_scale" variable in the private netCDF files.</p>
 <p>Second we have <code>xco2_x2019</code> and <code>xwco2_x2019</code>.
 (We have omitted the x2007 variables and <code>lco2_x2019</code> from the above example for brevity).
-These would not be discovered by the <a href="/write_public_netcdf/xgas_discovery.html#rules">default rule</a>.
+These would not be discovered by the <a href="./xgas_discovery.html#rules">default rule</a>.
 Further, the mapping to their prior and AK variables is unique: all the CO2 Xgas variables can share the prior profiles and column averages, and each "flavor" of CO2 (regular, wCO2, or lCO2) can use the same AKs whether it is on the X2007 or X2019 scale.
 Thus, we not only define that these variables need copied, but that we want to rename the prior variables to just "prior_co2" and "prior_xco2" and only copy these the first time we find them.
 We also ensure that the AKs and slant bins point to the correct variables.</p>
@@ -281,7 +281,7 @@ two options:
 variable if a variable with the same public name is already in the public file.
 <strong>Note that the writer does not check that the existing variable's data are equal to what would be written for the new variable!</strong></li>
 <li><code>required</code>: a boolean (<code>true</code> by default) that when set to <code>false</code> allows this variable to be missing
-from the private file. This is intended for <a href="/write_public_netcdf/xgas_discovery.html#rules">Xgas discovery rules</a>
+from the private file. This is intended for <a href="./xgas_discovery.html#rules">Xgas discovery rules</a>
 more than explicit Xgas definitions.</li>
 </ul>
 </li>

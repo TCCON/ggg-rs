@@ -188,14 +188,14 @@ These come in two variants:</p>
 <ol>
 <li>Suffix rules: these look for variables that start with something starting with an Xgas-like pattern
 and ending in the given suffix. The full regex is <code>^x([a-z][a-z0-9]*)_{suffix}$</code>, where <code>{suffix}</code> is the provided suffix.
-Note that the suffix is passed through [<code>regex::escape</code>] to ensure that any special characters are escaped; it will only
-be treated as a literal.</li>
+Note that the suffix is passed through <a href="https://docs.rs/regex/latest/regex/fn.escape.html"><code>regex::escape</code></a>
+to ensure that any special characters are escaped; it will only be treated as a literal.</li>
 <li>Regex rules: these allow you to specify a regular expression to match variables names. The regex <em>must</em> include a named
 capture group with the name "gas" that extracts the physical gas abbreviation (i.e., the <code>gas</code> value in an <code>Xgas</code> entry).
 This looks like <code>(?&lt;gas&gt;...)</code> where the <code>...</code> is the regular subexpression that matches that part of the string.</li>
 </ol>
 <p>By default, the configuration will add a single regex rule that matches the pattern <code>^x(?&lt;gas&gt;[a-z][a-z0-9]*)$</code>.
-You can disable this by setting <code>xgas_rules = false</code> in the <a href="/write_public_netcdf/defaults.html"><code>[defaults]</code></a> section of the config.
+You can disable this by setting <code>xgas_rules = false</code> in the <a href="./defaults.html"><code>[defaults]</code></a> section of the config.
 This rule is designed to match basic Xgas variables, e.g., "xch4", "xn2o", etc.</p>
 <p>An example of a regular expression rule that uses the default ways to infer its ancillary variables is:</p>
 <pre><code class="language-toml">[[discovery.rule]]
@@ -231,7 +231,7 @@ traceability_scale = { type = "omit" }
 </code></pre>
 <h2 id="ancillary-variables"><a class="header" href="#ancillary-variables">Ancillary variables</a></h2>
 <p>The rules also include default settings for the prior profile, prior column average, averaging kernel (and its slant Xgas bins), and the traceability scale.
-These can be specified the same way as described <a href="/postproc/write_public_netcdf/explicit_xgases.html#ancillary-variable-specifications">in the Xgases ancillary subsection</a>,
+These can be specified the same way as described <a href="./explicit_xgases.html#ancillary-variable-specifications">in the Xgases ancillary subsection</a>,
 and the defaults are the same as well.
 However only the <code>inferred</code> and <code>omit</code> types may be used, as <code>specified</code> does not make sense when a rule may apply to more than one Xgas.</p>
 <p>The following list gives the TOML <code>key</code> for that field and what variable it relates to.</p>
@@ -244,7 +244,7 @@ However only the <code>inferred</code> and <code>omit</code> types may be used, 
 <li><code>traceability_scale</code>: the metrological measurement scale to which the Xgas data are tied.</li>
 </ul>
 <p>Note that <code>slant_bin</code> is only needed if AKs are copied, so it behaves as if set to "inferred_if_first".
-How each of these variable names are inferred if needed is described in the <a href="/postproc/write_public_netcdf/explicit_xgases.html#ancillary-variable-name-inference">Xgas section</a>.</p>
+How each of these variable names are inferred if needed is described in the <a href="./explicit_xgases.html#ancillary-variable-name-inference">Xgas section</a>.</p>
 <h2 id="exclusions"><a class="header" href="#exclusions">Exclusions</a></h2>
 <p>The second part of the discovery section are lists of gases or variables to exclude.
 The first option is <code>excluded_xgas_variables</code>.
