@@ -9,6 +9,8 @@ git-repository-url = "https://github.com/TCCON/ggg-rs"
 fold = { enable = true, level = 2 }
 additional-css = ["./mdbook-admonish.css"]
 
+[output.linkcheck]
+
 # https://github.com/tommilligan/mdbook-admonish?tab=readme-ov-file
 [preprocessor.admonish]
 command = "mdbook-admonish"

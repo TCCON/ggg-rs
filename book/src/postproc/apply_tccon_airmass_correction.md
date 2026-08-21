@@ -25,7 +25,7 @@ $GGGPATH/bin/apply_tccon_airmass_correction CORRECTION_FILE VSW_OR_VAV_FILE
 ```
 
 The `CORRECTION_FILE` will usually be one of those supplied with GGG, in the `$GGGPATH/tccon` subdirectory.
-See [the configuration section](/postproc/corrections/airmass_correction_file.html) for the details of this
+See [the configuration section](./corrections/airmass_correction_file.md) for the details of this
 file's format if you need to modify one or create your own.
 
 ## Use in TCCON standard processing

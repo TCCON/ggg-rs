@@ -10,14 +10,14 @@ These come in two variants:
 
 1. Suffix rules: these look for variables that start with something starting with an Xgas-like pattern
    and ending in the given suffix. The full regex is `^x([a-z][a-z0-9]*)_{suffix}$`, where `{suffix}` is the provided suffix.
-   Note that the suffix is passed through [`regex::escape`] to ensure that any special characters are escaped; it will only
-   be treated as a literal.
+   Note that the suffix is passed through [`regex::escape`](https://docs.rs/regex/latest/regex/fn.escape.html)
+   to ensure that any special characters are escaped; it will only be treated as a literal.
 2. Regex rules: these allow you to specify a regular expression to match variables names. The regex _must_ include a named
    capture group with the name "gas" that extracts the physical gas abbreviation (i.e., the `gas` value in an `Xgas` entry).
    This looks like `(?<gas>...)` where the `...` is the regular subexpression that matches that part of the string.
 
 By default, the configuration will add a single regex rule that matches the pattern `^x(?<gas>[a-z][a-z0-9]*)$`.
-You can disable this by setting `xgas_rules = false` in the [`[defaults]`](/write_public_netcdf/defaults.html) section of the config.
+You can disable this by setting `xgas_rules = false` in the [`[defaults]`](./defaults.md) section of the config.
 This rule is designed to match basic Xgas variables, e.g., "xch4", "xn2o", etc.
 
 An example of a regular expression rule that uses the default ways to infer its ancillary variables is:
@@ -66,7 +66,7 @@ traceability_scale = { type = "omit" }
 ## Ancillary variables
 
 The rules also include default settings for the prior profile, prior column average, averaging kernel (and its slant Xgas bins), and the traceability scale.
-These can be specified the same way as described [in the Xgases ancillary subsection](/postproc/write_public_netcdf/explicit_xgases.html#ancillary-variable-specifications),
+These can be specified the same way as described [in the Xgases ancillary subsection](./explicit_xgases.md#ancillary-variable-specifications),
 and the defaults are the same as well.
 However only the `inferred` and `omit` types may be used, as `specified` does not make sense when a rule may apply to more than one Xgas.
 
@@ -80,7 +80,7 @@ The following list gives the TOML `key` for that field and what variable it rela
 - `traceability_scale`: the metrological measurement scale to which the Xgas data are tied.
 
 Note that `slant_bin` is only needed if AKs are copied, so it behaves as if set to "inferred_if_first".
-How each of these variable names are inferred if needed is described in the [Xgas section](/postproc/write_public_netcdf/explicit_xgases.html#ancillary-variable-name-inference).
+How each of these variable names are inferred if needed is described in the [Xgas section](./explicit_xgases.html#ancillary-variable-name-inference).
 
 ## Exclusions
 

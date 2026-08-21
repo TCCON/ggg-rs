@@ -23,10 +23,15 @@ jobs:
         uses: baptiste0928/cargo-install@f204293d9709061b7bc1756fec3ec4e2cd57dec0
         with:
           crate: mdbook-admonish
+      - name: Install mdbook-admonish
+        # Pinned to v3 commit on 26 Mar 2026
+        uses: baptiste0928/cargo-install@f204293d9709061b7bc1756fec3ec4e2cd57dec0
+        with:
+          crate: mdbook-linkcheck
       - run: mdbook build "./book"
-      - run: ls ./book/book/index.html
+      - run: ls ./book/book/html/index.html
       - name: Deploy
         uses: peaceiris/actions-gh-pages@4f9cc6602d3f66b9c108549d475ec49e8ef4d45e
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: "./book/book"
+          publish_dir: "./book/book/html"
