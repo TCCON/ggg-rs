@@ -12,10 +12,55 @@ use approx::AbsDiffEq;
 #[cfg(feature = "netcdf")]
 use netcdf::NcTypeDescriptor;
 
+static INIT_LOGGING: std::sync::Once = std::sync::Once::new();
+
 #[allow(dead_code)]
 pub fn test_data_dir() -> PathBuf {
     let crate_root = env!("CARGO_MANIFEST_DIR");
     PathBuf::from(crate_root).join("test-data")
+}
+
+/// Set up the log4rs backend to interact properly with Cargo's test capture mechanism
+///
+/// Tests should call this to set up logging during their run, rather than relying on
+/// the normal [`crate::logging::init_logging`].
+pub fn init_test_logging() {
+    INIT_LOGGING.call_once(|| {
+        let encoder = Box::new(log4rs::encode::pattern::PatternEncoder::new(
+            crate::logging::LOG_PATTERN,
+        ));
+        let inner_appender = TestAppender { encoder };
+        let appender = log4rs::config::Appender::builder().build("test", Box::new(inner_appender));
+        let config = log4rs::config::Config::builder()
+            .appender(appender)
+            .build(
+                log4rs::config::Root::builder()
+                    .appender("test")
+                    .build(log::LevelFilter::Debug),
+            )
+            .expect("should be able to build test log4rs config");
+        log4rs::init_config(config).expect("should be able to initialize log4rs logging for tests");
+    });
+}
+
+/// An appender that uses eprint! so that `cargo test` captures output correctly.
+#[derive(Debug)]
+struct TestAppender {
+    encoder: Box<dyn log4rs::encode::Encode>,
+}
+
+impl log4rs::append::Append for TestAppender {
+    fn append(&self, record: &log::Record) -> anyhow::Result<()> {
+        let mut buf = vec![];
+        self.encoder.encode(
+            &mut log4rs::encode::writer::ansi::AnsiWriter(&mut buf),
+            record,
+        )?;
+        eprint!("{}", String::from_utf8_lossy(&buf));
+        Ok(())
+    }
+
+    fn flush(&self) {}
 }
 
 /// Test helper function to quickly create a UTC datetime.

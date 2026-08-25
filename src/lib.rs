@@ -31,6 +31,7 @@ pub mod sunrun;
 /// Code supporting TCCON-focused programs
 pub mod tccon;
 /// Code used in multiple tests
+#[cfg(any(test, feature = "test-utils"))]
 pub mod test_utils;
 /// Utils for calculating time-related quantities
 pub mod time_utils;

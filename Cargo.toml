@@ -7,7 +7,8 @@ resolver = "2"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-approx = "0.5.1"
+anyhow = { version = "1", optional = true }  # needed for test_utils' custom log4rs appender
+approx = "0.5.1"  # this is needed for more than tests (e.g., apply_nc_fills)
 chrono = { version = "0.4.40", features = ["serde"] }
 clap = { version = "4", features = ["derive"] }
 clap-verbosity-flag = "2.2.0"
@@ -59,12 +60,16 @@ csv = "1.4.0"
 [dev-dependencies]
 rstest = "0.18.2"
 static_assertions = "1.1.0"
+# This is a workaround to gate the test_utils module behind a feature
+# to avoid pulling in some unnecessary dependencies outside of testing
+ggg-rs = { path = ".", features = ["test-utils"] }
 
 [features]
 inprogress = []
 netcdf = ["dep:netcdf"]
 static = ["netcdf", "netcdf/static"]
 plotting = ["dep:plotly"]
+test-utils = ["dep:anyhow"]
 
 [lib]
 

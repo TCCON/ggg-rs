@@ -30,7 +30,15 @@ pub struct FileLocation {
     line_value: Option<String>,
 }
 
+/// Represents the source of an error in an external file.
+///
+/// Can be created with [`FileLocation::new`], [`FileLocation::empty`],
+/// or by converting from a `&Path`, `PathBuf`, `&str`, or `String` with
+/// `.into()`. Converting from a `&Path` or `PathBuf` populates the
+/// `path` field; converting from a `&str` or `String` populates the
+/// `line_value` field.
 impl FileLocation {
+    /// Create a new `FileLocation`.
     pub fn new<P: AsRef<Path>, S: AsRef<str>>(
         path: Option<P>,
         line_num: Option<usize>,
@@ -40,6 +48,17 @@ impl FileLocation {
             path: path.map(|p| p.as_ref().to_owned()),
             line_num,
             line_value: line_value.map(|s| s.as_ref().to_owned()),
+        }
+    }
+
+    /// Create a `FileLocation` with all fields set to `None`.
+    /// This should normally be replaced at a higher level in the
+    /// call stack to provide real information.
+    pub fn empty() -> Self {
+        Self {
+            path: None,
+            line_num: None,
+            line_value: None,
         }
     }
 }
@@ -227,6 +246,48 @@ pub enum WriteError {
 impl WriteError {
     pub fn convert_error<S: Into<String>>(reason: S) -> Self {
         Self::ConvertError(reason.into())
+    }
+}
+
+/// An extension trait to provide the `with_location` method for relevant `Result` types.
+///
+/// Currently implemented for: [`HeaderError`].
+pub trait LocationErr {
+    /// For a [`Result::Err`] variant that contains a [`FileLocation`],
+    /// replace that location with a new one. The `loc` argument may
+    /// be anything that can be safely converted into a [`FileLocation`],
+    /// e.g., [`Path`], [`PathBuf`], [`String`], or [`str`].
+    fn with_location<L: Into<FileLocation>>(self, loc: L) -> Self;
+}
+
+impl<T> LocationErr for Result<T, HeaderError> {
+    fn with_location<L: Into<FileLocation>>(self, loc: L) -> Self {
+        match self {
+            Ok(v) => Ok(v),
+            Err(HeaderError::CouldNotRead { location: _, cause }) => {
+                Err(HeaderError::CouldNotRead {
+                    location: loc.into(),
+                    cause,
+                })
+            }
+            Err(HeaderError::Custom(msg)) => Err(HeaderError::Custom(msg)),
+            Err(HeaderError::NumColMismatch {
+                location: _,
+                expected,
+                got,
+            }) => Err(HeaderError::NumColMismatch {
+                location: loc.into(),
+                expected,
+                got,
+            }),
+            Err(HeaderError::NumLinesMismatch { expected, got }) => {
+                Err(HeaderError::NumLinesMismatch { expected, got })
+            }
+            Err(HeaderError::ParseError { location: _, cause }) => Err(HeaderError::ParseError {
+                location: loc.into(),
+                cause,
+            }),
+        }
     }
 }
 

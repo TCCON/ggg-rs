@@ -1006,6 +1006,7 @@ dependencies = [
 name = "ggg-rs"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "approx",
  "chrono",
  "clap",
@@ -1016,6 +1017,7 @@ dependencies = [
  "field_names",
  "figment",
  "fortformat",
+ "ggg-rs",
  "glob",
  "hex",
  "indexmap 2.14.0",

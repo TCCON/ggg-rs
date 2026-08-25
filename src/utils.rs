@@ -20,7 +20,7 @@ use ndarray::{Array1, ArrayView1};
 use serde::Serialize;
 use serde::{de::Error as DeserError, Deserialize, Deserializer};
 
-use crate::error::{BodyError, DateTimeError};
+use crate::error::{BodyError, DateTimeError, FileLocation, LocationErr};
 
 use crate::error::HeaderError;
 
@@ -1096,6 +1096,7 @@ pub struct CommonHeader {
 /// # See also
 /// * [`get_nhead_ncol`] - shortcut to get the first two numbers (number of header lines and number of data columns)
 /// * [`get_nhead`] - shortcut to get the first number (number of header lines)
+/// * [`parse_file_shape_info`] - parse an already-read shape line.
 pub fn get_file_shape_info<F: BufRead>(
     f: &mut FileBuf<F>,
     min_numbers: usize,
@@ -1108,28 +1109,40 @@ pub fn get_file_shape_info<F: BufRead>(
         })
     })?;
 
+    let numbers = parse_file_shape_info(&buf, Some(min_numbers)).with_location(f.path.as_path())?;
+
+    Ok(numbers)
+}
+
+/// Parse a line containing a sequence of integers that (usually) information about the file shape.
+///
+/// If `min_numbers` is `Some(n)`, then this function will return an `Err` if the there were fewer
+/// than `n` numbers in the line. You can then safely index the returned `Vec` up to `n-1`.
+/// Otherwise, this will only return an error if the line cannot be parsed as a sequence of integers.
+pub fn parse_file_shape_info(
+    shape_line: &str,
+    min_numbers: Option<usize>,
+) -> Result<Vec<usize>, HeaderError> {
     let mut numbers = vec![];
-    for (i, s) in buf.trim().split_whitespace().enumerate() {
+    for (i, s) in shape_line.trim().split_whitespace().enumerate() {
         let val: usize = s.parse().map_err(|_| {
             // let loc = FileLocation::new(Some(f.path), None, None);
             HeaderError::ParseError {
-                location: f.path.as_path().into(),
+                location: FileLocation::empty(),
                 cause: format!("Could not parse number at position {}: {s}", i + 1),
             }
         })?;
         numbers.push(val);
     }
 
-    if numbers.len() < min_numbers {
-        return Err(HeaderError::ParseError {
-            location: f.path.as_path().into(),
-            cause: format!(
-                "Expected at least {min_numbers} numbers, found {}",
-                numbers.len()
-            ),
-        });
+    if let Some(n) = min_numbers {
+        if numbers.len() < n {
+            return Err(HeaderError::ParseError {
+                location: FileLocation::empty(),
+                cause: format!("Expected at least {n} numbers, found {}", numbers.len()),
+            });
+        }
     }
-
     Ok(numbers)
 }
 
