@@ -45,9 +45,21 @@ fn setup_ggg_lua_functions(lua_engine: &Lua) -> mlua::Result<()> {
 
 fn ggg_lua_module_table(lua_engine: &Lua) -> mlua::Result<mlua::Table> {
     let m = lua_engine.create_table()?;
+    m.set("joinpath", lua_engine.create_function(joinpath_lua)?)?;
     m.set("read_csv", lua_engine.create_function(read_csv_lua)?)?;
     m.set("read_json", lua_engine.create_function(read_json_lua)?)?;
+
     Ok(m)
+}
+
+fn joinpath_lua(_: &Lua, components: Vec<String>) -> mlua::Result<String> {
+    if let Some((first, remainder)) = components.split_first() {
+        let root = PathBuf::from(first);
+        let full = remainder.into_iter().fold(root, |acc, part| acc.join(part));
+        Ok(full.to_string_lossy().to_string())
+    } else {
+        Ok("".to_string())
+    }
 }
 
 fn read_csv_lua(
@@ -99,6 +111,30 @@ mod tests {
             .eval()
             .expect("executing Lua code should succeed");
         assert_eq!(lua_gggpath, expected_gggpath);
+    }
+
+    #[test]
+    fn test_lua_joinpath() {
+        let lua = Lua::new();
+        setup_ggg_lua_functions(&lua).expect("set up of Lua functions should work");
+        let code = r#"
+        local ggg = require("ggg")
+        local subdir = "sunruns"
+        local subsubdir = "gnd"
+        return ggg.joinpath{"/home/user/ggg", subdir, subsubdir}
+        "#;
+        let lua_path: String = lua
+            .load(code)
+            .eval()
+            .expect("execution of Lua code should work");
+
+        let expected_path = PathBuf::from("/home/user/ggg")
+            .join("sunruns")
+            .join("gnd")
+            .to_string_lossy()
+            .to_string();
+
+        assert_eq!(lua_path, expected_path);
     }
 
     #[test]
