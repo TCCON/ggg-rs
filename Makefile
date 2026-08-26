@@ -70,6 +70,8 @@ else ifdef GGGRS_NCDIR
 	CARGOARGS = $(addprefix --features ,$(strip $(GGGRS_FEATURES)))
 	ifeq ("$(shell uname -s)", "Darwin")
 		NC_LIB = $(GGGRS_NCDIR)/lib/libnetcdf.dylib
+		DYLD_FALLBACK_LIBRARY_PATH = $(GGGRS_NCDIR)/lib
+		export DYLD_FALLBACK_LIBRARY_PATH
 	else
 		NC_LIB = $(GGGRS_NCDIR)/lib/libnetcdf.so
 	endif
@@ -117,3 +119,7 @@ check-args:
 	@echo "GGGRS_FEATURES = $(GGGRS_FEATURES)"
 	@echo "ENVCMD = $(ENVCMD)"
 	@echo "NC_LIB = $(NC_LIB)"
+	@echo "HDF5_DIR = $(HDF5_DIR)"
+	@echo "NETCDF_DIR = $(NETCDF_DIR)"
+	@echo "RUSTFLAGS = $(RUSTFLAGS)"
+	@echo "DYLD_FALLBACK_LIBRARY_PATH = $(DYLD_FALLBACK_LIBRARY_PATH)"
