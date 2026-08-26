@@ -66,6 +66,9 @@ pub enum GggError {
         path: PathBuf,
         cause: String,
     },
+    /// A wrapper error for Lua errors, since mlua::Error does not satisfy error_stack::ResultExt requirements.
+    /// The inner Lua error is converted into part of the string with the [`GggError::lua`] method.
+    Lua(String),
     /// A generic error for an unimplemented case in the code
     NotImplemented(String),
     /// A general error for one-off cases that don't need their own variant
@@ -111,6 +114,10 @@ impl Display for GggError {
                 let r = write!(f, "Error in data format of {}: {cause}", path.display());
                 r
             }
+            Self::Lua(msg) => {
+                let r = write!(f, "{msg}");
+                r
+            }
 
             Self::NotImplemented(case) => write!(f, "Not implemented: {case}"),
 
@@ -139,6 +146,10 @@ impl GggError {
 
     pub fn not_implemented<S: ToString>(case: S) -> Self {
         Self::NotImplemented(case.to_string())
+    }
+
+    pub fn lua<S: Display>(ctx: S, err: mlua::Error) -> Self {
+        Self::Lua(format!("{ctx}. Lua error was: {err}"))
     }
 
     pub fn custom<S: ToString>(msg: S) -> Self {

@@ -14,6 +14,8 @@ pub mod i2s;
 pub mod interpolation;
 /// Helper functions for consistent logging
 pub mod logging;
+/// A module with common functions that Lua scripts can use
+pub mod lua;
 /// Utilities for netCDF files
 #[cfg(feature = "netcdf")]
 pub mod nc_utils;
