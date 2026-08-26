@@ -1,17 +1,19 @@
+use error_stack::ResultExt;
 use ggg_rs::{sunrun::ExpandedSunrunRow, utils::GggError};
 use mlua::Lua;
 
-use crate::site_config::ModRow;
+use crate::{site_config::ModRow, CliError};
 
 /// Wrapper struct that helps apply the configured edits to a sunrun row.
 pub(crate) struct RowEditor {
     lua: Lua,
 }
 
-impl Default for RowEditor {
-    fn default() -> Self {
-        let lua = Lua::new();
-        Self { lua }
+impl RowEditor {
+    pub(crate) fn new_default() -> error_stack::Result<Self, CliError> {
+        let lua = ggg_rs::lua::setup_ggg_lua()
+            .change_context_lazy(|| CliError::custom("Error while setting up the Lua engine"))?;
+        Ok(Self { lua })
     }
 }
 

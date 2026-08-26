@@ -84,7 +84,7 @@ fn driver(clargs: Cli) -> error_stack::Result<(), CliError> {
     })?;
 
     let mut nspec = 0;
-    let row_editor = edit_row::RowEditor::default();
+    let row_editor = edit_row::RowEditor::new_default()?;
     for (ispec, line) in list_rdr.lines().enumerate() {
         if ispec > 0 && ispec % 1000 == 0 {
             log::info!("Processed {ispec} spectra");
