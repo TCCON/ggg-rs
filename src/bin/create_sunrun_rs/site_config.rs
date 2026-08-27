@@ -198,7 +198,7 @@ impl ModRowTarget {
             }
             ModRowTarget::LuaCondition { condition } => {
                 set_row_in_lua(row, lua_engine)?;
-                let applies: bool = lua_engine.load(condition.as_str()).eval()
+                let applies: bool = lua_engine.load(condition.as_str()).set_name("condition").eval()
                 .map_err(|e| GggError::custom(format!("Error executing Lua condition code on sunrun row {:?}.\nCode was:\n\n{condition}\n\nError was:\n\n{e}", row)))?;
                 Ok(applies)
             }
@@ -257,6 +257,8 @@ impl ModRowValues {
         lua: Option<String>,
         init_lua: Option<String>,
     ) -> Self {
+        // let lua_span = lua.map(|s| toml::Spanned::new(0..s.len(), s));
+        // let init_lua_span = init_lua.map(|s| toml::Spanned::new(0..s.len(), s));
         Self {
             replace,
             init_lua,
@@ -326,15 +328,19 @@ impl ModRowValues {
     ) -> Result<ExpandedSunrunRow, GggError> {
         let globals = set_row_in_lua(&row, lua_engine)?;
         if let (Some(init_str), false) = (self.init_lua.as_deref(), self.lua_init_run.get()) {
-            lua_engine.load(init_str).exec().map_err(|e| {
-                GggError::custom(format!(
-                    "Error initializing lua.\nCode was:\n\n{init_str}\n\nError was:\n\n{e}"
-                ))
-            })?;
+            lua_engine
+                .load(init_str)
+                .set_name("init_lua")
+                .exec()
+                .map_err(|e| {
+                    GggError::custom(format!(
+                        "Error initializing lua.\nCode was:\n\n{init_str}\n\nError was:\n\n{e}"
+                    ))
+                })?;
             self.lua_init_run.set(true);
         }
         if let Some(lua_str) = self.lua.as_deref() {
-            lua_engine.load(lua_str).exec().map_err(|e| {
+            lua_engine.load(lua_str).set_name("lua").exec().map_err(|e| {
                 GggError::custom(format!("Error executing Lua code on sunrun row {:?}.\nCode was:\n\n{lua_str}\n\nError was:\n\n{e}", row))
             })?;
 

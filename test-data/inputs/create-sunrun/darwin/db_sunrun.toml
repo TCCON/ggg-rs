@@ -1,0 +1,93 @@
+[constants]
+instrument = 2
+object = 2
+
+[constants.defaults]
+oblat = -12.4251
+oblon = 130.8910
+obalt = 0.030
+fsf = 0.99999999
+wavtkr = 9900.0
+aipl = 0.002
+tm = 1.00
+
+[[constants.detectors]]
+label = "a"
+label_index_start = 16
+label_index_stop = 16
+start_freq = 4000
+end_freq = 11000
+
+[[constants.detectors]]
+label = "b"
+label_index_start = 16
+label_index_stop = 16
+start_freq = 4000
+end_freq = 11000
+
+[[edits]]
+spectrum = "*"
+init_lua = """
+local gggutils = require("ggg")
+
+function julian(y,m,d,hh,mm)
+    local jd = 367*y-7*(y+(m+9) // 12) // 4-3*((y+(m-9) // 7)/100+1) // 4+275*m // 9+d+1721029
+    return jd + hh / 24.0 + mm / (24.0 * 60.0)
+end
+
+function bom_row_values(row)
+    local datestr = row["Day/Month/Year Hour24:Minutes in DD/MM/YYYY HH24:MI format in Local standard time"]
+    local pbom = row["Mean sea level pressure in hPa"]
+    local bom_d = tonumber(string.sub(datestr, 1, 2))
+    local bom_m = tonumber(string.sub(datestr, 4, 5))
+    local bom_y = tonumber(string.sub(datestr, 7, 10))
+    local bom_hh = tonumber(string.sub(datestr, 12, 13))
+    local bom_mm = tonumber(string.sub(datestr, 15, 16))
+
+    -- Convert local time to UT
+    bom_hh = bom_hh - 9.5
+    local bom_jd = julian(bom_y, bom_m, bom_d, bom_hh, bom_mm)
+    return bom_jd, pbom
+end
+
+function correct_pres(specname, y, m, d, hh, mm, pres, bom_table)
+    local spec_time_ut = julian(y,m,d,hh,mm)
+    local last_bom_ut = 0.0
+    local last_pbom = 0.0
+
+    -- Default correction in mbar based on nmd03 email: 2007-03-05
+    local pout_corr = 0.8
+    -- correction to Pbom to fit historical Zeno corrected pressure
+    local pbom_corr = 1.0
+
+    -- Standard correction
+    local pzeno = pres
+    pres = pres + pout_corr
+
+    -- Time limits
+    local start_fix = julian(2014, 9, 30, 0, 0)
+    local end_fix = julian(2015, 6, 30, 0, 0)
+    if spec_time_ut >= start_fix and spec_time_ut <= end_fix then
+        for i, row in ipairs(bom_table) do
+            local bom_time_ut, pbom = bom_row_values(row)
+            -- Correct mean sea level pressure to 32 m
+            pbom = pbom * math.exp(-32.0 / 8500.0)
+            if bom_time_ut < spec_time_ut then
+                last_bom_ut = bom_time_ut
+                last_pbom = pbom
+            else
+                pres = ((spec_time_ut - last_bom_ut)*pbom + (bom_time_ut - spec_time_ut)*last_pbom) / (bom_time_ut - last_bom_ut) + pbom_corr
+                break
+            end
+        end
+    end
+
+    return pres
+end
+
+BOM_PRES_TABLE = gggutils.read_csv(gggutils.joinpath{GGGPATH, "src", "create_sunrun", "darwin_ifs2", "DarwinPressure_1410_1506.txt"})
+"""
+
+lua = """
+r.pout = correct_pres(r.spectrum_file_name, r.year, r.month, r.day, r.hour, r.minute, r.pout, BOM_PRES_TABLE)
+"""

@@ -9,7 +9,11 @@ use std::{
 use clap::Parser;
 use clap_verbosity_flag::{InfoLevel, Verbosity};
 use error_stack::ResultExt;
-use ggg_rs::{logging::init_logging, sunrun, utils::RunType};
+use ggg_rs::{
+    logging::init_logging,
+    sunrun,
+    utils::{DataPartition, RunType},
+};
 
 mod edit_row;
 mod site_config;
@@ -17,7 +21,7 @@ mod site_config;
 fn main() -> ExitCode {
     let clargs = Cli::parse();
     init_logging(clargs.verbosity.log_level_filter());
-    if let Err(e) = driver(clargs) {
+    if let Err(e) = cli_driver(clargs) {
         eprintln!("{e:?}");
         ExitCode::FAILURE
     } else {
@@ -25,7 +29,7 @@ fn main() -> ExitCode {
     }
 }
 
-fn driver(clargs: Cli) -> error_stack::Result<(), CliError> {
+fn cli_driver(clargs: Cli) -> error_stack::Result<(), CliError> {
     // For now, keep the behavior that we use the same site ID as the list file.
     // to find the config file to load. We may want the ability to go by spectrum,
     // but that's not needed now.
@@ -65,10 +69,33 @@ fn driver(clargs: Cli) -> error_stack::Result<(), CliError> {
             CliError::custom("Unable to set up data partition for spectrum paths")
         })?;
 
-    let list_rdr = ggg_rs::utils::FileBuf::open(&clargs.spec_list_file)
+    let output_sunrun = determine_sunrun_name(&clargs.spec_list_file, run_type, &gggpath)?;
+
+    driver(
+        &clargs.spec_list_file,
+        &output_sunrun,
+        &data_part,
+        &sunrun_cfg,
+    )
+}
+
+// This is split out to simplify testing
+fn driver(
+    spec_list_file: &Path,
+    output_sunrun: &Path,
+    data_part: &DataPartition,
+    sunrun_cfg: &site_config::SiteConfig,
+) -> error_stack::Result<(), CliError> {
+    let run_type = RunType::try_from(spec_list_file).change_context_lazy(|| {
+        CliError::custom(format!(
+            "Could not map the extension of {} to a run type (e.g., gnd, lab, etc.)",
+            spec_list_file.display()
+        ))
+    })?;
+
+    let list_rdr = ggg_rs::utils::FileBuf::open(spec_list_file)
         .change_context_lazy(|| CliError::custom("Error opening the spectrum list file"))?;
 
-    let output_sunrun = determine_sunrun_name(&clargs.spec_list_file, run_type, &gggpath)?;
     let mut output_f = std::fs::File::create(&output_sunrun).change_context_lazy(|| {
         CliError::custom(format!(
             "Error opening output sunrun file, {}",
@@ -209,5 +236,36 @@ enum CliError {
 impl CliError {
     fn custom<S: ToString>(msg: S) -> Self {
         Self::Custom(msg.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ggg_rs::test_utils::{compare_output_text_files, test_data_dir};
+
+    #[test]
+    fn test_darwin_sunrun() {
+        let spec_list_file = test_data_dir()
+            .join("inputs")
+            .join("create-sunrun")
+            .join("darwin")
+            .join("db_sunrun_test.gnd");
+        let cfg_file = test_data_dir()
+            .join("inputs")
+            .join("create-sunrun")
+            .join("darwin")
+            .join("db_sunrun.toml");
+        let spec_dir = test_data_dir().join("inputs").join("spectra");
+        let output_dir = test_data_dir().join("outputs").join("create-sunrun");
+        let output_sunrun = output_dir.join("db_sunrun_test.gop");
+        let expected_dir = test_data_dir().join("expected").join("create-sunrun");
+        let mut data_part = DataPartition::new_empty();
+        data_part.add_path(spec_dir);
+        let sunrun_cfg: site_config::SiteConfig =
+            ggg_rs::utils::read_toml_file(&cfg_file).expect("Reading config file should work");
+        driver(&spec_list_file, &output_sunrun, &data_part, &sunrun_cfg)
+            .expect("running the sunrun code should not fail");
+        compare_output_text_files(&expected_dir, &output_dir, "db_sunrun_test.gop");
     }
 }
