@@ -16,7 +16,7 @@ use serde::Deserialize;
 
 use crate::{
     constants::DEFAULT_GAS_LONG_NAMES,
-    copying::{CopyGlobalAttr, PriorProfCopy, XgasAncInferOptions, XgasAncillary},
+    copying::{CopyGlobalAttr, EditGlobalAttr, PriorProfCopy, XgasAncInferOptions, XgasAncillary},
     discovery::{AncillaryDiscoveryMethod, XgasMatchMethod, XgasMatchRule},
     AuxVarCopy, ComputedVariable, XgasCopy,
 };
@@ -255,24 +255,37 @@ pub(crate) struct XgasDiscoveryConfig {
 
 #[derive(Debug, Default, Deserialize)]
 pub(crate) struct AttributeConfig {
+    #[serde(default)]
     must_copy: Vec<String>,
+    #[serde(default)]
     copy_if_present: Vec<String>,
+    #[serde(default)]
+    copy_and_edit: IndexMap<String, EditGlobalAttr>,
+}
+
+pub(crate) struct AttributeActions {
+    pub(crate) to_copy: Vec<CopyGlobalAttr>,
+    pub(crate) to_edit: IndexMap<String, EditGlobalAttr>,
 }
 
 impl AttributeConfig {
-    pub(crate) fn make_attr_list(&self) -> Vec<CopyGlobalAttr> {
-        let mut attrs = vec![];
+    pub(crate) fn make_attr_list(&self) -> AttributeActions {
+        let mut to_copy = vec![];
         for name in self.must_copy.iter() {
-            attrs.push(CopyGlobalAttr::MustCopy {
+            to_copy.push(CopyGlobalAttr::MustCopy {
                 name: name.to_string(),
             });
         }
         for name in self.copy_if_present.iter() {
-            attrs.push(CopyGlobalAttr::CopyIfPresent {
+            to_copy.push(CopyGlobalAttr::CopyIfPresent {
                 name: name.to_string(),
             });
         }
-        attrs
+
+        AttributeActions {
+            to_copy,
+            to_edit: self.copy_and_edit.clone(),
+        }
     }
 }
 

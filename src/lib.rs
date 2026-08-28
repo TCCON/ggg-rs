@@ -28,6 +28,8 @@ pub mod o2_dmf;
 pub mod opus;
 /// Utilities for reading GGG files.
 pub mod readers;
+/// Utilities for serializing and deserializing files
+pub mod serde_utils;
 /// Utilities for working with the sunrun files.
 pub mod sunrun;
 /// Code supporting TCCON-focused programs

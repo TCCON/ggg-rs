@@ -1,8 +1,11 @@
+use std::borrow::Cow;
+
 use chrono::NaiveDate;
 use compute_helpers::add_geos_version_variable;
 use error_stack::ResultExt;
 use ggg_rs::{
     nc_utils::{get_string_attr, get_traceability_scale, NcArray},
+    serde_utils::default_true,
     units::{dmf_long_name, Quantity},
     utils::GggNcError,
 };
@@ -14,7 +17,7 @@ use num_traits::Zero;
 use serde::{Deserialize, Deserializer};
 
 use crate::{
-    config::default_attr_remove,
+    config::{default_attr_remove, AttributeActions},
     constants::{PRIOR_INDEX_VARNAME, PRIOR_PRESSURE_VARNAME, PROGRAM_NAME, TIME_DIM_NAME},
     discovery::{Rename, XgasMatchRule},
 };
@@ -1291,11 +1294,14 @@ impl CopySet for ComputedVariable {
 pub(crate) fn copy_attributes(
     private_file: &netcdf::File,
     public_file: &mut netcdf::FileMut,
-    attributes: &[CopyGlobalAttr],
+    attributes: &AttributeActions,
 ) -> error_stack::Result<(), CopyError> {
     add_history_attr(private_file, public_file)?;
-    for attr in attributes {
+    for attr in attributes.to_copy.iter() {
         attr.copy(private_file, public_file)?;
+    }
+    for (name, edit) in attributes.to_edit.iter() {
+        edit.copy_and_modify(name, private_file, public_file)?;
     }
     Ok(())
 }
@@ -1305,6 +1311,7 @@ pub(crate) fn copy_attributes(
 pub(crate) enum CopyGlobalAttr {
     MustCopy { name: String },
     CopyIfPresent { name: String },
+    ExtendedDoi { name: String },
 }
 
 impl CopyGlobalAttr {
@@ -1316,6 +1323,7 @@ impl CopyGlobalAttr {
         let (attr_name, must_copy) = match self {
             CopyGlobalAttr::MustCopy { name } => (name, true),
             CopyGlobalAttr::CopyIfPresent { name } => (name, false),
+            CopyGlobalAttr::ExtendedDoi { name } => (name, false),
         };
 
         let opt_attr = private_file.attribute(&attr_name);
@@ -1334,6 +1342,130 @@ impl CopyGlobalAttr {
         }
 
         Ok(())
+    }
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub(crate) enum EditGlobalAttr {
+    DoiToExtended {
+        #[serde(default = "default_true")]
+        required: bool,
+    },
+}
+
+impl EditGlobalAttr {
+    fn copy_and_modify(
+        &self,
+        attr_name: &str,
+        private_file: &netcdf::File,
+        public_file: &mut netcdf::FileMut,
+    ) -> error_stack::Result<(), CopyError> {
+        let opt_attr = private_file.attribute(&attr_name);
+        let required = match self {
+            Self::DoiToExtended { required } => *required,
+        };
+
+        let attr = match (opt_attr, required) {
+            (None, true) => return Err(CopyError::missing_req_attr("/", attr_name).into()),
+            (None, false) => return Ok(()),
+            (Some(v), _) => v,
+        };
+
+        let value = attr.value().change_context_lazy(|| {
+            CopyError::context(format!("reading global attribute {attr_name}"))
+        })?;
+        let new_value = match self {
+            EditGlobalAttr::DoiToExtended { required: _ } => {
+                Self::convert_attribute_with_doi_to_extended(value)?
+            }
+        };
+
+        public_file
+            .add_attribute(&attr_name, new_value)
+            .change_context_lazy(|| {
+                CopyError::context(format!("writing global attribute {attr_name}"))
+            })?;
+
+        Ok(())
+    }
+
+    /// For any string attribute that may contain a TCCON data DOI, try to modify the DOI
+    /// to the correct format for an extended dataset.
+    fn convert_attribute_with_doi_to_extended(
+        value: AttributeValue,
+    ) -> error_stack::Result<AttributeValue, CopyError> {
+        match value {
+            AttributeValue::Str(s) => {
+                Ok(AttributeValue::Str(Self::convert_to_extended_if_doi(&s)?))
+            }
+            AttributeValue::Strs(v) => {
+                let new_v: Vec<String> = v
+                    .iter()
+                    .map(|s| Self::convert_to_extended_if_doi(s))
+                    .try_collect()?;
+                Ok(AttributeValue::Strs(new_v))
+            }
+            _ => Err(CopyError::Custom(format!(
+                "Expected a DOI attribute to contain string(s), instead got {value:?}"
+            ))
+            .into()),
+        }
+    }
+
+    fn convert_to_extended_if_doi(s: &str) -> error_stack::Result<String, CopyError> {
+        let doi_iter = s.split_whitespace().map(|subs| {
+            if subs.trim_start().starts_with("10.") || subs.contains("doi.org") {
+                Self::convert_doi_to_extended(subs).map(|s2| Cow::Owned(s2))
+            } else {
+                Ok(Cow::Borrowed(subs))
+            }
+        });
+        let new_s = itertools::process_results(doi_iter, |mut it| it.join(" "))?;
+        Ok(new_s)
+    }
+
+    fn convert_doi_to_extended(orig_doi: &str) -> error_stack::Result<String, CopyError> {
+        // need to find the last slash, this is the first way I found to split
+        // at it.
+        let i_last_slash = orig_doi.rfind('/').ok_or_else(|| {
+            CopyError::Custom(format!(
+                "Bad DOI format, expected at least one '/', got: {orig_doi}"
+            ))
+        })?;
+        let (prefix, suffix) = orig_doi.split_at(i_last_slash);
+        // The suffix should be something like "tccon.ggg2020p1.lamont01.R1", we want to convert to e.g.,
+        // tccon.ggg2020p1.extended.lamont01.R1. Note that split_at keeps the byte of the split in the
+        // second substring, hence why the first part will be "/tccon", not just "tccon". Also use this
+        // to infer if the DOI is using capitals or not
+        let mut parts = suffix.split('.').collect_vec();
+        let extended_str = if let [first, second, ..] = parts.as_slice() {
+            if !first.eq_ignore_ascii_case("/tccon") {
+                log::warn!(
+                    "Expected first DOI component after the last / to be 'tccon' (case insensitive), got '{first}'",
+                );
+            }
+            if !second.to_lowercase().starts_with("ggg") {
+                log::warn!(
+                    "Expected second DOI component after the last / to start with 'ggg' (case insensitive), got '{second}'",
+                );
+            }
+
+            // Assume that the whole DOI is in uppercase if the first part is
+            if first == &"/TCCON" {
+                "EXTENDED"
+            } else {
+                "extended"
+            }
+        } else {
+            return Err(CopyError::Custom(format!("Invalid DOI format, expected at least two parts separated by periods after the final slash. DOI was: {orig_doi}")).into());
+        };
+
+        // Won't panic b/c we checked there are at least two elements.
+        parts.insert(2, extended_str);
+        let new_suffix = parts.join(".");
+        // split_at doesn't remove the byte, so we don't need to reinsert the /
+        return Ok(format!("{prefix}{new_suffix}"));
     }
 }
 
@@ -1614,5 +1746,63 @@ mod tests {
         xgas_expected.prior_xgas = XgasAncillary::Omit;
         xgas_expected.ak = XgasAncillary::Omit;
         assert_eq!(xgas_de, xgas_expected);
+    }
+
+    #[test]
+    fn test_extended_doi() {
+        let expected_doi = "https://doi.org/10.14291/tccon.ggg2020p1.extended.lamont01.R1";
+        let orig_doi = "https://doi.org/10.14291/tccon.ggg2020p1.lamont01.R1";
+        let new_doi = EditGlobalAttr::convert_to_extended_if_doi(orig_doi)
+            .expect("converting DOI should succeed");
+        assert_eq!(
+            new_doi, expected_doi,
+            "DOI with https:// prefix did not convert correctly"
+        );
+
+        let expected_doi = "doi.org/10.14291/tccon.ggg2020p1.extended.lamont01.R1";
+        let orig_doi = "doi.org/10.14291/tccon.ggg2020p1.lamont01.R1";
+        let new_doi = EditGlobalAttr::convert_to_extended_if_doi(orig_doi)
+            .expect("converting DOI should succeed");
+        assert_eq!(
+            new_doi, expected_doi,
+            "DOI with doi.org prefix did not convert correctly"
+        );
+
+        let expected_doi = "10.14291/tccon.ggg2020p1.extended.lamont01.R1";
+        let orig_doi = "10.14291/tccon.ggg2020p1.lamont01.R1";
+        let new_doi = EditGlobalAttr::convert_to_extended_if_doi(orig_doi)
+            .expect("converting DOI should succeed");
+        assert_eq!(
+            new_doi, expected_doi,
+            "DOI starting with '10.' did not convert correctly"
+        );
+
+        // because it splits on whitespace, whitespace can't be preserved.
+        let expected_doi = "10.14291/tccon.ggg2020p1.extended.lamont01.R1";
+        let orig_doi = "  10.14291/tccon.ggg2020p1.lamont01.R1  ";
+        let new_doi = EditGlobalAttr::convert_to_extended_if_doi(orig_doi)
+            .expect("converting DOI should succeed");
+        assert_eq!(
+            new_doi, expected_doi,
+            "DOI starting with '10.' after spaces did not convert correctly"
+        );
+
+        let expected_ref =
+            "Wennberg, P. O., Wunch, D., Roehl, C. M., Blavier, J.-F., Toon, G. C., & Allen, N. T. (2026). TCCON data from Lamont (US), Release GGG2020.1.R1 (Version R1) [Dataset]. CaltechDATA. https://doi.org/10.14291/tccon.ggg2020p1.extended.lamont01.R1";
+        let orig_ref = "Wennberg, P. O., Wunch, D., Roehl, C. M., Blavier, J.-F., Toon, G. C., & Allen, N. T. (2026). TCCON data from Lamont (US), Release GGG2020.1.R1 (Version R1) [Dataset]. CaltechDATA. https://doi.org/10.14291/tccon.ggg2020p1.lamont01.R1";
+        let new_ref = EditGlobalAttr::convert_to_extended_if_doi(orig_ref)
+            .expect("converting DOI should succeed");
+        assert_eq!(
+            new_ref, expected_ref,
+            "Reference containing a DOI did not convert correctly"
+        );
+
+        let orig_attribute = "This is a description with no DOI in it";
+        let new_attribute = EditGlobalAttr::convert_to_extended_if_doi(orig_attribute)
+            .expect("converting DOI should succeed");
+        assert_eq!(
+            orig_attribute, new_attribute,
+            "Attribute not containing a DOI was modified when it should not have been"
+        );
     }
 }
