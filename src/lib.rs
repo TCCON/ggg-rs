@@ -22,6 +22,8 @@ pub mod o2_dmf;
 pub mod opus;
 /// Utilities for reading GGG files.
 pub mod readers;
+/// Utilities for serializing and deserializing files
+pub mod serde_utils;
 /// Code supporting TCCON-focused programs
 pub mod tccon;
 /// Code used in multiple tests
