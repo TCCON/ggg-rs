@@ -809,6 +809,9 @@ pub fn get_var_data<T: Copy + NcTypeDescriptor, D: ndarray::Dimension>(
 /// If the units cannot be understood, this will return the underlying
 /// [`crate::units::UnknownUnitError`] wrapped in a [`GggNcError::Context`].
 /// The other errors are the same as [`get_var_data`].
+///
+/// If you already have a reference to the variable, use [`get_data_quantity`]
+/// instead.
 pub fn get_var_data_quantity<T, D, Q>(
     ds: &netcdf::File,
     varname: &str,
@@ -824,21 +827,34 @@ where
         variable: varname.to_owned(),
         group: None,
     })?;
+    get_data_quantity(&var)
+}
 
+/// Similar to [`get_var_data_quantity`], but useful if you already have the
+/// reference to the netCDF variables. See [`get_var_data_quantity`] for more details.
+pub fn get_data_quantity<T, D, Q>(
+    var: &netcdf::Variable,
+) -> error_stack::Result<Array<Q, D>, GggNcError>
+where
+    T: Copy + NcTypeDescriptor,
+    D: ndarray::Dimension,
+    Q: FromStr<Err = uom::str::ParseQuantityError> + Copy + Mul<T, Output = Q>,
+{
     let arr = var
         .get::<T, _>(Extents::All)
         .map_err(|e| GggNcError::NcErr(e))?
         .into_dimensionality::<D>()
         .map_err(|e| GggNcError::WrongDimensionality {
-            variable: varname.to_string(),
+            variable: var.name(),
             group: None,
             shape_err: e,
         })?;
 
-    let orig_units = get_string_attr(&var, "units")?;
+    let orig_units = get_string_attr(var, "units")?;
     let arr = crate::units::convert_array(arr, &orig_units).change_context_lazy(|| {
         GggNcError::context(format!(
-            "Error converting variable '{varname}' to base units"
+            "Error converting variable '{}' to base units",
+            var.name()
         ))
     })?;
 
