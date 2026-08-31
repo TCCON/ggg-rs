@@ -780,12 +780,18 @@ pub fn get_var_data<T: Copy + NcTypeDescriptor, D: ndarray::Dimension>(
         group: None,
     })?;
 
+    get_data(&var)
+}
+
+pub fn get_data<T: Copy + NcTypeDescriptor, D: ndarray::Dimension>(
+    var: &netcdf::Variable,
+) -> error_stack::Result<Array<T, D>, GggNcError> {
     let arr = var
         .get::<T, _>(Extents::All)
         .map_err(|e| GggNcError::NcErr(e))?
         .into_dimensionality::<D>()
         .map_err(|e| GggNcError::WrongDimensionality {
-            variable: varname.to_string(),
+            variable: var.name(),
             group: None,
             shape_err: e,
         })?;
