@@ -120,36 +120,6 @@ impl<T, E: std::fmt::Debug + Display> TestResult<T> for Result<T, E> {
     }
 }
 
-/// Compare two arrays with [`approx::relative_eq!`].
-///
-/// # Parameters
-/// - The first parameter is the array with the expected values
-/// - The second parameter is the array with the actual values
-/// - The third parameter is the max relative different. [`approx`]
-///   will compare the absolute differences to the larger value times
-///   this multiplier.
-///
-/// # Side effects
-/// If the two arrays do not agree to within the default EPSILON for their
-/// type and the given relative error, this will panic, display the two
-/// arrays' debug representations, and save them as Numpy binaries to
-/// the current directory.
-macro_rules! assert_arrays_rel_eq {
-    ($expected:expr, $actual:expr, $max_relative:expr) => {
-        if !approx::relative_eq!($actual, $expected, max_relative = $max_relative) {
-
-            // Dump to disk (ignoring Result so it doesn't mask the panic)
-            let _ = ndarray_npy::write_npy("debug_actual.npy", $actual);
-            let _ = ndarray_npy::write_npy("debug_expected.npy", $expected);
-
-            panic!(
-                "Array assertion failed!\nleft = {:?}\nright = {:?} \nActual and Expected arrays have been dumped to 'debug_actual.npy' and 'debug_expected.npy', access with numpy.load.",
-                $actual, $expected
-            );
-        }
-    };
-}
-
 /// Create a structure and verify its fields are contained in another struct.
 ///
 /// This is meant to support testing configuration examples from the mdbook.
@@ -299,20 +269,44 @@ pub fn compare_to_netcdf_values_approx<T, D>(
     T: Copy
         + NcTypeDescriptor
         + approx::RelativeEq
+        + num_traits::Float
         + Debug
         + ndarray_npy::WritableElement
         + From<f32>,
-    <T as approx::AbsDiffEq>::Epsilon: Clone + From<f32>,
-    D: ndarray::Dimension,
+    <T as approx::AbsDiffEq>::Epsilon: Copy + Debug + From<f32> + Into<T>,
+    D: ndarray::Dimension + Copy,
+{
+    // The relative tolerance of 1e-7 was selected for timeavg read_l2 tests of the CO2 prior
+    let rtol: <T as AbsDiffEq>::Epsilon = 1e-7.into();
+    compare_to_netcdf_values_approx_with_tolerance(expected_ds, nc_var, data, rtol);
+}
+
+/// Like [`compare_to_netcdf_values_approx`], but with a custom tolerance.
+///
+/// Don't let the trait bounds scare you, `rtol` should just be the same type as contained
+/// in `data` - `f32` or `f64`.
+#[cfg(feature = "netcdf")]
+pub fn compare_to_netcdf_values_approx_with_tolerance<T, D>(
+    expected_ds: &netcdf::File,
+    nc_var: &str,
+    data: &ndarray::Array<T, D>,
+    rtol: <T as AbsDiffEq>::Epsilon,
+) where
+    T: Copy
+        + NcTypeDescriptor
+        + approx::RelativeEq
+        + num_traits::Float
+        + Debug
+        + ndarray_npy::WritableElement
+        + From<f32>,
+    <T as approx::AbsDiffEq>::Epsilon: Copy + Debug + From<f32> + Into<T>,
+    D: ndarray::Dimension + Copy,
 {
     let expected_data = crate::nc_utils::get_var_data::<T, D>(expected_ds, nc_var).expect(
         &format!("Could not get variable '{nc_var}' from the validation netCDF file"),
     );
     eprintln!("Checking against {nc_var}");
-
-    // The relative tolerance of 1e-7 was selected for timeavg read_l2 tests of the CO2 prior
-    let rtol: <T as AbsDiffEq>::Epsilon = 1e-7.into();
-    assert_arrays_rel_eq!(&expected_data, data, rtol)
+    assert_arrays_allclose(&expected_data, data, rtol);
 }
 
 /// Compare an array of plain numbers to expected values in a [`netcdf::File`].
@@ -355,7 +349,26 @@ pub fn compare_to_netcdf_quantities<T, D, Q>(
     data: &ndarray::ArrayRef<Q, D>,
 ) where
     T: Copy + NcTypeDescriptor,
-    D: ndarray::Dimension,
+    D: ndarray::Dimension + Copy,
+    Q: FromStr<Err = uom::str::ParseQuantityError>
+        + Copy
+        + Mul<T, Output = Q>
+        + crate::array_ops::FloatConversion,
+{
+    // The relative tolerance of 1e-7 was selected for timeavg read_l2 tests of the CO2 prior
+    compare_to_netcdf_quantities_with_tolerance(expected_ds, nc_var, &data, 1e-7);
+}
+
+/// Like [`compare_to_netcdf_quantities`], but with an option for a custom tolerance.
+#[cfg(feature = "netcdf")]
+pub fn compare_to_netcdf_quantities_with_tolerance<T, D, Q>(
+    expected_ds: &netcdf::File,
+    nc_var: &str,
+    data: &ndarray::ArrayRef<Q, D>,
+    rtol: f64,
+) where
+    T: Copy + NcTypeDescriptor,
+    D: ndarray::Dimension + Copy,
     Q: FromStr<Err = uom::str::ParseQuantityError>
         + Copy
         + Mul<T, Output = Q>
@@ -367,9 +380,61 @@ pub fn compare_to_netcdf_quantities<T, D, Q>(
         ));
     let expected_data = expected_data.mapv(|q| q.into_f64());
     let data = data.mapv(|q| q.into_f64());
-    eprintln!("Checking against {nc_var}");
-    // The relative tolerance of 1e-7 was selected for timeavg read_l2 tests of the CO2 prior
-    assert_arrays_rel_eq!(&expected_data, &data, 1e-7)
+    eprintln!("Checking against {nc_var} with rtol = {rtol}");
+    // assert_arrays_rel_eq!(&expected_data, &data, tol)
+    assert_arrays_allclose(&expected_data, &data, rtol);
+}
+
+/// Assert that two arrays (usually of floats) are within some relative tolerance.
+///
+/// This function will also log the unequal elements to stderr (through [`log::debug!`],
+/// so be sure to call [`init_test_logging`] if you want to see that) with a reproduction
+/// of the [`approx`] crate's logic to help understand exactly why it fails. The panic
+/// message will list the indices that were not equal, the values, and the difference. This
+/// also saves the two arrays out in a format `numpy` can read, if further debugging is needed.
+fn assert_arrays_allclose<T, D>(
+    expected: &ndarray::ArrayRef<T, D>,
+    actual: &ndarray::ArrayRef<T, D>,
+    rtol: <T as AbsDiffEq>::Epsilon,
+) where
+    T: approx::RelativeEq + num_traits::Float + ndarray_npy::WritableElement,
+    <T as std::ops::Sub<T>>::Output: Debug,
+    <T as AbsDiffEq>::Epsilon: Into<T> + Copy + Debug,
+    D: ndarray::Dimension + Copy,
+    D::Pattern: Debug,
+{
+    let mut uneq = vec![];
+    ndarray::Zip::indexed(expected)
+        .and(actual)
+        .for_each(|idx, ex, ac| {
+            if ex.relative_ne(ac, T::default_epsilon(), rtol.clone()) {
+                // Debugging: mimic the relative_eq implementation (https://docs.rs/approx/latest/src/approx/relative_eq.rs.html#38)
+                // to understand where the difference is coming from
+                log::debug!("At index = {idx:?}");
+                let abs_diff = (*ac - *ex).abs();
+                let abs_ac = (*ac).abs();
+                let abs_ex = (*ex).abs();
+                let largest = if abs_ac > abs_ex { abs_ac } else { abs_ex };
+                log::debug!(
+                    "Abs diff = {abs_diff:?} vs. epsilon = {:?}, pass = {}",
+                    T::default_epsilon(),
+                    abs_diff < T::default_epsilon().into()
+                );
+                log::debug!(
+                    "Max rel diff = {:?}, largest = {largest:?}, rtol = {rtol:?}, pass = {}",
+                    largest * rtol.into(),
+                    abs_diff < largest * rtol.into()
+                );
+                // End debugging
+                uneq.push((idx, ex, ac, *ac - *ex))
+            }
+        });
+    if !uneq.is_empty() {
+        // Dump to disk (ignoring Result so it doesn't mask the panic)
+        let _ = ndarray_npy::write_npy("debug_actual.npy", actual);
+        let _ = ndarray_npy::write_npy("debug_expected.npy", expected);
+        panic!("Arrays do not match. The unequal indices, expected values, actual values, and differences, are:\n\t{uneq:?}\nActual and Expected arrays have been dumped to 'debug_actual.npy' and 'debug_expected.npy', access with numpy.load.")
+    }
 }
 
 /// Iterate over fenced blocks in a Markdown file.
@@ -398,7 +463,6 @@ pub fn compare_to_netcdf_quantities<T, D, Q>(
 /// ...
 /// ```
 /// ````
-
 pub fn iter_fenced_blocks<P, F, I>(tag: &str, files: I) -> FencedBlocks<P, F>
 where
     P: AsRef<Path>,

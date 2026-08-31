@@ -1,5 +1,3 @@
-use std::{unimplemented, unreachable};
-
 use chrono::{Datelike, NaiveDateTime, Timelike};
 use ggg_rs::array_ops::weighted_mean;
 use ndarray::{Array1, ArrayView1, Axis};
@@ -65,7 +63,7 @@ fn get_median_xgas_error(xgas_error: ArrayView1<Ratio>) -> Ratio {
     let median_res = xgas_error_base_units.quantile_axis_skipnan_mut(
         ndarray::Axis(0),
         noisy_float::types::n64(0.5),
-        &ndarray_stats::interpolate::Nearest,
+        &ndarray_stats::interpolate::Midpoint,
     );
 
     let median = match median_res {
@@ -223,4 +221,50 @@ fn construct_obs_id(solar_mid_time: NaiveDateTime, station_id: i8) -> i64 {
     let station = station_id as i64;
 
     year + month + day + hour + minute + second + station
+}
+
+#[cfg(test)]
+mod tests {
+
+    use ggg_rs::test_utils::init_test_logging;
+
+    use crate::{
+        average_site::{
+            assign_l2_time_bins::{BaseTimeBinAssigner, TimeBinAssigner},
+            average_time_bins::{BaseTimeBinAverager, TimeBinAverager},
+            filter_l2::{BaseDataFilterer, L2DataFilterer},
+            read_l2::{read_file, CO2_VAR_DEF},
+        },
+        common_test::check_timeavg_data,
+    };
+
+    #[test]
+    fn test_bin_averaging() {
+        init_test_logging();
+        let test_dir = ggg_rs::test_utils::test_data_dir();
+        // For now, it's easier to start from the private file. This does mean that this is more
+        // of an integration test. In the future, I should have the read_l2 test be able to save
+        // its output, though that may be easier in GGG2020.2 when the private and public files
+        // are a bit more unified, so the result of reading it can be treated like a private file.
+        let input_file =
+            test_dir.join("inputs/write-timeavg-netcdf/averaging/pa_input_test.private.qc.nc");
+        let expected_file =
+            test_dir.join("expected/write-timeavg-netcdf/averaging/04_bin_stats.nc");
+
+        let l2_data =
+            read_file(&input_file, &CO2_VAR_DEF).expect("Reading test input fail should succeed");
+        let filterer = BaseDataFilterer::default();
+        let filtered_l2_data = filterer.subset_l2_data(l2_data);
+        let solar_time_bins = BaseTimeBinAssigner.assign_solar_time_bin(
+            filtered_l2_data.solar_time.view(),
+            chrono::Duration::minutes(30),
+        );
+
+        // The Python test 'truth' file used sigma = 1, so we do so here even if we normally want to use 2
+        let binned_data =
+            BaseTimeBinAverager.compute_bins(&filtered_l2_data, &solar_time_bins, 1.0);
+        let expected_ds = netcdf::open(expected_file)
+            .expect("Should be able to open the file with expected values");
+        check_timeavg_data(&expected_ds, binned_data);
+    }
 }
