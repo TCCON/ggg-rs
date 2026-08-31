@@ -39,6 +39,8 @@ pub mod tccon;
 pub mod test_utils;
 /// Utils for calculating time-related quantities
 pub mod time_utils;
+/// Utils for working with TOML files
+pub mod toml_utils;
 /// Helper functions for unit conversions
 pub mod units;
 /// General common utilities

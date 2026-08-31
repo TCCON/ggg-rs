@@ -20,6 +20,9 @@ pub(crate) struct SiteConfig {
     /// Edits that can be applied to specific spectra or time ranges.
     #[serde(default)]
     pub(crate) edits: Vec<ModRow>,
+
+    #[serde(skip)]
+    toml_src: Option<String>,
 }
 
 impl SiteConfig {
@@ -229,7 +232,7 @@ pub(crate) struct ModRowValues {
     /// This will only run once through the entirety of `create_sunrun_rs`. Any variables defined
     /// here will be available to access in the `lua` string.
     #[serde(default)]
-    pub(crate) init_lua: Option<String>,
+    pub(crate) init_lua: Option<toml::Spanned<String>>,
     #[serde(default)]
     lua_init_run: Cell<bool>,
 
@@ -247,7 +250,7 @@ pub(crate) struct ModRowValues {
     /// `lua55` feature (e.g., `UTF8`) should be available. Do not use libraries
     /// marked as "unsafe".
     #[serde(default)]
-    pub(crate) lua: Option<String>,
+    pub(crate) lua: Option<toml::Spanned<String>>,
 }
 
 impl ModRowValues {
@@ -257,13 +260,13 @@ impl ModRowValues {
         lua: Option<String>,
         init_lua: Option<String>,
     ) -> Self {
-        // let lua_span = lua.map(|s| toml::Spanned::new(0..s.len(), s));
-        // let init_lua_span = init_lua.map(|s| toml::Spanned::new(0..s.len(), s));
+        let lua_span = lua.map(|s| toml::Spanned::new(0..s.len(), s));
+        let init_lua_span = init_lua.map(|s| toml::Spanned::new(0..s.len(), s));
         Self {
             replace,
-            init_lua,
+            init_lua: init_lua_span,
             lua_init_run: Cell::new(false),
-            lua,
+            lua: lua_span,
         }
     }
     /// Apply the defined edits to this row.
