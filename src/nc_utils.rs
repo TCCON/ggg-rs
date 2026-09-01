@@ -798,6 +798,123 @@ pub fn get_data<T: Copy + NcTypeDescriptor, D: ndarray::Dimension>(
     Ok(arr)
 }
 
+pub fn get_var_cftime<T: ToNanos, D: ndarray::Dimension>(
+    ds: &netcdf::File,
+    varname: &str,
+) -> error_stack::Result<Array<chrono::DateTime<chrono::Utc>, D>, GggNcError> {
+    let var = ds.variable(varname).ok_or_else(|| GggNcError::MissingVar {
+        variable: varname.to_owned(),
+        group: None,
+    })?;
+    get_cftime::<T, D>(&var)
+}
+
+/// Read times from a variable with a compatible CF-style time value
+///
+/// Note that this is not a fully realized CF time parser; the units
+/// on the variable must be "DURATION since YYYY-MM-DD HH:MM:SS.fffffffff"
+/// where DURATION is one of days, hours, minutes, seconds, milliseconds,
+/// microseconds, nanoseconds (or the singular versions). The .fffffffff
+/// component of the date is optional, and may have 3, 6, or 9 digits.
+/// This also assumes that the starting time is in UTC and does not
+/// check for "calendar" attributes.
+pub fn get_cftime<T: ToNanos, D: ndarray::Dimension>(
+    var: &netcdf::Variable,
+) -> error_stack::Result<Array<chrono::DateTime<chrono::Utc>, D>, GggNcError> {
+    let timestamps = get_data::<T, D>(var)?;
+    let units = get_string_attr(var, "units")?;
+    get_cftime_inner(timestamps, &units)
+}
+
+fn get_cftime_inner<T: ToNanos, D: ndarray::Dimension>(
+    timestamps: Array<T, D>,
+    units: &str,
+) -> error_stack::Result<Array<chrono::DateTime<chrono::Utc>, D>, GggNcError> {
+    let (dur_str, epoch_str) = units.split_once(" since ").ok_or_else(|| {
+        GggNcError::Custom(format!(
+            "Expected substring 'since' in time units was not found. Units attribute = '{units}'"
+        ))
+    })?;
+    let epoch = chrono::NaiveDateTime::parse_from_str(epoch_str, "%Y-%m-%d %H:%M:%S%.f")
+        .change_context_lazy(|| {
+            GggNcError::Custom(format!(
+                "Unable to parse epoch time '{epoch_str}' from time units string '{units}'"
+            ))
+        })?
+        .and_utc();
+    let shape = timestamps.dim();
+    let times: Vec<chrono::DateTime<chrono::Utc>> = timestamps
+        .into_iter()
+        .map(|ts| ts.to_datetime(dur_str, epoch))
+        .try_collect()?;
+    // Should not panic, as simply returning back to the shape of timestamps,
+    // so the number of elements must match.
+    Ok(Array::from_shape_vec(shape, times).expect("number of elements should be correct"))
+}
+
+pub trait ToNanos: Copy + NcTypeDescriptor {
+    fn to_nanos(self, dur_str: &str) -> Result<i64, GggNcError>;
+    fn conv_factor(dur_str: &str) -> Result<Self, GggNcError>;
+    fn to_datetime(
+        self,
+        dur_str: &str,
+        epoch: chrono::DateTime<chrono::Utc>,
+    ) -> Result<chrono::DateTime<chrono::Utc>, GggNcError> {
+        let ts_nanos = self.to_nanos(dur_str)?;
+        Ok(epoch + chrono::Duration::nanoseconds(ts_nanos))
+    }
+}
+
+impl ToNanos for i64 {
+    fn to_nanos(self, dur_str: &str) -> Result<i64, GggNcError> {
+        let nanos = self * Self::conv_factor(dur_str)?;
+        Ok(nanos)
+    }
+
+    fn conv_factor(dur_str: &str) -> Result<Self, GggNcError> {
+        match dur_str {
+            "nanoseconds" | "nanosecond" => Ok(1),
+            "microseconds" | "microsecond" => Ok(1_000),
+            "milliseconds" | "millisecond" => Ok(1_000_000),
+            "seconds" | "second" => Ok(1_000_000_000),
+            "minutes" | "minute" => Ok(60 * 1_000_000_000),
+            "hours" | "hour" => Ok(60 * 60 * 1_000_000_000),
+            "days" | "day" => Ok(24 * 60 * 60 * 1_000_000_000),
+            _ => Err(GggNcError::Custom(format!(
+                "Unknown duration string, '{dur_str}'"
+            ))),
+        }
+    }
+}
+
+impl ToNanos for u64 {
+    fn to_nanos(self, dur_str: &str) -> Result<i64, GggNcError> {
+        let nanos = self * Self::conv_factor(dur_str)?;
+        nanos.try_into().map_err(|e| {
+            GggNcError::Custom(format!(
+                "Could not convert u64 timestamp value to i64 one: {e}"
+            ))
+        })
+    }
+
+    fn conv_factor(dur_str: &str) -> Result<Self, GggNcError> {
+        let fac = i64::conv_factor(dur_str)?;
+        Ok(fac as u64)
+    }
+}
+
+impl ToNanos for f64 {
+    fn to_nanos(self, dur_str: &str) -> Result<i64, GggNcError> {
+        let nanos = self * Self::conv_factor(dur_str)?;
+        Ok(nanos as i64)
+    }
+
+    fn conv_factor(dur_str: &str) -> Result<Self, GggNcError> {
+        let fac = i64::conv_factor(dur_str)?;
+        Ok(fac as f64)
+    }
+}
+
 /// Read data from a variable into a [`uom::si::Quantity`].
 ///
 /// Like [`get_var_data`], the generic parameter `T`
@@ -1024,5 +1141,132 @@ pub fn parse_release_lag(release_lag: &str) -> Result<chrono::Duration, GggNcErr
         Err(GggNcError::Custom(format!(
             "Incorrect format for release lag, expected 'NUMBER UNITS', got '{release_lag}'"
         )))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_utils::utc_dt_ymdhms;
+    use ndarray::array;
+
+    #[test]
+    fn test_cftime_like_parsing() {
+        let unit_scales = [
+            ("nanoseconds", 1_000_000_000_i64),
+            ("microseconds", 1_000_000_i64),
+            ("milliseconds", 1_000_i64),
+            ("seconds", 1_i64),
+        ];
+        for (units, scale) in unit_scales {
+            let times = get_cftime_inner(
+                array![scale, 2 * scale],
+                &format!("{units} since 2010-01-01 00:00:00"),
+            )
+            .unwrap();
+            assert_eq!(
+                times,
+                array![
+                    utc_dt_ymdhms(2010, 1, 1, 0, 0, 1),
+                    utc_dt_ymdhms(2010, 1, 1, 0, 0, 2)
+                ],
+                "i64 {units} parsing failed"
+            );
+        }
+
+        let unit_scales = [
+            ("nanoseconds", 1_000_000_000_u64),
+            ("microseconds", 1_000_000_u64),
+            ("milliseconds", 1_000_u64),
+            ("seconds", 1_u64),
+        ];
+        for (units, scale) in unit_scales {
+            let times = get_cftime_inner(
+                array![scale, 2 * scale],
+                &format!("{units} since 2010-01-01 00:00:00"),
+            )
+            .unwrap();
+            assert_eq!(
+                times,
+                array![
+                    utc_dt_ymdhms(2010, 1, 1, 0, 0, 1),
+                    utc_dt_ymdhms(2010, 1, 1, 0, 0, 2)
+                ],
+                "u64 {units} parsing failed"
+            );
+        }
+
+        let unit_scales = [
+            ("nanoseconds", 1_000_000_000_f64),
+            ("microseconds", 1_000_000_f64),
+            ("milliseconds", 1_000_f64),
+            ("seconds", 1_f64),
+        ];
+        for (units, scale) in unit_scales {
+            let times = get_cftime_inner(
+                array![scale, 2.0 * scale],
+                &format!("{units} since 2010-01-01 00:00:00"),
+            )
+            .unwrap();
+            assert_eq!(
+                times,
+                array![
+                    utc_dt_ymdhms(2010, 1, 1, 0, 0, 1),
+                    utc_dt_ymdhms(2010, 1, 1, 0, 0, 2)
+                ],
+                "f64 {units} parsing failed"
+            );
+        }
+
+        let unit_scales = [("minutes", 1440_i64), ("hours", 24_i64), ("days", 1_i64)];
+        for (units, scale) in unit_scales {
+            let times = get_cftime_inner(
+                array![scale, 2 * scale],
+                &format!("{units} since 2010-01-01 00:00:00"),
+            )
+            .unwrap();
+            assert_eq!(
+                times,
+                array![
+                    utc_dt_ymdhms(2010, 1, 2, 0, 0, 0),
+                    utc_dt_ymdhms(2010, 1, 3, 0, 0, 0)
+                ],
+                "i64 {units} parsing failed"
+            );
+        }
+
+        let unit_scales = [("minutes", 1440_u64), ("hours", 24_u64), ("days", 1_u64)];
+        for (units, scale) in unit_scales {
+            let times = get_cftime_inner(
+                array![scale, 2 * scale],
+                &format!("{units} since 2010-01-01 00:00:00"),
+            )
+            .unwrap();
+            assert_eq!(
+                times,
+                array![
+                    utc_dt_ymdhms(2010, 1, 2, 0, 0, 0),
+                    utc_dt_ymdhms(2010, 1, 3, 0, 0, 0)
+                ],
+                "u64 {units} parsing failed"
+            );
+        }
+
+        let unit_scales = [("minutes", 1440_f64), ("hours", 24_f64), ("days", 1_f64)];
+        for (units, scale) in unit_scales {
+            let times = get_cftime_inner(
+                array![scale, 2.0 * scale],
+                &format!("{units} since 2010-01-01 00:00:00"),
+            )
+            .unwrap();
+            assert_eq!(
+                times,
+                array![
+                    utc_dt_ymdhms(2010, 1, 2, 0, 0, 0),
+                    utc_dt_ymdhms(2010, 1, 3, 0, 0, 0)
+                ],
+                "f64 {units} parsing failed"
+            );
+        }
     }
 }

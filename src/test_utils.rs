@@ -65,9 +65,20 @@ impl log4rs::append::Append for TestAppender {
 
 /// Test helper function to quickly create a UTC datetime.
 pub fn utc_dt_ymd(year: i32, month: u32, day: u32) -> chrono::DateTime<chrono::Utc> {
+    utc_dt_ymdhms(year, month, day, 0, 0, 0)
+}
+
+pub fn utc_dt_ymdhms(
+    year: i32,
+    month: u32,
+    day: u32,
+    hour: u32,
+    minute: u32,
+    second: u32,
+) -> chrono::DateTime<chrono::Utc> {
     chrono::NaiveDate::from_ymd_opt(year, month, day)
         .unwrap()
-        .and_hms_opt(0, 0, 0)
+        .and_hms_opt(hour, minute, second)
         .unwrap()
         .and_utc()
 }

@@ -156,40 +156,9 @@ pub(crate) fn check_timeavg_data(expected_ds: &netcdf::File, timeavg_data: TimeA
     assert_eq!(timeavg_data.wmo_or_analagous_scale, "WMO CO2 X2019");
 }
 
-fn get_time_epoch(time_var: &netcdf::Variable) -> (chrono::DateTime<chrono::Utc>, String) {
-    let units =
-        nc_utils::get_string_attr(time_var, "units").expect("should be able to get time units");
-    let (dur_str, epoch_str) = units
-        .split_once(" since ")
-        .expect("time units should have ' since ' in it");
-    let epoch = chrono::NaiveDateTime::parse_from_str(epoch_str, "%Y-%m-%d %H:%M:%S%.f")
-        .expect("should be able to parse the time units epoch");
-    (epoch.and_utc(), dur_str.to_string())
-}
-
 pub(crate) fn read_time(
     ds: &netcdf::File,
     varname: &str,
 ) -> ndarray::Array1<chrono::DateTime<chrono::Utc>> {
-    let time_var = ds
-        .variable(varname)
-        .expect(&format!("Variable '{varname}' should exist"));
-    let (epoch, dur_str) = get_time_epoch(&time_var);
-    let utc_times = nc_utils::get_data::<i64, Ix1>(&time_var)
-        .expect("Should be able to read time variable as 1D i64");
-    match dur_str.as_str() {
-        "nanoseconds" | "nanosecond" => {
-            utc_times.mapv(|ts| epoch + chrono::Duration::nanoseconds(ts))
-        }
-        "microseconds" | "microsecond" => {
-            utc_times.mapv(|ts| epoch + chrono::Duration::microseconds(ts))
-        }
-        "milliseconds" | "millisecond" => {
-            utc_times.mapv(|ts| epoch + chrono::Duration::milliseconds(ts))
-        }
-        "seconds" | "second" => utc_times.mapv(|ts| epoch + chrono::Duration::seconds(ts)),
-        "minutes" | "minute" => utc_times.mapv(|ts| epoch + chrono::Duration::minutes(ts)),
-        "hours" | "hour" => utc_times.mapv(|ts| epoch + chrono::Duration::hours(ts)),
-        _ => panic!("Unknown duration string, '{dur_str}'"),
-    }
+    ggg_rs::nc_utils::get_var_cftime::<i64, Ix1>(ds, varname).expect("reading time should succeed")
 }
