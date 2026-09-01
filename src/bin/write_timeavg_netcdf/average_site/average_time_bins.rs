@@ -124,10 +124,17 @@ fn assign_one_bin(
         .fill(construct_obs_id(solar_mid_time, l2_data.station_id));
     avg_data.station_id.slice_mut(i1d).fill(l2_data.station_id);
 
+    // A bin is considered public only if all the contained data is public
     let all_public = l2_data
         .is_public
         .fold(1, |acc, &el| if acc == 0 { 0 } else { el });
     avg_data.public.slice_mut(i1d).fill(all_public);
+
+    // Number of L2 observations
+    avg_data
+        .num_soundings
+        .slice_mut(i1d)
+        .fill(l2_indices.len() as u64);
 
     // The rest of the numerical quantities are straightforward
     let v = weighted_mean(&l2_data.latitude.select(Axis(0), l2_indices), &weights).unwrap();
@@ -233,7 +240,7 @@ mod tests {
             assign_l2_time_bins::{BaseTimeBinAssigner, TimeBinAssigner},
             average_time_bins::{BaseTimeBinAverager, TimeBinAverager},
             filter_l2::{BaseDataFilterer, L2DataFilterer},
-            read_l2::{read_file, CO2_VAR_DEF},
+            read_l2::{co2_bin_def, read_file},
         },
         common_test::check_timeavg_data,
     };
@@ -252,7 +259,7 @@ mod tests {
             test_dir.join("expected/write-timeavg-netcdf/averaging/04_bin_stats.nc");
 
         let l2_data =
-            read_file(&input_file, &CO2_VAR_DEF).expect("Reading test input fail should succeed");
+            read_file(&input_file, &co2_bin_def()).expect("Reading test input fail should succeed");
         let filterer = BaseDataFilterer::default();
         let filtered_l2_data = filterer.subset_l2_data(l2_data);
         let solar_time_bins = BaseTimeBinAssigner.assign_solar_time_bin(

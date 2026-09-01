@@ -24,6 +24,12 @@ pub(crate) struct TimeAvgData {
     /// at the time of creation (1) or contained at least one private spectrum (0).
     pub(crate) public: Array1<i8>,
 
+    /// A flag indicating if the bin is safe to use/include in the daily files.
+    pub(crate) bin_flag: Array1<u64>,
+
+    /// How many TCCON observations are included in the bin
+    pub(crate) num_soundings: Array1<u64>,
+
     /// The TCCON latitudes
     pub(crate) latitude: Array1<Angle>,
 
@@ -86,6 +92,8 @@ impl TimeAvgData {
             obs_id: Array1::from_elem(nbin, i64::MIN),
             station_id: Array1::from_elem(nbin, i8::MIN),
             public: Array1::from_elem(nbin, i8::MIN),
+            bin_flag: Array1::from_elem(nbin, 0),
+            num_soundings: Array1::from_elem(nbin, 0),
             latitude: Array1::from_elem(nbin, Angle::new::<uom::si::angle::degree>(f32::MIN)),
             longitude: Array1::from_elem(nbin, Angle::new::<uom::si::angle::degree>(f32::MIN)),
             sza: Array1::from_elem(nbin, Angle::new::<uom::si::angle::degree>(f32::MIN)),

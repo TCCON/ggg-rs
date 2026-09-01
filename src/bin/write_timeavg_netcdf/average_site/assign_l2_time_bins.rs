@@ -55,7 +55,7 @@ mod tests {
     use crate::{
         average_site::{
             filter_l2::{BaseDataFilterer, L2DataFilterer},
-            read_l2::{read_file, CO2_VAR_DEF},
+            read_l2::{co2_bin_def, read_file},
         },
         common_test::read_time,
     };
@@ -73,7 +73,7 @@ mod tests {
             test_dir.join("expected/write-timeavg-netcdf/averaging/03_time_binned.nc");
 
         let l2_data =
-            read_file(&input_file, &CO2_VAR_DEF).expect("Reading test input fail should succeed");
+            read_file(&input_file, &co2_bin_def()).expect("Reading test input fail should succeed");
         let filterer = BaseDataFilterer::default();
         let filtered_l2_data = filterer.subset_l2_data(l2_data);
         let solar_time_bins = BaseTimeBinAssigner.assign_solar_time_bin(

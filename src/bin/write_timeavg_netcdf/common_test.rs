@@ -74,7 +74,12 @@ pub(crate) fn check_timeavg_data(expected_ds: &netcdf::File, timeavg_data: TimeA
     let expected_obs_id = ndarray::Array1::from_elem(timeavg_data.station_id.dim(), 29);
     assert_eq!(timeavg_data.station_id, expected_obs_id);
 
-    // Most of the remaining fields can be checked.
+    // Most of the remaining fields can be checked with a bit looser tolerance than in the L2, since there is some math.
+    compare_to_netcdf_values_eq::<u64, _>(
+        &expected_ds,
+        "binned_xco2_num_spec",
+        &timeavg_data.num_soundings,
+    );
     compare_to_netcdf_values_eq::<i8, _>(&expected_ds, "public", &timeavg_data.public);
     compare_to_netcdf_quantities_with_tolerance::<f32, _, _>(
         &expected_ds,

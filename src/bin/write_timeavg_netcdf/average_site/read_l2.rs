@@ -13,45 +13,53 @@ use ndarray::{Array1, Ix1, Ix2};
 use uom::si::{
     self,
     f32::{Angle, Pressure, Ratio},
+    ratio::part_per_million,
 };
 
 use crate::data_structures::Level2Data;
 
-/// Required variables to average XCO2
-pub(super) const CO2_VAR_DEF: SourceVarDef = SourceVarDef {
-    private_prior_var: "prior_1co2",
-    public_prior_var: "prior_co2",
-    ak_var: "ak_xco2",
-    ak_bin_var: "ak_slant_xco2_bin",
-    xgas_var: "xco2_x2019",
-    wmo_scale_var: "aicf_xco2_x2019_scale",
-};
-
-/// Required variables to average XCH4
-pub(super) const CH4_VAR_DEF: SourceVarDef = SourceVarDef {
-    private_prior_var: "prior_1ch4",
-    public_prior_var: "prior_ch4",
-    ak_var: "ak_xch4",
-    ak_bin_var: "ak_slant_xch4_bin",
-    xgas_var: "xch4",
-    wmo_scale_var: "aicf_xch4_scale",
-};
-
 /// A struct defining the set of variables and other setting required
 /// to average a particular gas.
-pub(super) struct SourceVarDef {
+pub(super) struct SourceBinDef {
     private_prior_var: &'static str,
     public_prior_var: &'static str,
     ak_var: &'static str,
     ak_bin_var: &'static str,
     xgas_var: &'static str,
     wmo_scale_var: &'static str,
+    pub(crate) stddev_limit: Ratio,
+}
+
+/// Required information to average XCO2
+pub(super) fn co2_bin_def() -> SourceBinDef {
+    SourceBinDef {
+        private_prior_var: "prior_1co2",
+        public_prior_var: "prior_co2",
+        ak_var: "ak_xco2",
+        ak_bin_var: "ak_slant_xco2_bin",
+        xgas_var: "xco2_x2019",
+        wmo_scale_var: "aicf_xco2_x2019_scale",
+        stddev_limit: Ratio::new::<part_per_million>(1.0),
+    }
+}
+
+/// Required information to average XCH4
+pub(super) fn ch4_bin_def() -> SourceBinDef {
+    SourceBinDef {
+        private_prior_var: "prior_1ch4",
+        public_prior_var: "prior_ch4",
+        ak_var: "ak_xch4",
+        ak_bin_var: "ak_slant_xch4_bin",
+        xgas_var: "xch4",
+        wmo_scale_var: "aicf_xch4_scale",
+        stddev_limit: todo!(),
+    }
 }
 
 /// Read data for a single Xgas from a private or public L2 TCCON file.
 pub(crate) fn read_file(
     nc_file: &Path,
-    var_def: &SourceVarDef,
+    var_def: &SourceBinDef,
 ) -> error_stack::Result<Level2Data, GggNcError> {
     log::info!("Reading L2 data from file {}", nc_file.display());
     let ds = netcdf::open(nc_file).map_err(|e| GggNcError::NcErr(e))?;
@@ -72,7 +80,7 @@ pub(crate) fn read_file(
 /// this will be part of the private netCDF writer.
 fn read_private_file(
     ds: &netcdf::File,
-    var_def: &SourceVarDef,
+    var_def: &SourceBinDef,
 ) -> error_stack::Result<Level2Data, GggNcError> {
     let mut data = read_either_file(
         ds,
@@ -157,7 +165,7 @@ fn read_private_file(
 /// since the data is assumed to be public.
 fn read_public_file(
     ds: &netcdf::File,
-    var_def: &SourceVarDef,
+    var_def: &SourceBinDef,
 ) -> error_stack::Result<Level2Data, GggNcError> {
     let mut data = read_either_file(
         ds,
@@ -259,7 +267,7 @@ mod tests {
             test_dir.join("inputs/write-timeavg-netcdf/averaging/pa_input_test.private.qc.nc");
         let expected_file = test_dir.join("expected/write-timeavg-netcdf/averaging/01_loaded.nc");
         let l2_data =
-            read_file(&input_file, &CO2_VAR_DEF).expect("Reading test input fail should succeed");
+            read_file(&input_file, &co2_bin_def()).expect("Reading test input fail should succeed");
 
         let expected_ds = netcdf::open(expected_file)
             .expect("Should be able to open the file with expected values");

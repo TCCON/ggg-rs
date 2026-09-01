@@ -66,6 +66,7 @@ impl AvgSiteCli {
             &self.level2_file,
             self.get_timeavg_file()?.as_path(),
             self.get_time_bin(),
+            None,
         )
     }
 
