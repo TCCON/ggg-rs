@@ -20,7 +20,7 @@ use crate::data_structures::Level2Data;
 
 /// A struct defining the set of variables and other setting required
 /// to average a particular gas.
-pub(super) struct SourceBinDef {
+pub(crate) struct SourceBinDef {
     private_prior_var: &'static str,
     public_prior_var: &'static str,
     ak_var: &'static str,
@@ -28,10 +28,11 @@ pub(super) struct SourceBinDef {
     xgas_var: &'static str,
     wmo_scale_var: &'static str,
     pub(crate) stddev_limit: Ratio,
+    pub(crate) output_group: &'static str,
 }
 
 /// Required information to average XCO2
-pub(super) fn co2_bin_def() -> SourceBinDef {
+pub(crate) fn co2_bin_def() -> SourceBinDef {
     SourceBinDef {
         private_prior_var: "prior_1co2",
         public_prior_var: "prior_co2",
@@ -40,11 +41,12 @@ pub(super) fn co2_bin_def() -> SourceBinDef {
         xgas_var: "xco2_x2019",
         wmo_scale_var: "aicf_xco2_x2019_scale",
         stddev_limit: Ratio::new::<part_per_million>(1.0),
+        output_group: "CO2",
     }
 }
 
 /// Required information to average XCH4
-pub(super) fn ch4_bin_def() -> SourceBinDef {
+pub(crate) fn ch4_bin_def() -> SourceBinDef {
     SourceBinDef {
         private_prior_var: "prior_1ch4",
         public_prior_var: "prior_ch4",
@@ -53,6 +55,7 @@ pub(super) fn ch4_bin_def() -> SourceBinDef {
         xgas_var: "xch4",
         wmo_scale_var: "aicf_xch4_scale",
         stddev_limit: todo!(),
+        output_group: "CH4",
     }
 }
 

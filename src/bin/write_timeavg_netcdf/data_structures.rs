@@ -1,81 +1,161 @@
 use std::fmt::Debug;
 
 use chrono::{DateTime, NaiveDateTime, Utc};
+use ggg_rs::nc_utils::{map_chrono_f64, map_chrono_naive_f64};
+use ggg_rs_derive::WriteNetcdf;
 use ndarray::{Array1, Array2, Axis};
+use uom::si::angle::degree;
 use uom::si::f32::{Angle, Pressure, Ratio};
+use uom::si::pressure::pascal;
+use uom::si::ratio::{part_per_million, ratio};
 
 /// A structure representing time-averaged data from one or more TCCON sites.
+#[derive(WriteNetcdf)]
+#[netcdf(describe)]
 pub(crate) struct TimeAvgData {
     /// The midpoint of each solar time bin bin.
+    #[netcdf(dimensions("time"), map_units = map_chrono_naive_f64, kind = "array")]
     pub(crate) solar_mid_time: Array1<NaiveDateTime>,
 
     /// The mean UTC time of the bin, weighted by the uncertainty in the column
     /// averages.
+    #[netcdf(dimensions("time"), map_units = map_chrono_f64, kind = "array")]
     pub(crate) utc_mean_time: Array1<DateTime<Utc>>,
 
     /// A unique identifier for each bin in the format YYYYmmddHHMMSSII, where
     /// II is the station ID and the rest is the time string of the solar mean time.
+    #[netcdf(dimensions("time"))]
     pub(crate) obs_id: Array1<i64>,
 
     /// The numeric ID of the TCCON station from which each bin was derived.
+    #[netcdf(dimensions("time"))]
     pub(crate) station_id: Array1<i8>,
 
     /// A flag indicating if this bin contains only data that would be public
     /// at the time of creation (1) or contained at least one private spectrum (0).
+    #[netcdf(
+        dimensions("time"),
+        attr( name = "flag_values", value = vec![0_i8, 1_i8]),
+        attr( name = "flag_meanings", value = "bin_contained_private_data bin_contained_only_public_data")
+    )]
     pub(crate) public: Array1<i8>,
 
     /// A flag indicating if the bin is safe to use/include in the daily files.
+    #[netcdf(dimensions("time"))]
+    // bin flags are to be added separately by the flagging object
     pub(crate) bin_flag: Array1<u64>,
 
     /// How many TCCON observations are included in the bin
+    #[netcdf(dimensions("time"))]
     pub(crate) num_soundings: Array1<u64>,
 
     /// The TCCON latitudes
+    #[netcdf(
+        dimensions("time"),
+        map = ggg_rs::units::angle::map::<degree, _, _, _, _>,
+        attr(name = "units", value = "degrees_north"),
+        kind = "array",
+    )]
     pub(crate) latitude: Array1<Angle>,
 
     /// The TCCON longitudes
+    #[netcdf(
+        dimensions("time"),
+        map = ggg_rs::units::angle::map::<degree, _, _, _, _>,
+        attr(name = "units", value = "degrees_east"),
+        kind = "array",
+    )]
     pub(crate) longitude: Array1<Angle>,
 
     /// The mean solar zenith angle of the bin, weighted by the uncertainty in
     /// the column averages.
+    #[netcdf(
+        dimensions("time"),
+        map = ggg_rs::units::angle::map::<degree, _, _, _, _>,
+        attr(name = "units", value = "degrees"),
+        kind = "array",
+    )]
     pub(crate) sza: Array1<Angle>,
 
     /// The TCCON surface pressures, weighted by the uncertainty in the column
     /// averages.
+    #[netcdf(
+        dimensions("time"),
+        map_units = ggg_rs::units::pressure::map_units::<pascal, _, _, _, _>,
+        kind = "array",
+    )]
     pub(crate) p_surf: Array1<Pressure>,
 
     /// The pressure levels of the priors, with one row per bin.
+    #[netcdf(
+        dimensions("time", "n_lev"),
+        map_units = ggg_rs::units::pressure::map_units::<pascal, _, _, _, _>,
+        kind = "array",
+    )]
     pub(crate) p_levels_prior: Array2<Pressure>,
 
     /// The pressure levels of the AKs. In the future, this will
     /// be removed once the private files unified the AK and prior
     /// pressure levels. Since these do not change, there is a
     /// single vector for all bins.
+    #[netcdf(
+        dimensions("n_lev"),
+        map_units = ggg_rs::units::pressure::map_units::<pascal, _, _, _, _>,
+        kind = "array",
+    )]
     pub(crate) p_levels_ak: Array1<Pressure>,
 
     /// The TCCON H2O priors in wet mole fraction, weighted by the uncertainty
     /// in the column averages.
+    #[netcdf(
+        dimensions("time", "n_lev"),
+        map_units = ggg_rs::units::ratio::map_units::<ratio, _, _, _, _>,
+        kind = "array",
+    )]
     pub(crate) prior_h2o: Array2<Ratio>,
 
     /// The a priori profile for the retrieved gas, dried with the TCCON H2O profile,
     /// and weighted by the column average uncertainties.
+    #[netcdf(
+        dimensions("time", "n_lev"),
+        map_units = ggg_rs::units::ratio::map_units::<part_per_million, _, _, _, _>,
+        kind = "array",
+    )]
     pub(crate) prior_mixing: Array2<Ratio>,
 
     /// The original TCCON a priori profile for the retrieved gas (in wet mole fraction),
     /// weighted by the column average uncertainties.
+    #[netcdf(
+        dimensions("time", "n_lev"),
+        map_units = ggg_rs::units::ratio::map_units::<part_per_million, _, _, _, _>,
+        kind = "array",
+    )]
     pub(crate) prior_mixing_tccon: Array2<Ratio>,
 
     /// The averaging kernels, weighted by the column average uncertainties.
+    #[netcdf(dimensions("time", "n_lev"), attr(name = "units", value = "1"))]
     pub(crate) avg_kernel: Array2<f32>,
 
     /// The bin averaged TCCON column average values, weighted by the uncertainty
     /// in the individual observations.
+    #[netcdf(
+        dimensions("time"),
+        map_units = ggg_rs::units::ratio::map_units::<part_per_million, _, _, _, _>,
+        kind = "array",
+        attr( name = "wmo_or_analogous_scale", func = Self::wmo_scale_attr)
+    )]
     pub(crate) column_mixing: Array1<Ratio>,
 
     /// The propagated uncertainty in the bin averaged TCCON column average values.
+    #[netcdf(
+        dimensions("time"),
+        map_units = ggg_rs::units::ratio::map_units::<part_per_million, _, _, _, _>,
+        kind = "array",
+    )]
     pub(crate) sigma_column_mixing: Array1<Ratio>,
 
     /// The WMO or analagous calibration scale to which the column mixing values are tied.
+    #[netcdf(skip)]
     pub(crate) wmo_or_analagous_scale: String,
 }
 
@@ -126,6 +206,10 @@ impl TimeAvgData {
             ),
             wmo_or_analagous_scale: wmo_scale,
         }
+    }
+
+    fn wmo_scale_attr<'a, A>(&'a self, _xgas: &A, _name: &str) -> &'a str {
+        &self.wmo_or_analagous_scale
     }
 }
 

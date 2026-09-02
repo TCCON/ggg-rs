@@ -1,5 +1,5 @@
-#[cfg(feature = "netcdf")]
-use std::{eprintln, fmt::Debug, format, ops::Mul, str::FromStr};
+// #[cfg(feature = "netcdf")]
+use std::{fmt::Debug, ops::Mul, str::FromStr};
 use std::{
     fmt::Display,
     io::{BufRead, BufReader, Lines},
@@ -7,7 +7,6 @@ use std::{
     process::{Command, Stdio},
 };
 
-#[cfg(feature = "netcdf")]
 use approx::AbsDiffEq;
 #[cfg(feature = "netcdf")]
 use netcdf::NcTypeDescriptor;
@@ -23,8 +22,10 @@ pub fn test_data_dir() -> PathBuf {
 /// Set up the log4rs backend to interact properly with Cargo's test capture mechanism
 ///
 /// Tests should call this to set up logging during their run, rather than relying on
-/// the normal [`crate::logging::init_logging`].
-pub fn init_test_logging() {
+/// the normal [`crate::logging::init_logging`]. Use `level = None` for the default
+/// log level (debug).
+pub fn init_test_logging(level: Option<log::LevelFilter>) {
+    let level = level.unwrap_or(log::LevelFilter::Debug);
     INIT_LOGGING.call_once(|| {
         let encoder = Box::new(log4rs::encode::pattern::PatternEncoder::new(
             crate::logging::LOG_PATTERN,
@@ -36,7 +37,7 @@ pub fn init_test_logging() {
             .build(
                 log4rs::config::Root::builder()
                     .appender("test")
-                    .build(log::LevelFilter::Debug),
+                    .build(level),
             )
             .expect("should be able to build test log4rs config");
         log4rs::init_config(config).expect("should be able to initialize log4rs logging for tests");

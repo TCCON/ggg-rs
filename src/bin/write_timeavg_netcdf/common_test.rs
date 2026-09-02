@@ -160,5 +160,5 @@ pub(crate) fn read_time(
     ds: &netcdf::File,
     varname: &str,
 ) -> ndarray::Array1<chrono::DateTime<chrono::Utc>> {
-    ggg_rs::nc_utils::get_var_cftime::<i64, Ix1>(ds, varname).expect("reading time should succeed")
+    nc_utils::get_var_cftime::<i64, Ix1>(ds, varname).expect("reading time should succeed")
 }

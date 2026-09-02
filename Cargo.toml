@@ -17,6 +17,8 @@ clap-verbosity-flag = "2.2.0"
 # If in the future I need a typed builder pattern, use this crate.
 # typed-builder = "0.23.2"
 encoding = "0.2.33"
+# TODO: GGG-RS should probably become a workspace and this should be a member.
+ggg-rs-derive = { path = "deps/ggg-rs-derive" }
 itertools = "0.14.0"
 log = "0.4.27"
 log4rs = "1.2.0"

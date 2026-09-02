@@ -9,7 +9,7 @@ use error_stack::ResultExt;
 use indexmap::IndexMap;
 use interp::interp_slice;
 use itertools::Itertools;
-use ndarray::{Array, Array1, Array2, ArrayD, ArrayView1, ArrayView2, ArrayViewD};
+use ndarray::{Array, Array1, Array2, ArrayD, ArrayView, ArrayView1, ArrayView2, ArrayViewD};
 use netcdf::{
     types::{FloatType, IntType, NcVariableType},
     Extents, NcTypeDescriptor,
@@ -913,6 +913,86 @@ impl ToNanos for f64 {
         let fac = i64::conv_factor(dur_str)?;
         Ok(fac as f64)
     }
+}
+
+/// Convert an array of timezone-aware [`chrono::DateTime`] values to a float-based timestamp.
+/// Sub-second precision will be represented by the fractional part of the floats. Also returns
+/// an appropriate unit string for CF-compliant times.
+///
+/// # See also
+/// - [`chrono_to_cftime`] for integer timestamps at second resolution.
+/// - [`map_chrono_f64`] and [`map_chrono_naive_f64`] to interface with [`ggg_rs_derive::WriteNetcdf`]
+pub fn chrono_to_cftime_fractional<T: chrono::TimeZone, D: ndarray::Dimension>(
+    times: ArrayView<chrono::DateTime<T>, D>,
+) -> (Array<f64, D>, &'static str) {
+    let timestamps = times.mapv(|t| (t.to_utc().timestamp_micros() as f64) / 1_000_000.0);
+    (timestamps, "seconds since 1970-01-01 00:00:00")
+}
+
+/// Wrapper around [`chrono_to_cftime_fractional`] to interface with [`ggg_rs_derive::WriteNetcdf`],
+/// particularly the `#[netcdf(map_units = ...)]` helper.
+///
+/// # See also:
+/// - [`map_chrono_naive_f64`] for an interface that works with naive date times
+pub fn map_chrono_f64<T: chrono::TimeZone, D: ndarray::Dimension, A>(
+    _data: &A,
+    times: &Array<chrono::DateTime<T>, D>,
+    _name: &str,
+) -> (Array<f64, D>, &'static str) {
+    chrono_to_cftime_fractional(times.view())
+}
+
+/// Wrapper around [`chrono_to_cftime_fractional`] to interface with [`ggg_rs_derive::WriteNetcdf`],
+/// particularly the `#[netcdf(map_units = ...)]` helper. Converts naive date times assuming they represent
+/// UTC times or that a user converting back to a datetime by adding to the 1970-01-01 epoch will understand
+/// the intent. If that is not true, convert the times to be timezone aware, and use [`map_chrono_f64`] instead.
+pub fn map_chrono_naive_f64<D: ndarray::Dimension, A>(
+    _data: &A,
+    times: &Array<chrono::NaiveDateTime, D>,
+    _name: &str,
+) -> (Array<f64, D>, &'static str) {
+    let utc_times = times.mapv(|t| t.and_utc());
+    chrono_to_cftime_fractional(utc_times.view())
+}
+
+/// Convert an array of timezone-aware [`chrono::DateTime`] values to an integer-based timestamp.
+/// Subsecond precision will be truncated.  Also returns an appropriate unit string for CF-compliant
+/// times.
+///
+/// # See also
+/// - [`chrono_to_cftime_fractional`] if sub-second precision is desired.
+/// - [`map_chrono_i64`] and [`map_chrono_naive_i64`] to interface with [`ggg_rs_derive::WriteNetcdf`]
+pub fn chrono_to_cftime<T: chrono::TimeZone, D: ndarray::Dimension>(
+    times: ArrayView<chrono::DateTime<T>, D>,
+) -> (Array<i64, D>, &'static str) {
+    let timestamps = times.mapv(|t| t.to_utc().timestamp());
+    (timestamps, "seconds since 1970-01-01 00:00:00")
+}
+
+/// Wrapper around [`chrono_to_cftime`] to interface with [`ggg_rs_derive::WriteNetcdf`],
+/// particularly the `#[netcdf(map_units = ...)]` helper.
+///
+/// # See also:
+/// - [`map_chrono_naive_i64`] for an interface that works with naive date times
+pub fn map_chrono_i64<T: chrono::TimeZone, D: ndarray::Dimension, A>(
+    _data: &A,
+    times: &Array<chrono::DateTime<T>, D>,
+    _name: &str,
+) -> (Array<i64, D>, &'static str) {
+    chrono_to_cftime(times.view())
+}
+
+/// Wrapper around [`chrono_to_cftime`] to interface with [`ggg_rs_derive::WriteNetcdf`],
+/// particularly the `#[netcdf(map_units = ...)]` helper. Converts naive date times assuming they represent
+/// UTC times or that a user converting back to a datetime by adding to the 1970-01-01 epoch will understand
+/// the intent. If that is not true, convert the times to be timezone aware, and use [`map_chrono_i64`] instead.
+pub fn map_chrono_naive_i64<D: ndarray::Dimension, A>(
+    _data: &A,
+    times: &Array<chrono::NaiveDateTime, D>,
+    _name: &str,
+) -> (Array<i64, D>, &'static str) {
+    let utc_times = times.mapv(|t| t.and_utc());
+    chrono_to_cftime(utc_times.view())
 }
 
 /// Read data from a variable into a [`uom::si::Quantity`].

@@ -247,7 +247,7 @@ mod tests {
 
     #[test]
     fn test_bin_averaging() {
-        init_test_logging();
+        init_test_logging(None);
         let test_dir = ggg_rs::test_utils::test_data_dir();
         // For now, it's easier to start from the private file. This does mean that this is more
         // of an integration test. In the future, I should have the read_l2 test be able to save

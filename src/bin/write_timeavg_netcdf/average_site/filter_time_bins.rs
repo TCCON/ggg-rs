@@ -91,7 +91,7 @@ mod tests {
         // This test actually could read in the expected file for the previous step,
         // but since that came from Python, I don't want to deal with potential NaNs.
         // So we'll keep the integration-like test for now.
-        init_test_logging();
+        init_test_logging(None);
         let test_dir = ggg_rs::test_utils::test_data_dir();
         // For now, it's easier to start from the private file. This does mean that this is more
         // of an integration test. In the future, I should have the read_l2 test be able to save

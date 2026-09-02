@@ -4,9 +4,12 @@ use clap::Parser;
 use clap_verbosity_flag::{InfoLevel, Verbosity};
 use ggg_rs::logging::init_logging;
 
+use average_site::read_l2::{ch4_bin_def, co2_bin_def};
+
 mod average_site;
 #[cfg(test)]
 mod common_test;
+mod daily_files;
 mod data_structures;
 mod station_ids;
 
@@ -65,6 +68,7 @@ impl AvgSiteCli {
         average_site::average_site_driver(
             &self.level2_file,
             self.get_timeavg_file()?.as_path(),
+            &[co2_bin_def(), ch4_bin_def()],
             self.get_time_bin(),
             None,
         )
