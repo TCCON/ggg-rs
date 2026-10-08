@@ -1,4 +1,5 @@
 use std::{
+    eprintln,
     io::Read,
     ops::{Add, Mul},
     path::Path,
@@ -852,6 +853,129 @@ fn get_cftime_inner<T: ToNanos, D: ndarray::Dimension>(
     Ok(Array::from_shape_vec(shape, times).expect("number of elements should be correct"))
 }
 
+fn parse_cftime_epoch(
+    epoch: &str,
+) -> error_stack::Result<chrono::DateTime<chrono::Utc>, GggNcError> {
+    // According to the CF conventions (https://cfconventions.org/Data/cf-conventions/cf-conventions-1.13/cf-conventions.html#time-coordinate-units),
+    // the epoch only needs to have year, month, and day - hour, minute, second, and time zone are
+    // optional, though hour, minute, and second are all or nothing.
+    // Also individual components can be single digits, which chrono doesn't do.
+    // Time zone, if given, will be one of "Z" (Zulu = UTC), [+-]n, [+-]nn, (hour only), [+-]n:nn, or [+-]nn:nn.
+    // There will be a space between day and hour, there _may_ be a space between the second and time zone.
+    let _err = |reason: &str| GggNcError::Custom(format!("Invalid CF epoch '{epoch}', {reason}"));
+    let (ymd, hmst) = epoch
+        .split_once(|c: char| c.is_whitespace())
+        .unwrap_or((epoch, ""));
+
+    let mut ymd = ymd.split('-');
+    let year_str = ymd.next().ok_or_else(|| _err("no year found"))?;
+    let month_str = ymd.next().ok_or_else(|| _err("no month found"))?;
+    let day_str = ymd.next().ok_or_else(|| _err("no day found"))?;
+    let year: i32 = year_str.parse().map_err(|e| {
+        _err(&format!(
+            "could not parse year '{year_str}' as integer: {e}"
+        ))
+    })?;
+    let month: u32 = month_str.parse().map_err(|e| {
+        _err(&format!(
+            "could not parse month '{month_str}' as integer: {e}"
+        ))
+    })?;
+    let day: u32 = day_str
+        .parse()
+        .map_err(|e| _err(&format!("could not parse day '{day_str}' as integer: {e}")))?;
+
+    let naive_date = chrono::NaiveDate::from_ymd_opt(year, month, day)
+        .ok_or_else(|| _err("year, month, or day out of range"))?;
+
+    if hmst.trim().is_empty() {
+        return Ok(naive_date.and_hms_opt(0, 0, 0).unwrap().and_utc());
+    }
+
+    // Since the second part wasn't all whitespace, we know that there should be
+    // hours, minutes, and seconds. Seconds can be fractional, and might have a
+    // time zone appended. We must split the time zone off first, because it
+    // might contain a colon. Since the timezone is supposed to be "Z" (or "z" perhaps)
+    // or begin with a + or -, we find where that character is, if present.
+    let i_tz = hmst
+        .char_indices()
+        .fold(None, |idx, (i, c)| {
+            if idx.is_some() {
+                idx
+            } else if c == 'z' || c == 'Z' || c == '+' || c == '-' {
+                Some(i)
+            } else {
+                None
+            }
+        })
+        .unwrap_or(hmst.len());
+    let (hms, tz_str) = hmst.split_at(i_tz);
+    let mut hms = hms.trim().split(':');
+
+    let hour_str = hms.next().ok_or_else(|| _err("no hours found"))?;
+    let min_str = hms.next().ok_or_else(|| _err("no minutes found"))?;
+    let sec_str = hms.next().ok_or_else(|| _err("no seconds found"))?;
+
+    let sec = sec_str.parse::<f64>().map_err(|e| {
+        _err(&format!(
+            "could not parse seconds '{sec_str}' as float: {e}"
+        ))
+    })?;
+
+    let nano = (sec.fract() * 1e9) as u32;
+    let sec = sec.trunc() as u32;
+    let min = min_str.parse().map_err(|e| {
+        _err(&format!(
+            "could not parse minutes '{min_str}' as integer: {e}"
+        ))
+    })?;
+    let hour = hour_str.parse().map_err(|e| {
+        _err(&format!(
+            "could not parse hours '{hour_str}' as integer: {e}"
+        ))
+    })?;
+    let dt = naive_date.and_hms_nano_opt(hour, min, sec, nano)
+        .ok_or_else(|| _err(&format!("hours ({hour}), minutes ({min}), seconds ({sec}), or nanos ({nano}) were out of bounds")))?
+        .and_utc();
+
+    // the timezone string should be empty if there was no timezone - we would have "split"
+    // at the length of the hmst string.
+    if tz_str.trim().is_empty() || tz_str.trim() == "Z" || tz_str.trim() == "z" {
+        Ok(dt)
+    } else {
+        // The time zone string may or may not have a colon
+        let (tz_hr_str, tz_min_str) = tz_str.split_once(':').unwrap_or((tz_str, "0"));
+        // Technically, the minutes should always have two characters, but it isn't our job to enforce
+        // that standard. Will only add that check if a single digit minute produces an erroneous calculation.
+        let tz_hr: i64 = tz_hr_str.trim().parse().map_err(|e| {
+            _err(&format!(
+                "could not parse time zone hours '{tz_hr_str}' as integer: {e}"
+            ))
+        })?;
+        let tz_min: i64 = tz_min_str.trim().parse().map_err(|e| {
+            _err(&format!(
+                "could not parse time zone minutes '{tz_min_str}' as integer: {e}"
+            ))
+        })?;
+
+        // The minutes should always parse as positive, but if the overall
+        // offset is negative (e.g., "-1:15"), they should also be negative -
+        // this example should become -75 minutes, not -1 hour + 15 minutes = 45 minutes.
+        let tz_nsec = if tz_hr >= 0 {
+            tz_hr * 3600 + tz_min * 60
+        } else {
+            tz_hr * 3600 - tz_min * 60
+        };
+        eprintln!("tz_nsec = {tz_nsec}; tz_str = {tz_str}");
+        // The CF conventions specify that you subtract the timezone offset, you get the correct
+        // time. E.g., 09:00+6:00 is 03:00 UTC, and 09:00-6:00 is 15:00 UTC. We do this manually
+        // rather than go through chrono's time zone conversion because the latter includes handling
+        // of daylight savings time related ambiguities.
+        let tz_offset = chrono::TimeDelta::seconds(tz_nsec);
+        Ok(dt - tz_offset)
+    }
+}
+
 pub trait ToNanos: Copy + NcTypeDescriptor {
     fn to_nanos(self, dur_str: &str) -> Result<i64, GggNcError>;
     fn conv_factor(dur_str: &str) -> Result<Self, GggNcError>;
@@ -1348,5 +1472,88 @@ mod tests {
                 "f64 {units} parsing failed"
             );
         }
+    }
+
+    #[test]
+    fn test_cftime_epoch_parsing() {
+        fn _parse_assert(
+            epoch: &str,
+            year: i32,
+            month: u32,
+            day: u32,
+            hour: u32,
+            minute: u32,
+            second: u32,
+            nanos: i64,
+        ) {
+            let epoch_dt = parse_cftime_epoch(epoch).unwrap();
+            let expected_dt = utc_dt_ymdhms(year, month, day, hour, minute, second)
+                + chrono::TimeDelta::nanoseconds(nanos);
+            assert_eq!(epoch_dt, expected_dt);
+        }
+
+        fn _parse_error(epoch: &str) {
+            parse_cftime_epoch(epoch).unwrap_err();
+        }
+
+        // Date only
+        _parse_assert("1970-01-01", 1970, 1, 1, 0, 0, 0, 0);
+        // Date with single character month and day
+        _parse_assert("1970-1-1", 1970, 1, 1, 0, 0, 0, 0);
+        // Date and time, no timezone
+        _parse_assert("1970-01-01 12:34:56", 1970, 1, 1, 12, 34, 56, 0);
+        // Date and time with fractional second
+        _parse_assert(
+            "1970-01-01 12:34:56.25",
+            1970,
+            1,
+            1,
+            12,
+            34,
+            56,
+            250_000_000,
+        );
+        // Date and time with Z for the timezone, with and without a space
+        _parse_assert("1970-01-01 12:34:56Z", 1970, 1, 1, 12, 34, 56, 0);
+        _parse_assert("1970-01-01 12:34:56 Z", 1970, 1, 1, 12, 34, 56, 0);
+
+        // Date and time with +0 for the timezone
+        _parse_assert("1970-01-01 12:34:56+0", 1970, 1, 1, 12, 34, 56, 0);
+        _parse_assert("1970-01-01 12:34:56 +0", 1970, 1, 1, 12, 34, 56, 0);
+
+        // Date and time with just hour offsets
+        _parse_assert("1970-01-01 12:34:56+1", 1970, 1, 1, 11, 34, 56, 0);
+        _parse_assert("1970-01-01 12:34:56+11", 1970, 1, 1, 1, 34, 56, 0);
+        _parse_assert("1970-01-01 12:34:56 +1", 1970, 1, 1, 11, 34, 56, 0);
+        _parse_assert("1970-01-01 12:34:56 +11", 1970, 1, 1, 1, 34, 56, 0);
+
+        _parse_assert("1970-01-01 12:34:56-1", 1970, 1, 1, 13, 34, 56, 0);
+        _parse_assert("1970-01-01 12:34:56-11", 1970, 1, 1, 23, 34, 56, 0);
+        _parse_assert("1970-01-01 12:34:56 -1", 1970, 1, 1, 13, 34, 56, 0);
+        _parse_assert("1970-01-01 12:34:56 -11", 1970, 1, 1, 23, 34, 56, 0);
+
+        // Date and time with hour and minute offsets
+        _parse_assert("1970-01-01 12:34:56+1:15", 1970, 1, 1, 11, 19, 56, 0);
+        _parse_assert("1970-01-01 12:34:56+11:15", 1970, 1, 1, 1, 19, 56, 0);
+        _parse_assert("1970-01-01 12:34:56 +1:15", 1970, 1, 1, 11, 19, 56, 0);
+        _parse_assert("1970-01-01 12:34:56 +11:15", 1970, 1, 1, 1, 19, 56, 0);
+
+        _parse_assert("1970-01-01 12:34:56-1:15", 1970, 1, 1, 13, 49, 56, 0);
+        _parse_assert("1970-01-01 12:34:56-11:15", 1970, 1, 1, 23, 49, 56, 0);
+        _parse_assert("1970-01-01 12:34:56 -1:15", 1970, 1, 1, 13, 49, 56, 0);
+        _parse_assert("1970-01-01 12:34:56 -11:15", 1970, 1, 1, 23, 49, 56, 0);
+
+        // Now we check that parsing fails when it should.
+        // First, incomplete dates.
+        _parse_error("1970");
+        _parse_error("1970-01");
+
+        // Then, incomplete times
+        _parse_error("1970-01-01 12");
+        _parse_error("1970-01-01 12:34");
+
+        // Then, invalid time zones
+        _parse_error("1970-01-01 12:34:56 UTC");
+        _parse_error("1970-01-01 12:34:56 PST");
     }
 }
