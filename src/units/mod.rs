@@ -60,6 +60,7 @@ pub(crate) fn uom_unit(orig_unit: &str) -> &str {
         "1" => "",
         "degrees_north" => "°",
         "degrees_east" => "°",
+        "degrees" => "°",
         _ => orig_unit,
     }
 }
@@ -168,6 +169,51 @@ where
         .map_err(|_| UnknownUnitError::new_no_quantity(units))?;
     let arr = arr.mapv(|x| conversion * x);
     Ok(arr)
+}
+
+/// Wraps [`convert_array`] to make it compatible with the `map_units`
+/// attribute for [`ggg_rs_derive::ReadNetcdf`]. The generics are:
+///
+/// - `Q`: the [`uom`] quantity that the output array must be in.
+/// - `T`: the underlying numeric type for the quantity (and what
+///   the netCDF value will be read as an array of, so it must
+///   be a netCDF-compatible type), and
+/// - `D`: the dimensionality of the output array.
+///
+/// Usually `Q` and `T` can be inferred:
+///
+/// ```no_run
+/// use ggg_rs_derive::ReadNetcdf;
+/// use ndarray::Array1;
+/// use ggg_rs::units::map_values_to_quantity;
+/// use uom::si::{angle::degree, f64::Angle};
+///
+///
+/// #[derive(ReadNetcdf)]
+/// struct Data {
+///     // Note that only the concrete numeric type is needed in the turbofish syntax.
+///     // Q and D can be inferred from the field's type.
+///     #[netcdf(
+///         dimensions("time"),
+///         map_units(read = map_values_to_quantity::<_, f64, _>),
+///         kind = "array"
+///     )]
+///     solzen: Array1<Angle>
+/// }
+/// ```
+pub fn map_values_to_quantity<Q, T, D>(
+    arr: ndarray::Array<T, D>,
+    _name: &str,
+    _var: &netcdf::Variable,
+    units: Option<&str>,
+) -> netcdf::Result<ndarray::Array<Q, D>>
+where
+    T: Copy,
+    D: ndarray::Dimension,
+    Q: std::str::FromStr<Err = uom::str::ParseQuantityError> + Copy + std::ops::Mul<T, Output = Q>,
+{
+    let units = units.unwrap();
+    convert_array(arr, units).map_err(|e| netcdf::Error::Str(e.to_string()))
 }
 
 /// Convert a scalar value from a plain numeric type to a [`uom::si::Quantity`].

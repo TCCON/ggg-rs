@@ -56,6 +56,9 @@ where
 /// an array of [`Angle`] instances into floats that can be written to a netCDF
 /// file and automatically converts them to the appropriate units.
 ///
+/// If you need the inverse function for reading a netCDF file, see
+/// [`crate::units::map_values_to_quantity`].
+///
 /// ```no_run
 /// use ggg_rs_derive::WriteNetcdf;
 /// use ndarray::Array1;
@@ -69,7 +72,7 @@ where
 ///     // in the generics, and the annotation accepts the turbofish syntax.
 ///     #[netcdf(
 ///         dimensions("time"),
-///         map_units = units::angle::map_units::<degree, _, _, _, _>,
+///         map_units(write = units::angle::map_units::<degree, _, _, _, _>),
 ///         kind = "array"
 ///     )]
 ///     solzen: Array1<Angle>
@@ -109,7 +112,7 @@ where
 ///     // in the generics, and the annotation accepts the turbofish syntax.
 ///     #[netcdf(
 ///         dimensions("time"),
-///         map = units::angle::map::<degree, _, _, _, _>,
+///         map(write = units::angle::map::<degree, _, _, _, _>),
 ///         kind = "array",
 ///         attr( name = "units", value = "degrees" )
 ///     )]

@@ -772,6 +772,9 @@ fn read_nc_site_metadata_json(
 /// netCDF file [`GggNcError::MissingVar`], reading the data fails
 /// [`GggNcError::NcErr`], or the array does not match the requested
 /// dimensionality `D` [`GggNcError::WrongDimensionality`].
+///
+/// If you already have a reference to the [`netcdf::Variable`], see
+/// [`get_data`].
 pub fn get_var_data<T: Copy + NcTypeDescriptor, D: ndarray::Dimension>(
     ds: &netcdf::File,
     varname: &str,
@@ -784,6 +787,7 @@ pub fn get_var_data<T: Copy + NcTypeDescriptor, D: ndarray::Dimension>(
     get_data(&var)
 }
 
+/// As [`get_var_data`], but directly takes a reference to the variable.
 pub fn get_data<T: Copy + NcTypeDescriptor, D: ndarray::Dimension>(
     var: &netcdf::Variable,
 ) -> error_stack::Result<Array<T, D>, GggNcError> {
@@ -799,6 +803,87 @@ pub fn get_data<T: Copy + NcTypeDescriptor, D: ndarray::Dimension>(
     Ok(arr)
 }
 
+/// Map times given following the CF conventions back to [`chrono::DateTime`]
+/// instances with [`chrono::Utc`] as the time zone. The generic parameters are:
+///
+/// - `T`: the numeric type of the CF time array, and
+/// - `D`: the dimensionality of the CF time array.
+///
+/// This function is meant for use with the derive macro, [`ggg_rs_derive::ReadNetcdf`],
+/// specifically in the `map_units` annotation. In that use, `T` will normally need specified,
+/// and should match the data type in the netCDF file. If in doubt, use `f64` or `i64`.
+///
+/// ```no_run
+/// use ggg_rs_derive::ReadNetcdf;
+/// use ggg_rs::nc_utils::map_cftime;
+/// use chrono::{DateTime, Utc};
+/// use ndarray::Array1;
+///
+/// #[derive(ReadNetcdf)]
+/// struct Data {
+///     // Note that only the concrete numeric type is needed in the turbofish syntax.
+///     // Q and D can be inferred from the field's type.
+///     #[netcdf(
+///         dimensions("time"),
+///         map_units(read = map_cftime::<i64, _>),
+///         kind = "array"
+///     )]
+///     time: Array1<DateTime<Utc>>
+/// }
+/// ```
+///
+/// # See also
+///
+/// - For the inverse (mapping date times to CF times), see [`map_chrono_f64`]
+///   or [`map_chrono_i64`]. There are type-specific implementations for those
+///   functions to handle different levels of precision.
+/// - To convert a CF time to naive date/times, see [`map_cftime_naive`].
+/// - There are limitations on the CF time conversion; see [`convert_cftime`]
+///   for those.
+pub fn map_cftime<T: ToNanos, D: ndarray::Dimension>(
+    timestamps: Array<T, D>,
+    _field: &str,
+    _var: &netcdf::Variable<'_>,
+    units: Option<&str>,
+) -> netcdf::Result<Array<chrono::DateTime<chrono::Utc>, D>> {
+    let units = units.ok_or_else(|| {
+        netcdf::Error::Str(
+            "units must be provided to convert a CF time to a chrono DateTime".to_string(),
+        )
+    })?;
+    convert_cftime(timestamps, units).map_err(|e| netcdf::Error::Str(e.to_string()))
+}
+
+/// The equivalent of [`map_cftime`] when reading CF times into [`chrono::NaiveDateTime`] values.
+///
+/// # See also
+///
+/// - For the inverse (mapping date times to CF times), see [`map_chrono_naive_f64`]
+///   or [`map_chrono_naive_i64`]. There are type-specific implementations for those
+///   functions to handle different levels of precision.
+/// - To convert a CF time to UTC-aware date/times, see [`map_cftime`].
+/// - There are limitations on the CF time conversion; see [`convert_cftime`]
+///   for those.
+pub fn map_cftime_naive<T: ToNanos, D: ndarray::Dimension>(
+    timestamps: Array<T, D>,
+    field: &str,
+    var: &netcdf::Variable<'_>,
+    units: Option<&str>,
+) -> netcdf::Result<Array<chrono::NaiveDateTime, D>> {
+    let utc_dt = map_cftime(timestamps, field, var, units)?;
+    let naive_dt = utc_dt.mapv(|dt| dt.naive_utc());
+    Ok(naive_dt)
+}
+
+/// Convert a CF time variable from a netCDF file into an array of [`chrono::DateTime`]
+/// instances with [`chrono::Utc`] as the time zone.
+///
+/// The generic parameters are the same as for [`convert_cftime`], as are the limitations
+/// on the CF time unit parsing.
+///
+/// # See also
+/// - [`get_cftime`] if you already have a reference to the [`netcdf::Variable`]
+/// - [`convert_cftime`] if you already have an array of CF time values.
 pub fn get_var_cftime<T: ToNanos, D: ndarray::Dimension>(
     ds: &netcdf::File,
     varname: &str,
@@ -810,24 +895,40 @@ pub fn get_var_cftime<T: ToNanos, D: ndarray::Dimension>(
     get_cftime::<T, D>(&var)
 }
 
-/// Read times from a variable with a compatible CF-style time value
+/// Read times from a variable with a compatible CF-style time value.
 ///
-/// Note that this is not a fully realized CF time parser; the units
-/// on the variable must be "DURATION since YYYY-MM-DD HH:MM:SS.fffffffff"
-/// where DURATION is one of days, hours, minutes, seconds, milliseconds,
-/// microseconds, nanoseconds (or the singular versions). The .fffffffff
-/// component of the date is optional, and may have 3, 6, or 9 digits.
-/// This also assumes that the starting time is in UTC and does not
-/// check for "calendar" attributes.
+/// The generic parameters are the same as for [`convert_cftime`], as are the limitations
+/// on the CF time unit parsing.
+///
+/// # See also
+/// - [`get_var_cftime`] if you have the [`netcdf::File`] handle and variable name,
+///   rather than the [`netcdf::Variable`] reference.
+/// - [`convert_cftime`] if you already have an array of CF time values.
 pub fn get_cftime<T: ToNanos, D: ndarray::Dimension>(
     var: &netcdf::Variable,
 ) -> error_stack::Result<Array<chrono::DateTime<chrono::Utc>, D>, GggNcError> {
     let timestamps = get_data::<T, D>(var)?;
     let units = get_string_attr(var, "units")?;
-    get_cftime_inner(timestamps, &units)
+    convert_cftime(timestamps, &units)
 }
 
-fn get_cftime_inner<T: ToNanos, D: ndarray::Dimension>(
+/// Convert an array of CF time values to [`chrono::DateTime`] instances
+/// with [`chrono::Utc`] as the time zone.
+///
+/// The generic parameters are:
+///
+/// - `T`: the type that the netCDF variable holds or should be read as. Note that,
+///   in most cases, this should be a 64 bit type to avoid loss of precision.
+/// - `D`: the dimensionality of the array.
+///
+/// Note that this is not a fully realized CF time parser. Most notably,
+/// this only supports the "standard" calendar (note the lack of a `calendar`
+/// argument). The units on the variable must be "DURATION since EPOCH" where
+/// DURATION is one of days, hours, minutes, seconds, milliseconds, microseconds,
+/// nanoseconds (or the singular versions). "since" is the only accepted
+/// joining term. Parsing the EPOCH should support any valid epoch
+/// definition under the CF conventions.
+pub fn convert_cftime<T: ToNanos, D: ndarray::Dimension>(
     timestamps: Array<T, D>,
     units: &str,
 ) -> error_stack::Result<Array<chrono::DateTime<chrono::Utc>, D>, GggNcError> {
@@ -836,13 +937,7 @@ fn get_cftime_inner<T: ToNanos, D: ndarray::Dimension>(
             "Expected substring 'since' in time units was not found. Units attribute = '{units}'"
         ))
     })?;
-    let epoch = chrono::NaiveDateTime::parse_from_str(epoch_str, "%Y-%m-%d %H:%M:%S%.f")
-        .change_context_lazy(|| {
-            GggNcError::Custom(format!(
-                "Unable to parse epoch time '{epoch_str}' from time units string '{units}'"
-            ))
-        })?
-        .and_utc();
+    let epoch = parse_cftime_epoch(epoch_str)?;
     let shape = timestamps.dim();
     let times: Vec<chrono::DateTime<chrono::Utc>> = timestamps
         .into_iter()
@@ -853,6 +948,7 @@ fn get_cftime_inner<T: ToNanos, D: ndarray::Dimension>(
     Ok(Array::from_shape_vec(shape, times).expect("number of elements should be correct"))
 }
 
+/// Parse an epoch string according to the [CF conventions](https://cfconventions.org/Data/cf-conventions/cf-conventions-1.13/cf-conventions.html#time-coordinate-units).
 fn parse_cftime_epoch(
     epoch: &str,
 ) -> error_stack::Result<chrono::DateTime<chrono::Utc>, GggNcError> {
@@ -976,9 +1072,17 @@ fn parse_cftime_epoch(
     }
 }
 
+/// Represents a type that can be converted to nanoseconds to represent a time difference from an epoch.
 pub trait ToNanos: Copy + NcTypeDescriptor {
+    /// Convert the type to nanoseconds, given the duration string (e.g., "seconds").
     fn to_nanos(self, dur_str: &str) -> Result<i64, GggNcError>;
+
+    /// Return the conversion factor from the duration given by `dur_str` (e.g., "seconds")
+    /// to nanoseconds.
     fn conv_factor(dur_str: &str) -> Result<Self, GggNcError>;
+
+    /// Convert this type into a date & time, given a string describing
+    /// its units (e.g., "seconds") and the starting epoch.
     fn to_datetime(
         self,
         dur_str: &str,
@@ -1050,7 +1154,7 @@ pub fn chrono_to_cftime_fractional<T: chrono::TimeZone, D: ndarray::Dimension>(
     times: ArrayView<chrono::DateTime<T>, D>,
 ) -> (Array<f64, D>, &'static str) {
     let timestamps = times.mapv(|t| (t.to_utc().timestamp_micros() as f64) / 1_000_000.0);
-    (timestamps, "seconds since 1970-01-01 00:00:00")
+    (timestamps, "seconds since 1970-01-01 00:00:00Z")
 }
 
 /// Wrapper around [`chrono_to_cftime_fractional`] to interface with [`ggg_rs_derive::WriteNetcdf`],
@@ -1090,7 +1194,7 @@ pub fn chrono_to_cftime<T: chrono::TimeZone, D: ndarray::Dimension>(
     times: ArrayView<chrono::DateTime<T>, D>,
 ) -> (Array<i64, D>, &'static str) {
     let timestamps = times.mapv(|t| t.to_utc().timestamp());
-    (timestamps, "seconds since 1970-01-01 00:00:00")
+    (timestamps, "seconds since 1970-01-01 00:00:00Z")
 }
 
 /// Wrapper around [`chrono_to_cftime`] to interface with [`ggg_rs_derive::WriteNetcdf`],
@@ -1363,7 +1467,7 @@ mod tests {
             ("seconds", 1_i64),
         ];
         for (units, scale) in unit_scales {
-            let times = get_cftime_inner(
+            let times = convert_cftime(
                 array![scale, 2 * scale],
                 &format!("{units} since 2010-01-01 00:00:00"),
             )
@@ -1385,7 +1489,7 @@ mod tests {
             ("seconds", 1_u64),
         ];
         for (units, scale) in unit_scales {
-            let times = get_cftime_inner(
+            let times = convert_cftime(
                 array![scale, 2 * scale],
                 &format!("{units} since 2010-01-01 00:00:00"),
             )
@@ -1407,7 +1511,7 @@ mod tests {
             ("seconds", 1_f64),
         ];
         for (units, scale) in unit_scales {
-            let times = get_cftime_inner(
+            let times = convert_cftime(
                 array![scale, 2.0 * scale],
                 &format!("{units} since 2010-01-01 00:00:00"),
             )
@@ -1424,7 +1528,7 @@ mod tests {
 
         let unit_scales = [("minutes", 1440_i64), ("hours", 24_i64), ("days", 1_i64)];
         for (units, scale) in unit_scales {
-            let times = get_cftime_inner(
+            let times = convert_cftime(
                 array![scale, 2 * scale],
                 &format!("{units} since 2010-01-01 00:00:00"),
             )
@@ -1441,7 +1545,7 @@ mod tests {
 
         let unit_scales = [("minutes", 1440_u64), ("hours", 24_u64), ("days", 1_u64)];
         for (units, scale) in unit_scales {
-            let times = get_cftime_inner(
+            let times = convert_cftime(
                 array![scale, 2 * scale],
                 &format!("{units} since 2010-01-01 00:00:00"),
             )
@@ -1458,7 +1562,7 @@ mod tests {
 
         let unit_scales = [("minutes", 1440_f64), ("hours", 24_f64), ("days", 1_f64)];
         for (units, scale) in unit_scales {
-            let times = get_cftime_inner(
+            let times = convert_cftime(
                 array![scale, 2.0 * scale],
                 &format!("{units} since 2010-01-01 00:00:00"),
             )
@@ -1493,7 +1597,7 @@ mod tests {
         }
 
         fn _parse_error(epoch: &str) {
-            parse_cftime_epoch(epoch).unwrap_err();
+            let _ = parse_cftime_epoch(epoch).unwrap_err();
         }
 
         // Date only

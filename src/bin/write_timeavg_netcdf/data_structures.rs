@@ -1,8 +1,9 @@
 use std::fmt::Debug;
 
 use chrono::{DateTime, NaiveDateTime, Utc};
-use ggg_rs::nc_utils::{map_chrono_f64, map_chrono_naive_f64};
-use ggg_rs_derive::WriteNetcdf;
+use ggg_rs::nc_utils::{map_cftime, map_cftime_naive, map_chrono_f64, map_chrono_naive_f64};
+use ggg_rs::units::map_values_to_quantity;
+use ggg_rs_derive::{ReadNetcdf, WriteNetcdf};
 use ndarray::{Array1, Array2, Axis};
 use uom::si::angle::degree;
 use uom::si::f32::{Angle, Pressure, Ratio};
@@ -10,16 +11,17 @@ use uom::si::pressure::pascal;
 use uom::si::ratio::{part_per_million, ratio};
 
 /// A structure representing time-averaged data from one or more TCCON sites.
-#[derive(WriteNetcdf)]
+#[derive(ReadNetcdf, WriteNetcdf)]
+#[cfg_attr(test, derive(Debug, PartialEq))]
 #[netcdf(describe)]
 pub(crate) struct TimeAvgData {
     /// The midpoint of each solar time bin bin.
-    #[netcdf(dimensions("time"), map_units = map_chrono_naive_f64, kind = "array")]
+    #[netcdf(dimensions("time"), map_units(write = map_chrono_naive_f64, read = map_cftime_naive::<f64, _>), kind = "array")]
     pub(crate) solar_mid_time: Array1<NaiveDateTime>,
 
     /// The mean UTC time of the bin, weighted by the uncertainty in the column
     /// averages.
-    #[netcdf(dimensions("time"), map_units = map_chrono_f64, kind = "array")]
+    #[netcdf(dimensions("time"), map_units(write = map_chrono_f64, read = map_cftime::<f64, _>), kind = "array")]
     pub(crate) utc_mean_time: Array1<DateTime<Utc>>,
 
     /// A unique identifier for each bin in the format YYYYmmddHHMMSSII, where
@@ -52,7 +54,7 @@ pub(crate) struct TimeAvgData {
     /// The TCCON latitudes
     #[netcdf(
         dimensions("time"),
-        map = ggg_rs::units::angle::map::<degree, _, _, _, _>,
+        map(write = ggg_rs::units::angle::map::<degree, _, _, _, _>, read = map_deg_to_q),
         attr(name = "units", value = "degrees_north"),
         kind = "array",
     )]
@@ -61,7 +63,7 @@ pub(crate) struct TimeAvgData {
     /// The TCCON longitudes
     #[netcdf(
         dimensions("time"),
-        map = ggg_rs::units::angle::map::<degree, _, _, _, _>,
+        map(write = ggg_rs::units::angle::map::<degree, _, _, _, _>, read = map_deg_to_q),
         attr(name = "units", value = "degrees_east"),
         kind = "array",
     )]
@@ -71,7 +73,7 @@ pub(crate) struct TimeAvgData {
     /// the column averages.
     #[netcdf(
         dimensions("time"),
-        map = ggg_rs::units::angle::map::<degree, _, _, _, _>,
+        map(write = ggg_rs::units::angle::map::<degree, _, _, _, _>, read = map_deg_to_q),
         attr(name = "units", value = "degrees"),
         kind = "array",
     )]
@@ -81,7 +83,7 @@ pub(crate) struct TimeAvgData {
     /// averages.
     #[netcdf(
         dimensions("time"),
-        map_units = ggg_rs::units::pressure::map_units::<pascal, _, _, _, _>,
+        map_units(write = ggg_rs::units::pressure::map_units::<pascal, _, _, _, _>, read = map_values_to_quantity::<Pressure, f32, _>),
         kind = "array",
     )]
     pub(crate) p_surf: Array1<Pressure>,
@@ -89,7 +91,7 @@ pub(crate) struct TimeAvgData {
     /// The pressure levels of the priors, with one row per bin.
     #[netcdf(
         dimensions("time", "n_lev"),
-        map_units = ggg_rs::units::pressure::map_units::<pascal, _, _, _, _>,
+        map_units(write = ggg_rs::units::pressure::map_units::<pascal, _, _, _, _>, read = map_values_to_quantity::<Pressure, f32, _>),
         kind = "array",
     )]
     pub(crate) p_levels_prior: Array2<Pressure>,
@@ -100,7 +102,7 @@ pub(crate) struct TimeAvgData {
     /// single vector for all bins.
     #[netcdf(
         dimensions("n_lev"),
-        map_units = ggg_rs::units::pressure::map_units::<pascal, _, _, _, _>,
+        map_units(write = ggg_rs::units::pressure::map_units::<pascal, _, _, _, _>, read = map_values_to_quantity::<Pressure, f32, _>),
         kind = "array",
     )]
     pub(crate) p_levels_ak: Array1<Pressure>,
@@ -109,7 +111,7 @@ pub(crate) struct TimeAvgData {
     /// in the column averages.
     #[netcdf(
         dimensions("time", "n_lev"),
-        map_units = ggg_rs::units::ratio::map_units::<ratio, _, _, _, _>,
+        map_units(write = ggg_rs::units::ratio::map_units::<ratio, _, _, _, _>, read = map_values_to_quantity::<Ratio, f32, _>),
         kind = "array",
     )]
     pub(crate) prior_h2o: Array2<Ratio>,
@@ -118,7 +120,7 @@ pub(crate) struct TimeAvgData {
     /// and weighted by the column average uncertainties.
     #[netcdf(
         dimensions("time", "n_lev"),
-        map_units = ggg_rs::units::ratio::map_units::<part_per_million, _, _, _, _>,
+        map_units(write = ggg_rs::units::ratio::map_units::<part_per_million, _, _, _, _>, read = map_values_to_quantity::<Ratio, f32, _>),
         kind = "array",
     )]
     pub(crate) prior_mixing: Array2<Ratio>,
@@ -127,7 +129,7 @@ pub(crate) struct TimeAvgData {
     /// weighted by the column average uncertainties.
     #[netcdf(
         dimensions("time", "n_lev"),
-        map_units = ggg_rs::units::ratio::map_units::<part_per_million, _, _, _, _>,
+        map_units(write = ggg_rs::units::ratio::map_units::<part_per_million, _, _, _, _>, read = map_values_to_quantity::<Ratio, f32, _>),
         kind = "array",
     )]
     pub(crate) prior_mixing_tccon: Array2<Ratio>,
@@ -140,7 +142,7 @@ pub(crate) struct TimeAvgData {
     /// in the individual observations.
     #[netcdf(
         dimensions("time"),
-        map_units = ggg_rs::units::ratio::map_units::<part_per_million, _, _, _, _>,
+        map_units(write = ggg_rs::units::ratio::map_units::<part_per_million, _, _, _, _>, read = map_values_to_quantity::<Ratio, f32, _>),
         kind = "array",
         attr( name = "wmo_or_analogous_scale", func = Self::wmo_scale_attr)
     )]
@@ -149,13 +151,13 @@ pub(crate) struct TimeAvgData {
     /// The propagated uncertainty in the bin averaged TCCON column average values.
     #[netcdf(
         dimensions("time"),
-        map_units = ggg_rs::units::ratio::map_units::<part_per_million, _, _, _, _>,
+        map_units(write = ggg_rs::units::ratio::map_units::<part_per_million, _, _, _, _>, read = map_values_to_quantity::<Ratio, f32, _>),
         kind = "array",
     )]
     pub(crate) sigma_column_mixing: Array1<Ratio>,
 
     /// The WMO or analagous calibration scale to which the column mixing values are tied.
-    #[netcdf(skip)]
+    #[netcdf(attribute)]
     pub(crate) wmo_or_analagous_scale: String,
 }
 
@@ -211,6 +213,22 @@ impl TimeAvgData {
     fn wmo_scale_attr<'a, A>(&'a self, _xgas: &A, _name: &str) -> &'a str {
         &self.wmo_or_analagous_scale
     }
+}
+
+/// For the degree quantities, we use map for writing to control the exact unit.
+/// This means we need to use a function on read that extracts the units from the
+/// variable directly.
+fn map_deg_to_q(
+    arr: Array1<f32>,
+    name: &str,
+    var: &netcdf::Variable<'_>,
+) -> netcdf::Result<Array1<Angle>> {
+    let units: String = var
+        .attribute_value("units")
+        .ok_or_else(|| netcdf::Error::NotFound("attribute: 'units'".to_string()))??
+        .try_into()
+        .map_err(|e| netcdf::Error::Str(format!("cannot convert units to string: {e}")))?;
+    map_values_to_quantity(arr, name, var, Some(units.as_str()))
 }
 
 /// A structure representing level 2 data from a single TCCON site.
@@ -358,4 +376,116 @@ pub(crate) struct StationMetaAttrs {
 
     /// The citation for the level 2 data from this site.
     pub(crate) data_reference: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ggg_rs::test_utils::{init_test_logging, utc_dt_ymdhms};
+    use ndarray::array;
+    use uom::si::pressure::hectopascal;
+
+    #[test]
+    fn test_time_avg_data_round_trip() {
+        init_test_logging(Some(log::LevelFilter::Debug));
+
+        let orig = TimeAvgData {
+            solar_mid_time: array![
+                utc_dt_ymdhms(2026, 1, 2, 3, 4, 5).naive_utc(),
+                utc_dt_ymdhms(2026, 2, 3, 4, 5, 6).naive_utc()
+            ],
+            utc_mean_time: array![
+                utc_dt_ymdhms(2026, 1, 2, 3, 4, 0),
+                utc_dt_ymdhms(2026, 2, 3, 4, 5, 0),
+            ],
+            obs_id: array![2026010203040501, 2026020304050611],
+            station_id: array![1, 11],
+            public: array![1, 0],
+            bin_flag: array![0, 1],
+            num_soundings: array![2, 20],
+            latitude: array![Angle::new::<degree>(45.5), Angle::new::<degree>(-45.5)],
+            longitude: array![Angle::new::<degree>(90.0), Angle::new::<degree>(-90.0)],
+            sza: array![Angle::new::<degree>(30.0), Angle::new::<degree>(35.0)],
+            p_surf: array![
+                Pressure::new::<hectopascal>(1010.0),
+                Pressure::new::<hectopascal>(1013.25)
+            ],
+            p_levels_prior: array![
+                [
+                    Pressure::new::<hectopascal>(1000.0),
+                    Pressure::new::<hectopascal>(900.0),
+                    Pressure::new::<hectopascal>(800.0)
+                ],
+                [
+                    Pressure::new::<hectopascal>(1001.0),
+                    Pressure::new::<hectopascal>(901.0),
+                    Pressure::new::<hectopascal>(801.0)
+                ]
+            ],
+            p_levels_ak: array![
+                Pressure::new::<hectopascal>(1013.0),
+                Pressure::new::<hectopascal>(950.0),
+                Pressure::new::<hectopascal>(900.0)
+            ],
+            prior_h2o: array![
+                [
+                    Ratio::new::<part_per_million>(1000.0),
+                    Ratio::new::<part_per_million>(500.0),
+                    Ratio::new::<part_per_million>(5.0),
+                ],
+                [
+                    Ratio::new::<part_per_million>(10000.0),
+                    Ratio::new::<part_per_million>(5000.0),
+                    Ratio::new::<part_per_million>(50.0),
+                ]
+            ],
+            prior_mixing: array![
+                [
+                    Ratio::new::<part_per_million>(400.0),
+                    Ratio::new::<part_per_million>(375.0),
+                    Ratio::new::<part_per_million>(355.0),
+                ],
+                [
+                    Ratio::new::<part_per_million>(410.0),
+                    Ratio::new::<part_per_million>(380.0),
+                    Ratio::new::<part_per_million>(350.0),
+                ]
+            ],
+            prior_mixing_tccon: array![
+                [
+                    Ratio::new::<part_per_million>(399.0),
+                    Ratio::new::<part_per_million>(374.0),
+                    Ratio::new::<part_per_million>(354.0),
+                ],
+                [
+                    Ratio::new::<part_per_million>(409.0),
+                    Ratio::new::<part_per_million>(379.0),
+                    Ratio::new::<part_per_million>(349.0),
+                ]
+            ],
+            avg_kernel: array![[1.5, 1.0, 0.5], [2.0, 1.5, 1.0]],
+            column_mixing: array![
+                Ratio::new::<part_per_million>(380.0),
+                Ratio::new::<part_per_million>(379.0)
+            ],
+            sigma_column_mixing: array![
+                Ratio::new::<part_per_million>(10.0),
+                Ratio::new::<part_per_million>(8.0)
+            ],
+            wmo_or_analagous_scale: "XTEST".to_string(),
+        };
+
+        let test_dir = ggg_rs::test_utils::test_data_dir();
+        let file = test_dir.join("outputs/write-timeavg-netcdf/other/time_avg_round_trip.nc");
+        {
+            let mut ds = netcdf::create(&file).unwrap();
+            let mut root = ds.root_mut().unwrap();
+            orig.write_netcdf(&mut root).unwrap();
+        }
+
+        let ds = netcdf::open(&file).unwrap();
+        let root = ds.root().unwrap();
+        let read = TimeAvgData::read_netcdf(&root).unwrap();
+        assert_eq!(orig, read);
+    }
 }
