@@ -56,17 +56,18 @@ fn classify_container(
         };
     }
     if let Type::Path(type_path) = ty
-        && let Some(seg) = type_path.path.segments.last() {
-            let ident = seg.ident.to_string();
-            if ident == "Vec" {
-                return Ok(ValueKind::Vec);
-            }
-            if ident.starts_with("Array") {
-                return Ok(ValueKind::NdArray {
-                    axis: explicit_axis.unwrap_or(0),
-                });
-            }
+        && let Some(seg) = type_path.path.segments.last()
+    {
+        let ident = seg.ident.to_string();
+        if ident == "Vec" {
+            return Ok(ValueKind::Vec);
         }
+        if ident.starts_with("Array") {
+            return Ok(ValueKind::NdArray {
+                axis: explicit_axis.unwrap_or(0),
+            });
+        }
+    }
     Err(darling::Error::custom("couldn't infer container kind"))
 }
 
@@ -130,23 +131,24 @@ fn resolve_kind(f: &SubsetField) -> Result<FieldKind, darling::Error> {
 
     // Fallback: infer from the type's last path segment.
     if let Type::Path(type_path) = &f.ty
-        && let Some(seg) = type_path.path.segments.last() {
-            let ty_ident = seg.ident.to_string();
-            if ty_ident == "Vec" {
-                if f.axis.is_some() {
-                    return Err(darling::Error::custom(
-                        "`axis` has no effect on inferred Vec fields",
-                    )
-                    .with_span(ident));
-                }
-                return Ok(FieldKind::Vec);
+        && let Some(seg) = type_path.path.segments.last()
+    {
+        let ty_ident = seg.ident.to_string();
+        if ty_ident == "Vec" {
+            if f.axis.is_some() {
+                return Err(
+                    darling::Error::custom("`axis` has no effect on inferred Vec fields")
+                        .with_span(ident),
+                );
             }
-            if ty_ident.starts_with("Array") {
-                return Ok(FieldKind::NdArray {
-                    axis: f.axis.unwrap_or(0),
-                });
-            }
+            return Ok(FieldKind::Vec);
         }
+        if ty_ident.starts_with("Array") {
+            return Ok(FieldKind::NdArray {
+                axis: f.axis.unwrap_or(0),
+            });
+        }
+    }
 
     Err(darling::Error::custom(
         "couldn't infer field kind — annotate with #[subset(kind = \"vec\")], \
@@ -216,7 +218,7 @@ pub(crate) fn expand(input: TokenStream) -> TokenStream {
 
     let expanded = quote! {
         impl #impl_generics #name #ty_generics #where_clause {
-            fn subset(&self, indices: &[usize]) -> Self {
+            pub fn subset(&self, indices: &[usize]) -> Self {
                 Self {
                     #(
                         #vec_idents: indices.iter().map(|&i| self.#vec_idents[i].clone()).collect(),
