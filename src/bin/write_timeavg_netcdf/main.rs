@@ -4,6 +4,7 @@ use clap::Parser;
 use clap_verbosity_flag::{InfoLevel, Verbosity};
 use ggg_rs::logging::init_logging;
 
+use crate::data_structures::Gas;
 use average_site::read_l2::{ch4_bin_def, co2_bin_def};
 
 mod average_site;
@@ -20,6 +21,7 @@ fn main() -> ExitCode {
 
     let res = match clargs.command {
         Subcommand::AvgSite(avg_site_cli) => avg_site_cli.driver(),
+        Subcommand::Daily(daily_cli) => daily_cli.driver(),
     };
 
     match res {
@@ -43,6 +45,7 @@ struct Cli {
 #[derive(Debug, Clone, clap::Subcommand)]
 enum Subcommand {
     AvgSite(AvgSiteCli),
+    Daily(DailyFileCli),
 }
 
 #[derive(Debug, Clone, clap::Args)]
@@ -104,6 +107,41 @@ impl AvgSiteCli {
 
     fn get_time_bin(&self) -> chrono::Duration {
         chrono::Duration::minutes(self.time_bin_minutes as i64)
+    }
+}
+
+#[derive(Debug, Clone, clap::Args)]
+struct DailyFileCli {
+    /// The per-site averaged files; the result of the avg-site subcommand.
+    average_files: Vec<PathBuf>,
+
+    /// Which directory to write the daily files into
+    #[clap(long, short = 'o', default_value = ".")]
+    output_dir: PathBuf,
+
+    /// Which gases to process. If any input file is missing the requisite
+    /// group, that is an error.
+    #[clap(long, short = 'g', default_values_t = vec![Gas::CO2, Gas::CH4])]
+    gases: Vec<Gas>,
+
+    /// Date to start processing on or after. If the earliest date in the files
+    /// is after this date, processing will start on that date.
+    start_date: Option<chrono::NaiveDate>,
+
+    /// Date to stop processing on or before. If the latest date in the files
+    /// is before this date, processing will stop on that date.
+    end_date: Option<chrono::NaiveDate>,
+}
+
+impl DailyFileCli {
+    fn driver(&self) -> error_stack::Result<(), CliError> {
+        daily_files::daily_files_driver(
+            &self.average_files,
+            &self.output_dir,
+            &self.gases,
+            self.start_date,
+            self.end_date,
+        )
     }
 }
 

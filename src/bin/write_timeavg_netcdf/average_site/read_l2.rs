@@ -16,7 +16,7 @@ use uom::si::{
     ratio::part_per_million,
 };
 
-use crate::data_structures::Level2Data;
+use crate::data_structures::{Gas, Level2Data};
 
 /// A struct defining the set of variables and other setting required
 /// to average a particular gas.
@@ -41,7 +41,7 @@ pub(crate) fn co2_bin_def() -> SourceBinDef {
         xgas_var: "xco2_x2019",
         wmo_scale_var: "aicf_xco2_x2019_scale",
         stddev_limit: Ratio::new::<part_per_million>(1.0),
-        output_group: "CO2",
+        output_group: Gas::CO2.output_group(),
     }
 }
 
@@ -55,7 +55,7 @@ pub(crate) fn ch4_bin_def() -> SourceBinDef {
         xgas_var: "xch4",
         wmo_scale_var: "aicf_xch4_scale",
         stddev_limit: todo!(),
-        output_group: "CH4",
+        output_group: Gas::CH4.output_group(),
     }
 }
 

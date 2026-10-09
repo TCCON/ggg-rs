@@ -3,19 +3,38 @@ use std::fmt::Debug;
 use chrono::{DateTime, NaiveDateTime, Utc};
 use ggg_rs::nc_utils::{map_cftime, map_cftime_naive, map_chrono_f64, map_chrono_naive_f64};
 use ggg_rs::units::map_values_to_quantity;
-use ggg_rs_derive::{ReadNetcdf, WriteNetcdf};
+use ggg_rs_derive::{ReadNetcdf, Subset, WriteNetcdf};
+use indexmap::IndexMap;
 use ndarray::{Array1, Array2, Axis};
 use uom::si::angle::degree;
 use uom::si::f32::{Angle, Pressure, Ratio};
 use uom::si::pressure::pascal;
 use uom::si::ratio::{part_per_million, ratio};
 
+///
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, clap::ValueEnum, strum::Display)]
+pub(crate) enum Gas {
+    CO2,
+    CH4,
+}
+
+impl Gas {
+    pub(crate) fn output_group(&self) -> &'static str {
+        match self {
+            Gas::CO2 => "CO2",
+            Gas::CH4 => "CH4",
+        }
+    }
+}
+
+pub(crate) type AllGasAvgData = IndexMap<Gas, TimeAvgData>;
+
 /// A structure representing time-averaged data from one or more TCCON sites.
-#[derive(ReadNetcdf, WriteNetcdf)]
-#[cfg_attr(test, derive(Debug, PartialEq))]
+#[derive(ReadNetcdf, WriteNetcdf, Subset)]
+#[cfg_attr(test, derive(Debug, Default, PartialEq))]
 #[netcdf(describe)]
 pub(crate) struct TimeAvgData {
-    /// The midpoint of each solar time bin bin.
+    /// The midpoint of each solar time bin.
     #[netcdf(dimensions("time"), map_units(write = map_chrono_naive_f64, read = map_cftime_naive::<f64, _>), kind = "array")]
     pub(crate) solar_mid_time: Array1<NaiveDateTime>,
 
@@ -97,7 +116,7 @@ pub(crate) struct TimeAvgData {
     pub(crate) p_levels_prior: Array2<Pressure>,
 
     /// The pressure levels of the AKs. In the future, this will
-    /// be removed once the private files unified the AK and prior
+    /// be removed once the private files unify the AK and prior
     /// pressure levels. Since these do not change, there is a
     /// single vector for all bins.
     #[netcdf(
@@ -105,6 +124,7 @@ pub(crate) struct TimeAvgData {
         map_units(write = ggg_rs::units::pressure::map_units::<pascal, _, _, _, _>, read = map_values_to_quantity::<Pressure, f32, _>),
         kind = "array",
     )]
+    #[subset(skip)]
     pub(crate) p_levels_ak: Array1<Pressure>,
 
     /// The TCCON H2O priors in wet mole fraction, weighted by the uncertainty
@@ -158,6 +178,7 @@ pub(crate) struct TimeAvgData {
 
     /// The WMO or analagous calibration scale to which the column mixing values are tied.
     #[netcdf(attribute)]
+    #[subset(skip)]
     pub(crate) wmo_or_analagous_scale: String,
 }
 
