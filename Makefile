@@ -91,6 +91,12 @@ release: $(NC_LIB)
 test: $(NC_LIB)
 	$(CARGOCMD) test $(CARGOARGS) -- $(TEST_PATTERN)
 
+testbin: $(NC_LIB)
+	$(CARGOCMD) test $(CARGOARGS) --bin $(BIN) -- $(TEST_PATTERN)
+
+testdoc: $(NC_LIB)
+	$(CARGOCMD) test $(CARGOARGS) --doc -- $(TEST_PATTERN)
+
 check: $(NC_LIB)
 	$(CARGOCMD) check $(CARGOARGS)
 
