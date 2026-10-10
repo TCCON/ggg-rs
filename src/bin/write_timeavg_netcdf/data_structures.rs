@@ -3,7 +3,7 @@ use std::fmt::Debug;
 use chrono::{DateTime, NaiveDateTime, Utc};
 use ggg_rs::nc_utils::{map_cftime, map_cftime_naive, map_chrono_f64, map_chrono_naive_f64};
 use ggg_rs::units::map_values_to_quantity;
-use ggg_rs_derive::{ReadNetcdf, Subset, WriteNetcdf};
+use ggg_rs_derive::{Concat, ReadNetcdf, Subset, WriteNetcdf};
 use indexmap::IndexMap;
 use ndarray::{Array1, Array2, Axis};
 use uom::si::angle::degree;
@@ -30,7 +30,7 @@ impl Gas {
 pub(crate) type AllGasAvgData = IndexMap<Gas, TimeAvgData>;
 
 /// A structure representing time-averaged data from one or more TCCON sites.
-#[derive(ReadNetcdf, WriteNetcdf, Subset)]
+#[derive(ReadNetcdf, WriteNetcdf, Subset, Concat)]
 #[cfg_attr(test, derive(Debug, Default, PartialEq))]
 #[netcdf(describe)]
 pub(crate) struct TimeAvgData {
@@ -179,6 +179,7 @@ pub(crate) struct TimeAvgData {
     /// The WMO or analagous calibration scale to which the column mixing values are tied.
     #[netcdf(attribute)]
     #[subset(skip)]
+    #[concat(skip = "equal")]
     pub(crate) wmo_or_analagous_scale: String,
 }
 

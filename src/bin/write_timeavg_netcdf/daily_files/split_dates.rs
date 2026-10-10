@@ -7,13 +7,33 @@ use crate::{
     CliError,
 };
 
+pub(super) struct DateRanges {
+    pub(super) overall_start: chrono::NaiveDate,
+    pub(super) overall_end: chrono::NaiveDate,
+    pub(super) gas_ranges: IndexMap<Gas, (chrono::NaiveDate, chrono::NaiveDate)>,
+}
+
+impl DateRanges {
+    pub(super) fn gas_has_date(&self, gas: &Gas, date: chrono::NaiveDate) -> bool {
+        self.gas_ranges
+            .get(gas)
+            .is_some_and(|(d1, d2)| (date >= *d1) & (date <= *d2))
+    }
+}
+
 pub(super) fn get_date_range_all_gases(
     all_site_data: &IndexMap<String, AllGasAvgData>,
     gases: &[Gas],
     start: Option<chrono::NaiveDate>,
     end: Option<chrono::NaiveDate>,
-) -> error_stack::Result<IndexMap<Gas, (chrono::NaiveDate, chrono::NaiveDate)>, CliError> {
-    let mut gas_dates = IndexMap::new();
+) -> error_stack::Result<DateRanges, CliError> {
+    let mut gas_ranges = IndexMap::new();
+
+    if gases.is_empty() {
+        return Err(CliError::custom(
+            "no gases provided, so no dates to identify",
+        ))?;
+    }
 
     for gas in gases {
         let it = all_site_data.values().map(|inner| {
@@ -23,10 +43,24 @@ pub(super) fn get_date_range_all_gases(
         let dates = get_date_range(it, start, end).change_context_lazy(|| {
             CliError::Context(format!("Error getting start/end dates for gas {gas}"))
         })?;
-        gas_dates.insert(*gas, dates);
+        gas_ranges.insert(*gas, dates);
     }
+    let overall_start = gas_ranges
+        .values()
+        .map(|(d, _)| *d)
+        .min()
+        .expect("gases was not empty, so should get an overall start date");
+    let overall_end = gas_ranges
+        .values()
+        .map(|(d, _)| *d)
+        .max()
+        .expect("gases was not empty, so should get an overall end date");
 
-    Ok(gas_dates)
+    Ok(DateRanges {
+        overall_start,
+        overall_end,
+        gas_ranges,
+    })
 }
 
 fn get_date_range<'i, I: Iterator<Item = &'i TimeAvgData>>(
@@ -61,16 +95,13 @@ fn get_date_range<'i, I: Iterator<Item = &'i TimeAvgData>>(
     }
 }
 
-fn extract_date_subsets(
-    all_site_data: &IndexMap<String, AllGasAvgData>,
-    gas: Gas,
+pub(super) fn extract_date_subset<'i, I: Iterator<Item = &'i TimeAvgData>>(
+    all_site_data: I,
     date: chrono::NaiveDate,
-) -> error_stack::Result<Vec<TimeAvgData>, CliError> {
+) -> error_stack::Result<TimeAvgData, CliError> {
     let mut subsets = vec![];
 
-    for gas_data in all_site_data.values() {
-        let data = gas_data.get(&gas)
-        .expect("all gases' data must be present for every site in `all_site_data`; this should be enforced by the loading function");
+    for data in all_site_data {
         let inds = data
             .utc_mean_time
             .iter()
@@ -87,7 +118,36 @@ fn extract_date_subsets(
         subsets.push(this_subset);
     }
 
-    Ok(subsets)
+    let day_data = TimeAvgData::concat(&subsets).change_context_lazy(|| {
+        CliError::Context(format!("error combining site data for date {date}"))
+    })?;
+
+    // I ended up not adding a sorting macro to ggg-rs-derive because it doesn't look like
+    // we can efficiently sort ndarrays in place - it might depend on the memory layout.
+    // If this becomes a bottleneck in the future, we can revisit, but for now treat
+    // sorting like a special case of subsetting.
+    let sort_inds = make_sort_indices(&day_data);
+    let day_data = day_data.subset(&sort_inds);
+
+    Ok(day_data)
+}
+
+fn make_sort_indices(data: &TimeAvgData) -> Vec<usize> {
+    let mut indices = (0..data.utc_mean_time.len()).collect_vec();
+    // To maintain equivalence with the Python code, we want to sort by time and then station ID.
+    // The original reasoning was: "it looks like Sourish's files sort obs by time, interleaving
+    // sites if needed. I'll also sort by station ID to produce a repeatable order in case two bins
+    // happen to have identical binned mean times."
+    // I did not switch to sorting by the `obs_id` field, because that uses the _solar bin time_,
+    // not the UTC time, so the ordering would not necessarily be the same as the Python code,
+    // which does sort by UTC time then station ID.
+
+    indices.sort_by_key(|&i| {
+        let time = data.utc_mean_time[i];
+        let mip_id = data.station_id[i];
+        (time, mip_id)
+    });
+    indices
 }
 
 #[cfg(test)]

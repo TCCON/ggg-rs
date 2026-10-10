@@ -1603,6 +1603,7 @@ pub fn split_gas_and_window(colname: &str) -> Option<(&str, &str)> {
     }
 }
 
+/// Iterator type for [`iter_dates`]
 pub struct DateIter {
     curr: chrono::NaiveDate,
     end: chrono::NaiveDate,
@@ -1622,6 +1623,7 @@ impl Iterator for DateIter {
     }
 }
 
+/// Create an iterator over all dates between start and end, _inclusive_.
 pub fn iter_dates(start_date: chrono::NaiveDate, end_date: chrono::NaiveDate) -> DateIter {
     DateIter {
         curr: start_date,
@@ -1974,9 +1976,24 @@ pub fn utf_or_hex(bytes: &[u8], omit_trailing_nulls: bool) -> Cow<'_, str> {
 
 #[cfg(test)]
 mod tests {
-    use std::assert_eq;
-
     use super::*;
+    use crate::test_utils::utc_dt_ymd;
+
+    #[test]
+    fn test_date_iter() {
+        let date_iter = iter_dates(
+            utc_dt_ymd(2020, 1, 1).date_naive(),
+            utc_dt_ymd(2020, 1, 3).date_naive(),
+        )
+        .collect_vec();
+        // Confirm that the end date is included in the iteration
+        let expected_dates = vec![
+            utc_dt_ymd(2020, 1, 1).date_naive(),
+            utc_dt_ymd(2020, 1, 2).date_naive(),
+            utc_dt_ymd(2020, 1, 3).date_naive(),
+        ];
+        assert_eq!(date_iter, expected_dates);
+    }
 
     #[test]
     fn test_nth_day_of_week() {

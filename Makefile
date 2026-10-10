@@ -94,6 +94,9 @@ test: $(NC_LIB)
 testbin: $(NC_LIB)
 	$(CARGOCMD) test $(CARGOARGS) --bin $(BIN) -- $(TEST_PATTERN)
 
+testlib: $(NC_LIB)
+	$(CARGOCMD) test $(CARGOARGS) --lib -- $(TEST_PATTERN)
+
 testdoc: $(NC_LIB)
 	$(CARGOCMD) test $(CARGOARGS) --doc -- $(TEST_PATTERN)
 

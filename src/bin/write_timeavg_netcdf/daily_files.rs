@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use error_stack::ResultExt;
-use ggg_rs::utils::site_id_from_filename;
+use ggg_rs::utils::{iter_dates, site_id_from_filename};
 use indexmap::IndexMap;
 
 use crate::{
@@ -18,9 +18,41 @@ pub(super) fn daily_files_driver<F: AsRef<Path>>(
     start_date: Option<chrono::NaiveDate>,
     end_date: Option<chrono::NaiveDate>,
 ) -> error_stack::Result<(), CliError> {
-    let data = load_site_files(average_files, gases)?;
+    let all_data = load_site_files(average_files, gases)?;
     let gas_date_ranges =
-        split_dates::get_date_range_all_gases(&data, gases, start_date, end_date)?;
+        split_dates::get_date_range_all_gases(&all_data, gases, start_date, end_date)?;
+    for date in iter_dates(gas_date_ranges.overall_start, gas_date_ranges.overall_end) {
+        let filename = date.format("tccon_timeavg_%Y%m%d.nc4").to_string();
+        let file = output_dir.join(filename);
+        let mut ds = netcdf::create(&file).change_context_lazy(|| {
+            CliError::Context(format!("error creating daily file {}", file.display()))
+        })?;
+        for gas in gases {
+            if !gas_date_ranges.gas_has_date(gas, date) {
+                continue;
+            }
+
+            let gas_data_iter = all_data.values().map(|v| {
+                v.get(gas).expect("all sites' data must have all gases, this should be enforced by the loading function")
+            });
+            let day_data = split_dates::extract_date_subset(gas_data_iter, date)
+                .change_context_lazy(|| {
+                    CliError::Context(format!("error subsetting data for gas {gas} on {date}"))
+                })?;
+
+            let mut grp = ds.add_group(gas.output_group()).change_context_lazy(|| {
+                CliError::Context(format!(
+                    "error creating group '{}' in daily file {}",
+                    gas.output_group(),
+                    file.display()
+                ))
+            })?;
+            day_data.write_netcdf(&mut grp).change_context_lazy(|| {
+                CliError::Context(format!("error writing data for gas {gas} on {date}"))
+            })?;
+        }
+    }
+
     Ok(())
 }
 
