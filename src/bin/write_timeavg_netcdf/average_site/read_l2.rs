@@ -10,13 +10,14 @@ use ggg_rs::{
     utils::GggNcError,
 };
 use ndarray::{Array1, Ix1, Ix2};
+use ndarray_stats::QuantileExt;
 use uom::si::{
     self,
     f32::{Angle, Pressure, Ratio},
     ratio::part_per_million,
 };
 
-use crate::data_structures::{Gas, Level2Data};
+use crate::data_structures::{Gas, Level2Data, StationMetaAttrs};
 
 /// A struct defining the set of variables and other setting required
 /// to average a particular gas.
@@ -255,6 +256,44 @@ fn read_either_file(
         xgas,
         xgas_error,
         xgas_wmo_scale: String::new(),
+    })
+}
+
+pub(crate) fn read_tccon_metadata(
+    file: &Path,
+) -> error_stack::Result<StationMetaAttrs, GggNcError> {
+    let ds = netcdf::open(file).change_context_lazy(|| {
+        GggNcError::Context(format!(
+            "Error opening file {} to read metadata",
+            file.display()
+        ))
+    })?;
+    let is_private = ds.variable("flag").is_some();
+
+    let (source_release_lag, all_public_after) = if is_private {
+        let lag_str = nc_utils::get_string_attr(&ds, "release_lag")?;
+        let lag = nc_utils::parse_release_lag(&lag_str)?;
+        let times = nc_utils::get_var_cftime::<f64, Ix1>(&ds, "time")?;
+        let last_time = times.max().change_context_lazy(|| {
+            GggNcError::context("error getting last ZPD time in private file")
+        })?;
+        let pub_after = *last_time + lag;
+
+        (Some(lag_str), Some(pub_after))
+    } else {
+        (None, None)
+    };
+
+    let source_data_doi = nc_utils::get_string_attr(&ds, "data_doi")?;
+    let source_data_revision = nc_utils::get_string_attr(&ds, "data_revision")?;
+    let source_data_reference = nc_utils::get_string_attr(&ds, "data_reference")?;
+
+    Ok(StationMetaAttrs {
+        source_release_lag,
+        source_data_doi,
+        source_data_revision,
+        source_data_reference,
+        all_public_after,
     })
 }
 

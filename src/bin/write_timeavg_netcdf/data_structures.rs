@@ -381,23 +381,51 @@ impl Level2Data {
     }
 }
 
+#[derive(Debug, WriteNetcdf)]
 pub(crate) struct StationMetaAttrs {
-    /// The long name of the station, e.g. "caltech" or "nicosia"
-    pub(crate) name: String,
-
     /// The number of days from acquisition for which data from this station
     /// is withheld from the public archive.
-    pub(crate) release_lag_days: Option<u32>,
+    #[netcdf(attribute, map(write = opt_to_attr))]
+    pub(crate) source_release_lag: Option<String>,
 
     /// The DOI for the level 2 data from this site, starting with "10."
-    pub(crate) data_doi: String,
+    #[netcdf(attribute)]
+    pub(crate) source_data_doi: String,
 
     /// The revision identifier for the level 2 data from this site, usually
     /// "R0", "R1", etc.
-    pub(crate) data_revision: String,
+    #[netcdf(attribute)]
+    pub(crate) source_data_revision: String,
 
     /// The citation for the level 2 data from this site.
-    pub(crate) data_reference: String,
+    #[netcdf(attribute)]
+    pub(crate) source_data_reference: String,
+
+    /// The date/time after which all data in this file will be public
+    #[netcdf(attribute, map(write = opt_dt_to_attr))]
+    pub(crate) all_public_after: Option<chrono::DateTime<Utc>>,
+}
+
+fn opt_to_attr<A, T>(_: A, opt: &Option<T>, _: &str) -> netcdf::AttributeValue
+where
+    netcdf::AttributeValue: From<T>,
+    T: Clone,
+{
+    match opt {
+        Some(val) => val.clone().into(),
+        None => netcdf::AttributeValue::Str("N/A".to_string()),
+    }
+}
+
+fn opt_dt_to_attr<A>(
+    _: A,
+    opt_dt: &Option<chrono::DateTime<Utc>>,
+    _: &str,
+) -> netcdf::AttributeValue {
+    match opt_dt {
+        Some(dt) => netcdf::AttributeValue::Str(dt.to_rfc3339()),
+        None => netcdf::AttributeValue::Str("N/A".to_string()),
+    }
 }
 
 #[cfg(test)]

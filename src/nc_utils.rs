@@ -668,7 +668,7 @@ where
         serde_json::Value::String(s) => {
             let v: u32 = s.trim().parse()
             .map_err(|e| D::Error::custom(format!(
-                "if given as a string, release_lag must be parsable as an unsigned integer (parsing error was: {e}"
+                "if given as a string, release_lag must be parsable as an unsigned integer (parsing error was: {e})"
             )))?;
             Ok(v)
         }

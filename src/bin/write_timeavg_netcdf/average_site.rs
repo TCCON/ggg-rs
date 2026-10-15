@@ -26,6 +26,9 @@ pub(super) fn average_site_driver(
             output_file.display()
         ))
     })?;
+    let site_meta = read_l2::read_tccon_metadata(l2_file).change_context_lazy(|| {
+        CliError::Context(format!("Error reading metadata from {}", l2_file.display()))
+    })?;
     for var_def in gas_defs {
         let l2_filterer = filter_l2::get_l2_filterer_for_site(&site_id);
         let l2_binner = assign_l2_time_bins::get_l2_time_binner_for_site(&site_id);
@@ -73,6 +76,21 @@ pub(super) fn average_site_driver(
                 CliError::context("Error writing the additional bin_flag attributes")
             })?;
     }
+
+    let mut out_root = output_ds.root_mut().ok_or_else(|| {
+        CliError::Custom(format!(
+            "Could not get root group in output file {}",
+            output_file.display()
+        ))
+    })?;
+    site_meta
+        .write_netcdf(&mut out_root)
+        .change_context_lazy(|| {
+            CliError::Context(format!(
+                "Error writing site metadata to {}",
+                output_file.display()
+            ))
+        })?;
     Ok(())
 }
 
