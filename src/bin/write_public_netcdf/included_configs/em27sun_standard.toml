@@ -26,6 +26,14 @@ prior_xgas = { type = "specified", only_if_first = true, private_name = "prior_x
 ak = { type = "specified", only_if_first = true, private_name = "ak_xlco2" }
 slant_bin = { type = "specified", private_name = "ak_slant_xlco2_bin" }
 
+[discovery]
+# Edit from Niki Jacobs for GGG2020.1 support for EM27/SUNs on 21 Aug 2026.
+# TODO: test that excluded values from COMMON are inherited - they should be.
+#  Also should not need n2o in both the gases and variables, and should be
+#  able to remove the xwco2 and xlco2 sections above.
+excluded_gases = ["th2o", "fco2", "zco2", "n2o"]
+excluded_xgas_variables = ["xo2", "xn2o", "xwco2", "xlco2"]
+
 # -------------- #
 # Other settings #
 # -------------- #
