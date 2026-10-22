@@ -6,10 +6,10 @@ use ggg_rs::nc_utils::NcArray;
 use indexmap::IndexMap;
 use itertools::Itertools;
 use ndarray::ArrayViewD;
-use netcdf::{AttributeValue, Extents, NcTypeDescriptor};
+use netcdf::{Extents, NcTypeDescriptor};
 use num_traits::Zero;
 
-use crate::TIME_DIM_NAME;
+use crate::{copying::AttrCopy, TIME_DIM_NAME};
 
 use super::{
     add_needed_dims, add_needed_new_dims, convert_array_units, find_subset_dim, get_string_attr,
@@ -29,8 +29,8 @@ pub(super) fn copy_vmr_variable_from_dset<
     public_varname: &str,
     time_subsetter: &Subsetter,
     long_name: &str,
-    mut attr_overrides: IndexMap<String, AttributeValue>,
-    attr_to_remove: &[S],
+    mut attr_overrides: IndexMap<String, AttrCopy>,
+    attr_omit_by_default: &[S],
     target_unit: &str,
 ) -> error_stack::Result<(), CopyError> {
     log::debug!(
@@ -89,7 +89,7 @@ pub(super) fn copy_vmr_variable_from_dset<
         &mut public_var,
         long_name,
         &attr_overrides,
-        attr_to_remove,
+        attr_omit_by_default,
     )?;
 
     Ok(())
@@ -102,8 +102,8 @@ pub(super) fn copy_variable_new_data<S: AsRef<str>>(
     data: ArrayViewD<f32>,
     dims: Vec<String>,
     long_name: &str,
-    attr_overrides: &IndexMap<String, AttributeValue>,
-    attr_to_remove: &[S],
+    attr_overrides: &IndexMap<String, AttrCopy>,
+    attr_omit_by_default: &[S],
 ) -> error_stack::Result<(), CopyError> {
     log::debug!(
         "Transforming private variable '{}' into public variable '{public_varname}'",
@@ -119,7 +119,7 @@ pub(super) fn copy_variable_new_data<S: AsRef<str>>(
         &mut public_var,
         long_name,
         attr_overrides,
-        attr_to_remove,
+        attr_omit_by_default,
     )?;
     Ok(())
 }
@@ -132,8 +132,8 @@ pub(super) fn copy_variable_general<S: AsRef<str>>(
     public_varname: &str,
     time_subsetter: &Subsetter,
     long_name: &str,
-    attr_overrides: &IndexMap<String, AttributeValue>,
-    attr_to_remove: &[S],
+    attr_overrides: &IndexMap<String, AttrCopy>,
+    attr_omit_by_default: &[S],
 ) -> error_stack::Result<(), CopyError> {
     let private_varname = private_var.name();
     log::debug!(
@@ -247,7 +247,7 @@ pub(super) fn copy_variable_general<S: AsRef<str>>(
         &mut public_var,
         long_name,
         attr_overrides,
-        attr_to_remove,
+        attr_omit_by_default,
     )?;
     Ok(())
 }
@@ -304,8 +304,8 @@ pub(super) fn copy_var_attr_write_helper<S: AsRef<str>>(
     private_var: &netcdf::Variable,
     public_var: &mut netcdf::VariableMut,
     long_name: &str,
-    attr_overrides: &IndexMap<String, AttributeValue>,
-    attr_to_remove: &[S],
+    attr_overrides: &IndexMap<String, AttrCopy>,
+    attr_omit_by_default: &[S],
 ) -> error_stack::Result<(), CopyError> {
     let private_varname = private_var.name();
     let public_varname = public_var.name();
@@ -316,23 +316,54 @@ pub(super) fn copy_var_attr_write_helper<S: AsRef<str>>(
                 "adding 'long_name' attribute to public variable '{public_varname}'"
             ))
         })?;
-    for (att_name, att_value) in attr_overrides.iter() {
-        public_var
-            .put_attribute(&att_name, att_value.to_owned())
-            .change_context_lazy(|| {
-                CopyError::context(format!(
-                    "adding '{att_name}' attribute to public variable '{public_varname}'"
-                ))
-            })?;
+
+    // We need this loop because otherwise attributes being added, not just modified, won't get written.
+    log::debug!("Attribute overrides for public variable '{public_varname}' = {attr_overrides:?}");
+    for (att_name, att_over) in attr_overrides.iter() {
+        if let AttrCopy::Value(att_val) = att_over {
+            log::trace!("Writing overridden attribute {att_name}");
+            public_var
+                .put_attribute(&att_name, att_val.clone())
+                .change_context_lazy(|| {
+                    CopyError::Context(format!(
+                        "adding '{att_name}' attribute to public variable '{public_varname}'"
+                    ))
+                })?;
+        }
     }
+
     for att in private_var.attributes() {
         let att_name = att.name();
-        if att_name != "long_name"
-            && !attr_overrides.contains_key(att_name)
-            && !attr_to_remove.iter().any(|a| a.as_ref() == att_name)
-        {
-            let att_value = att.value()
-                .change_context_lazy(|| CopyError::context(format!("getting original value of attribute '{att_name}' from private variable '{private_varname}'")))?;
+        // long name must always be provided, so it is handled above.
+        if att_name != "long_name" {
+            // there are certain attribute that we usually do not want to copy
+            let this_override = attr_overrides.get(att_name).or_else(|| {
+                // use .any() rather than .contains() so callers don't need to convert Strings to strs
+                if attr_omit_by_default.iter().any(|a| a.as_ref() == att_name) {
+                    log::trace!("Attribute '{att_name}' omitted due to global setting");
+                    Some(&AttrCopy::Omit)
+                } else {
+                    None
+                }
+            });
+
+            let att_value = match this_override {
+                Some(AttrCopy::Value(_)) => {
+                    // Should already have been written above
+                    continue;
+                },
+                Some(AttrCopy::Omit) => {
+                    // Do not copy
+                    log::trace!("Omitting attribute {att_name}");
+                    continue;
+                }
+                Some(AttrCopy::Copy) | None => {
+                    att.value()
+                        .change_context_lazy(|| CopyError::context(format!("getting original value of attribute '{att_name}' from private variable '{private_varname}'")))?
+                }
+            };
+
+            log::trace!("Copying attribute {att_name}");
             public_var
                 .put_attribute(att_name, att_value)
                 .change_context_lazy(|| {

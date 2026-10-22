@@ -102,6 +102,13 @@ pub(crate) struct Config {
     #[serde(default)]
     pub(crate) extra_extension: Option<String>,
 
+    /// If given, the listed attributes will be omitted from
+    /// variables in the public file without needing to specify
+    /// them on each variable. They can still be copied for
+    /// specific variables
+    #[serde(default)]
+    pub(crate) var_attrs_to_omit: Vec<String>,
+
     /// Toggles for whether to add default values to each section.
     ///
     /// # Developer note
@@ -228,6 +235,7 @@ impl Default for Config {
             discovery: Default::default(),
             global_attributes: Default::default(),
             extra_extension: Default::default(),
+            var_attrs_to_omit: Default::default(),
             defaults: Default::default(),
             include: Default::default(),
         };
@@ -383,11 +391,6 @@ pub(crate) fn default_empty_string() -> String {
     "".to_string()
 }
 
-/// Helper function for default attributes
-pub(crate) fn default_attr_remove() -> Vec<String> {
-    vec!["precision".to_string(), "standard_name".to_string()]
-}
-
 pub(crate) fn default_ancillary_infer_first() -> XgasAncillary {
     XgasAncillary::Inferred(XgasAncInferOptions::new_if_first(None))
 }
@@ -479,6 +482,12 @@ mod tests {
 
     #[test]
     fn test_book_examples() {
+        #[derive(Debug, serde::Deserialize)]
+        struct AttrOverEx {
+            #[serde(default, deserialize_with = "crate::copying::de_attribute_overrides")]
+            #[allow(dead_code)]
+            attr_overrides: IndexMap<String, crate::copying::AttrCopy>,
+        }
         let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         let book_subdir = crate_root.join("book/src/postproc/write_public_netcdf");
         let md_files = book_subdir
@@ -488,7 +497,21 @@ mod tests {
         let block_iter = ggg_rs::test_utils::iter_fenced_blocks("toml", md_files);
         for block in block_iter {
             let block = block.expect("should be able to read fenced block");
-            let res = Config::from_toml_str(&block.text);
+            let res = match block.subtag.as_deref() {
+                None => Config::from_toml_str(&block.text).map(|_| ()),
+                Some("attr_overrides") => {
+                    let ao: Result<(), _> = toml::from_str::<AttrOverEx>(&block.text)
+                        .map(|_| ())
+                        .map_err(|e| {
+                            crate::config::ConfigError::deser(
+                                format!("book example:\n{}", block.text),
+                                e,
+                            )
+                        });
+                    ao
+                }
+                Some(tag) => unimplemented!("deserialization of subtag '{tag}'"),
+            };
             assert!(
                 res.is_ok(),
                 "could not deserialize an example in line {} of file {}:\n\n{}\n\nerror was\n\n{}",
@@ -510,5 +533,11 @@ mod tests {
     fn test_extended_tccon_config() {
         Config::from_toml_str(EXTENDED_TCCON_TOML)
             .expect("deserializing the extended TCCON configuration should not fail");
+    }
+
+    #[test]
+    fn test_standard_em27_config() {
+        Config::from_toml_str(STANDARD_EM27_TOML)
+            .expect("deserializing the standard EM27/SUN configuration should not fail");
     }
 }

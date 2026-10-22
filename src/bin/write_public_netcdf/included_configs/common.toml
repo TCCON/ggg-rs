@@ -1,3 +1,7 @@
+# Global settings
+
+var_attrs_to_omit = ["precision", "oof_scaling", "standard_name"]
+
 # ------------------------ #
 # True auxiliary variables #
 # ------------------------ #
@@ -178,4 +182,3 @@ ak = { type = "omit" }
 [discovery]
 excluded_gases = ["th2o", "fco2", "zco2"]
 excluded_xgas_variables = ["xo2"]
-

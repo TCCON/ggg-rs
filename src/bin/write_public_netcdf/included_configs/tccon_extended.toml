@@ -13,7 +13,6 @@ extra_extension = "extended."
 private_name = "column_ao2_si"
 public_name = "column_ao2_visible"
 long_name = "oxygen column density"
-attr_to_remove = ["precision"]
 required = false
 [aux.attr_overrides]
 description = "column density of oxygen retrieved from the A-band"
@@ -33,7 +32,6 @@ description = "one-sigma precision"
 private_name = "column_bo2_si"
 public_name = "column_bo2_visible"
 long_name = "oxygen column density"
-attr_to_remove = ["precision"]
 required = false
 [aux.attr_overrides]
 description = "column density of oxygen retrieved from the B-band"

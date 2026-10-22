@@ -36,14 +36,10 @@ excluded_xgas_variables = ["xo2", "xn2o", "xwco2", "xlco2"]
 private_name = "xn2o_original"
 long_name = "column average nitrous oxide mole fraction"
 required = false
-attr_to_remove = [
-    "standard_name",
-    "precision",
-    "note",
-] # incorporated the note about the T-dependent bias reduction into the overridden description.
 [aux.attr_overrides]
 wmo_or_analogous_scale = "NOAA 2006A"
 description = "o2_mean_mole_fraction * column_n2o / column_o2. This variable contains the XN2O values BEFORE the temperature bias reduction is applied but AFTER the new O2 mole fractions were applied. Most users should prefer the 'xn2o' variable over this one."
+note = { omit = true }                                                                                                                                                                                                                                                # incorporated the note about the T-dependent bias reduction into the overridden description.
 
 # -------------- #
 # Other settings #

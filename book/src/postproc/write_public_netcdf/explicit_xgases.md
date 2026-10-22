@@ -18,13 +18,18 @@ Each Xgas has the following options:
   then the configuration will try to find the `gas` value in its [`[gas_long_names]`](./gas_proper_names.md) section and use that,
   falling back on the `gas` value if the gas is not defined in the gas long names section.
 - `xgas_attr_overrides` (optional): a table of attribute values that can override existing attribute values on the private Xgas variable.
+  See the [overrides section](./variable_attributes.md#attribute-overrides) for details.
 - `xgas_error_attr_overrides` (optional): a table of attribute values that can override existing attribute values on the private Xgas error variable.
+  See the [overrides section](./variable_attributes.md#attribute-overrides) for details.
 - `prior_profile` (optional): how to copy the a priori profile.
 - `prior_profile_attr_overrides` (optional): a table of attribute values that can override existing attribute values on the private prior profile variable.
+  See the [overrides section](./variable_attributes.md#attribute-overrides) for details.
 - `prior_xgas` (optional): how to copy the a priori column average.
 - `prior_xgas_attr_overrides` (optional): a table of attribute values that can override existing attribute values on the private prior Xgas variable.
+  See the [overrides section](./variable_attributes.md#attribute-overrides) for details.
 - `ak` (optional): how to copy the averaging kernels.
 - `ak_attr_overrides` (optional): a table of attribute values that can override existing attribute values on the private AK variable.
+  See the [overrides section](./variable_attributes.md#attribute-overrides) for details.
 - `slant_bin` (optional): how to find the slant Xgas bin variable needed to expand the AKs.
 - `traceability_scale` (optional): how to find the variable containing the WMO or analogous scale for this data.
 - `required` (optional): this is `true` by default; set it to `false` if you want to copy this Xgas if present but it is not an error if it is missing.
