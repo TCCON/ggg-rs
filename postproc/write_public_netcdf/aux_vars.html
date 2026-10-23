@@ -197,20 +197,24 @@ public_name = "solar_zenith_angle"
 long_name = "solar zenith angle"
 </code></pre>
 <p>This would rename the variable to <code>solar_zenith_angle</code> in the public file, but otherwise behave identically to above.</p>
-<p>You can also control the attributes copied through two more fields, <code>attr_overrides</code> and <code>attr_to_remove</code>.
+<p>You can also control the attributes copied through the field <code>attr_overrides</code>.
 <code>attr_overrides</code> is a TOML table of attibute names and values that will be added to the public variable.
+If given a value that is a boolean, integer, float, string, datetime, or array, that value will be
+written to the attribute.
 If an attribute is listed in the private file with the same name as an override, the override value in the config takes precedence.
-The latter is an array of attribute names to skip copying if present.
-(If one of these attributes is not present in the private file, nothing happens.)
+If an attribute is given a value of a TOML table, this permits you to define options about how that attribute is handled.
 An example:</p>
 <pre><code class="language-toml">[[aux]]
 private_name = "day"
 long_name = "day of year"
-attr_overrides = {units = "Julian day", description = "1-based day of year"}
-attr_to_remove = ["vmin", "vmax"]
+[aux.attr_overrides]
+units = "Julian day"
+description = "1-based day of year"
+vmin = {omit = true}
+vmax = {omit = true}
 </code></pre>
 <p>This will add or replace the attributes <code>units</code> and <code>description</code> in the public file with those given here, and ensure that the <code>vmin</code> and <code>vmax</code> attributes are not copied.
-Take note, specifying <code>attr_to_remove</code> overrides the default list of <code>standard_name</code> and <code>precision</code>; this can be useful if you want to retain those (you can do so by specifying <code>attr_to_remove = []</code>), but if you want to exclude them, you must add them to your list.</p>
+For more details, see <a href="./variable_attributes.html#attribute-overrides">the variable attributes section</a></p>
 <p>Finally, by default any auxiliary variable listed here must be found in the private netCDF file, or the public writer stops with an error.
 To change this behavior so that a variable is optional, add the <code>required = false</code> field to an aux variable:</p>
 <pre><code class="language-toml">[[aux]]

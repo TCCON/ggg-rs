@@ -221,6 +221,7 @@ This means that if a variable matches multiple rules, then its ancillary variabl
 <h2 id="attributes"><a class="header" href="#attributes">Attributes</a></h2>
 <p>Discovery rules can specify the fields <code>xgas_attr_overrides</code>, <code>xgas_error_attr_overrides</code>, <code>prior_profile_attr_overrides</code>,
 <code>prior_xgas_attr_overrides</code>, and <code>ak_attr_overrides</code> to set attributes on their respective variables.
+See the <a href="./variable_attributes.html#attribute-overrides">overrides section</a> for details.
 These should be used for attributes that will be the same for <em>all</em> the variables of that type created by this rule.
 For example, to add a cautionary note about experimental data to our previous mid-IR discovery rule:</p>
 <pre><code class="language-toml">[[discovery.rule]]

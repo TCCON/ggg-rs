@@ -197,14 +197,19 @@ This is used to match up to, e.g., the priors which do not distinguish between t
 <li><code>gas_long</code> (optional): the full name of the gas instead of its abbreviation, e.g. "carbon dioxide" for CO2. If not given,
 then the configuration will try to find the <code>gas</code> value in its <a href="./gas_proper_names.html"><code>[gas_long_names]</code></a> section and use that,
 falling back on the <code>gas</code> value if the gas is not defined in the gas long names section.</li>
-<li><code>xgas_attr_overrides</code> (optional): a table of attribute values that can override existing attribute values on the private Xgas variable.</li>
-<li><code>xgas_error_attr_overrides</code> (optional): a table of attribute values that can override existing attribute values on the private Xgas error variable.</li>
+<li><code>xgas_attr_overrides</code> (optional): a table of attribute values that can override existing attribute values on the private Xgas variable.
+See the <a href="./variable_attributes.html#attribute-overrides">overrides section</a> for details.</li>
+<li><code>xgas_error_attr_overrides</code> (optional): a table of attribute values that can override existing attribute values on the private Xgas error variable.
+See the <a href="./variable_attributes.html#attribute-overrides">overrides section</a> for details.</li>
 <li><code>prior_profile</code> (optional): how to copy the a priori profile.</li>
-<li><code>prior_profile_attr_overrides</code> (optional): a table of attribute values that can override existing attribute values on the private prior profile variable.</li>
+<li><code>prior_profile_attr_overrides</code> (optional): a table of attribute values that can override existing attribute values on the private prior profile variable.
+See the <a href="./variable_attributes.html#attribute-overrides">overrides section</a> for details.</li>
 <li><code>prior_xgas</code> (optional): how to copy the a priori column average.</li>
-<li><code>prior_xgas_attr_overrides</code> (optional): a table of attribute values that can override existing attribute values on the private prior Xgas variable.</li>
+<li><code>prior_xgas_attr_overrides</code> (optional): a table of attribute values that can override existing attribute values on the private prior Xgas variable.
+See the <a href="./variable_attributes.html#attribute-overrides">overrides section</a> for details.</li>
 <li><code>ak</code> (optional): how to copy the averaging kernels.</li>
-<li><code>ak_attr_overrides</code> (optional): a table of attribute values that can override existing attribute values on the private AK variable.</li>
+<li><code>ak_attr_overrides</code> (optional): a table of attribute values that can override existing attribute values on the private AK variable.
+See the <a href="./variable_attributes.html#attribute-overrides">overrides section</a> for details.</li>
 <li><code>slant_bin</code> (optional): how to find the slant Xgas bin variable needed to expand the AKs.</li>
 <li><code>traceability_scale</code> (optional): how to find the variable containing the WMO or analogous scale for this data.</li>
 <li><code>required</code> (optional): this is <code>true</code> by default; set it to <code>false</code> if you want to copy this Xgas if present but it is not an error if it is missing.</li>

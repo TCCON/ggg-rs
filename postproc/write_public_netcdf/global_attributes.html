@@ -181,10 +181,11 @@
                     <main>
                         <h1 id="global-attributes"><a class="header" href="#global-attributes">Global attributes</a></h1>
 <p>What global attributes (i.e., attributes from the root group of the netCDF file) to copy to the public file are defined by the <code>[global_attributes]</code> section.
-This section contains two lists of strings:</p>
+This section contains the following subsections:</p>
 <ul>
 <li><code>must_copy</code> lists the names of attributes that must be available in the private netCDF file, or an error is raised.</li>
 <li><code>copy_if_present</code> lists the names of attributes to copy if available in the private netCDF file, but to not raise an error for if missing.</li>
+<li><code>copy_and_edit</code> maps attribute names to how they are to be edited. See below for available operations.</li>
 </ul>
 <p>An abbreviated example from the TCCON standard configuration is:</p>
 <pre><code class="language-toml">[global_attributes]
@@ -198,10 +199,9 @@ copy_if_present = [
     "location",
 ]
 </code></pre>
-<p>At present, there is no way to manipulate attributes' values during the copying process, nor add arbitrary attributes.
+<p>At present, there is no way to add arbitrary attributes.
 In general, attributes should be added to the private netCDF file, then copied to the public file.
-This ensures that attributes are consistent between the two files.
-However, in the future we may add the ability to define some special cases.</p>
+This ensures that attributes are consistent between the two files.</p>
 <div id="admonition-warning" class="admonition admonish-warning" role="note" aria-labelledby="admonition-warning-title">
 <div class="admonition-title">
 <div id="admonition-warning-title">
@@ -216,6 +216,28 @@ no matter what the configuration says.
 To avoid conflicts with this built in behavior, do not specify <code>history</code> as an attribute to copy in the configuration file.</p>
 </div>
 </div>
+<h2 id="editing-attributes"><a class="header" href="#editing-attributes">Editing attributes</a></h2>
+<p>The <code>copy_and_edit</code> section maps attribute names to descriptions of how to edit them.
+The different ways to edit are defined by the <code>"type"</code> key in these entries.
+For example, the TCCON extended configuration defines:</p>
+<pre><code class="language-toml">[global_attributes.copy_and_edit]
+data_doi = { type = "doi_to_extended" }
+data_reference = { type = "doi_to_extended" }
+</code></pre>
+<p>The <code>type</code> key definitions follow.</p>
+<h3 id="doi_to_extended"><a class="header" href="#doi_to_extended">doi_to_extended</a></h3>
+<p><code>type = "doi_to_extended"</code> will look for a DOI in the attribute and, assuming it is formatted like a TCCON data DOI,
+convert it from the standard DOI to one appropriate for the extended data files.
+If the DOI does not match the TCCON data DOI format closely enough, this will raise an error, so only apply it to
+attributes that contain such a DOI.
+The DOI <em>can</em> be part of a larger string, such as the full reference.</p>
+<p>This has one optional field, <code>required</code>, which determines if the attribute must be present.
+The default is <code>required = true</code>, meaning it is an error if the attribute is missing.
+Here is an example setting it to <code>false</code>:</p>
+<pre><code class="language-toml">[global_attributes.copy_and_edit]
+data_reference = { type = "doi_to_extended", required = false }
+</code></pre>
+
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
@@ -224,7 +246,7 @@ To avoid conflicts with this built in behavior, do not specify <code>history</co
                                 <i class="fa fa-angle-left"></i>
                             </a>
 
-                            <a rel="next prefetch" href="../../postproc/write_public_netcdf/includes.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                            <a rel="next prefetch" href="../../postproc/write_public_netcdf/variable_attributes.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                                 <i class="fa fa-angle-right"></i>
                             </a>
 
@@ -238,7 +260,7 @@ To avoid conflicts with this built in behavior, do not specify <code>history</co
                         <i class="fa fa-angle-left"></i>
                     </a>
 
-                    <a rel="next prefetch" href="../../postproc/write_public_netcdf/includes.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                    <a rel="next prefetch" href="../../postproc/write_public_netcdf/variable_attributes.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                         <i class="fa fa-angle-right"></i>
                     </a>
             </nav>
