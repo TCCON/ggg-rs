@@ -10,7 +10,7 @@ resolver = "2"
 anyhow = { version = "1", optional = true }  # needed for test_utils' custom log4rs appender
 approx = "0.5.1"  # this is needed for more than tests (e.g., apply_nc_fills)
 chrono = { version = "0.4.40", features = ["serde"] }
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4", features = ["derive", "cargo"] }
 clap-verbosity-flag = "2.2.0"
 # If in the future I need a dynamic builder pattern, use this crate.
 # derive_builder = "0.20.2"

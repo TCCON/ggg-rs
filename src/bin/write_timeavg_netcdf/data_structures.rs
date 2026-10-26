@@ -402,8 +402,8 @@ pub(crate) struct StationMetaAttrs {
     pub(crate) source_data_reference: String,
 
     /// The date/time after which all data in this file will be public
-    #[netcdf(attribute, map(write = opt_dt_to_attr))]
-    pub(crate) all_public_after: Option<chrono::DateTime<Utc>>,
+    #[netcdf(attribute, map(write = opt_date_to_attr))]
+    pub(crate) all_public_after: Option<chrono::NaiveDate>,
 }
 
 fn opt_to_attr<A, T>(_: A, opt: &Option<T>, _: &str) -> netcdf::AttributeValue
@@ -417,13 +417,13 @@ where
     }
 }
 
-fn opt_dt_to_attr<A>(
+fn opt_date_to_attr<A>(
     _: A,
-    opt_dt: &Option<chrono::DateTime<Utc>>,
+    opt_date: &Option<chrono::NaiveDate>,
     _: &str,
 ) -> netcdf::AttributeValue {
-    match opt_dt {
-        Some(dt) => netcdf::AttributeValue::Str(dt.to_rfc3339()),
+    match opt_date {
+        Some(date) => netcdf::AttributeValue::Str(date.format("%Y-%m-%d").to_string()),
         None => netcdf::AttributeValue::Str("N/A".to_string()),
     }
 }

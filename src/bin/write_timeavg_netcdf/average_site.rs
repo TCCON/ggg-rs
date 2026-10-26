@@ -91,6 +91,34 @@ pub(super) fn average_site_driver(
                 output_file.display()
             ))
         })?;
+
+    // Lastly, create the history and creation time attributes
+    let create_time = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%z").to_string();
+    let history = format!(
+        "{}: Per-site time average file {} created by write_timeavg_netcdf from v{} of ggg-rs",
+        create_time,
+        output_file
+            .file_name()
+            .map(|n| n.to_string_lossy())
+            .unwrap_or_else(|| "?".to_string().into()),
+        clap::crate_version!()
+    );
+    out_root
+        .add_attribute("history", history)
+        .change_context_lazy(|| {
+            CliError::Context(format!(
+                "error writing history attribute to {}",
+                output_file.display()
+            ))
+        })?;
+    out_root
+        .add_attribute("creation_time", create_time)
+        .change_context_lazy(|| {
+            CliError::Context(format!(
+                "error writing creation_time attribute to {}",
+                output_file.display()
+            ))
+        })?;
     Ok(())
 }
 
@@ -101,7 +129,7 @@ mod tests {
         common_test::{check_timeavg_data, CheckTimeAvgFields},
         data_structures::{Gas, TimeAvgData},
     };
-    use ggg_rs::test_utils::{init_test_logging, NCDF_F32_DEFAULT_FILL};
+    use ggg_rs::test_utils::{compare_nc_attrs, init_test_logging, NCDF_F32_DEFAULT_FILL};
     use read_l2::co2_bin_def;
 
     #[test]
@@ -152,5 +180,18 @@ mod tests {
         };
 
         check_timeavg_data(&expected_ds, timeavg_data, &fields);
+
+        // Last, check the values of the key metadata attributes that we should copy over
+        compare_nc_attrs(
+            &expected_ds,
+            &output_ds,
+            &[
+                "source_release_lag",
+                "source_data_doi",
+                "source_data_reference",
+                "source_data_reference",
+                "all_public_after",
+            ],
+        );
     }
 }

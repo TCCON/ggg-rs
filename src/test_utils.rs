@@ -11,6 +11,9 @@ use approx::AbsDiffEq;
 #[cfg(feature = "netcdf")]
 use netcdf::NcTypeDescriptor;
 
+#[cfg(feature = "netcdf")]
+use crate::nc_utils::GetNcAttr;
+
 static INIT_LOGGING: std::sync::Once = std::sync::Once::new();
 pub const NCDF_F32_DEFAULT_FILL: f32 = 9.969209716543442e30;
 
@@ -447,6 +450,27 @@ fn assert_arrays_allclose<T, D>(
         let _ = ndarray_npy::write_npy("debug_actual.npy", actual);
         let _ = ndarray_npy::write_npy("debug_expected.npy", expected);
         panic!("Arrays do not match. The unequal indices, expected values, actual values, and differences, are:\n\t{uneq:?}\nActual and Expected arrays have been dumped to 'debug_actual.npy' and 'debug_expected.npy', access with numpy.load.")
+    }
+}
+
+/// Compare the values of one or more netCDF attributes between two objects that
+/// can both have attributes. Usually this will be an expected dataset, group,
+/// or variable and the output of a test.
+#[cfg(feature = "netcdf")]
+pub fn compare_nc_attrs<A: GetNcAttr, B: GetNcAttr>(
+    expected: A,
+    test_output: B,
+    attributes: &[&str],
+) {
+    for attr in attributes {
+        let val_a = expected.get_attr_val(attr).expect(&format!(
+            "must be able to get expected attribute value for {attr}"
+        ));
+        let val_b = test_output.get_attr_val(attr).expect(&format!(
+            "must be able to get output attribute value for {attr}"
+        ));
+
+        assert_eq!(val_a, val_b, "values for attribute '{attr}' differ");
     }
 }
 

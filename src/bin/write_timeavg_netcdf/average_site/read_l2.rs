@@ -277,7 +277,13 @@ pub(crate) fn read_tccon_metadata(
         let last_time = times.max().change_context_lazy(|| {
             GggNcError::context("error getting last ZPD time in private file")
         })?;
-        let pub_after = *last_time + lag;
+        let pub_after_dt = *last_time + lag;
+        // For simplicity, we round up to the next day
+        let pub_after = if pub_after_dt.time() == chrono::NaiveTime::MIN {
+            pub_after_dt.date_naive()
+        } else {
+            pub_after_dt.date_naive() + chrono::Days::new(1)
+        };
 
         (Some(lag_str), Some(pub_after))
     } else {
