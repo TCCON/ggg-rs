@@ -176,10 +176,10 @@ mod tests {
 
         let fields = CheckTimeAvgFields {
             solar_time: "solar_time_bin",
-            ..CheckTimeAvgFields::default_for_gas(&Gas::CO2)
+            ..CheckTimeAvgFields::default_vs_python_for_gas(&Gas::CO2)
         };
 
-        check_timeavg_data(&expected_ds, timeavg_data, &fields);
+        check_timeavg_data(&expected_ds.root().unwrap(), timeavg_data, &fields);
 
         // Last, check the values of the key metadata attributes that we should copy over
         compare_nc_attrs(

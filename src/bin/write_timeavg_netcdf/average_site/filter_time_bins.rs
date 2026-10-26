@@ -125,11 +125,11 @@ mod tests {
         let expected_solar_times =
             read_time(&expected_ds, "bin_center_time").mapv(|t| t.naive_utc());
         assert_eq!(
-            expected_solar_times, binned_data.solar_mid_time,
+            expected_solar_times, binned_data.solar_time_bin,
             "Solar times for the bins must match between the files"
         );
 
-        let expected_xco2 = nc_utils::get_var_data::<f32, Ix1>(&expected_ds, "binned_xco2")
+        let expected_xco2 = nc_utils::get_var_data::<f32, Ix1, _>(&expected_ds, "binned_xco2")
             .expect("Should be able to read 'binned_xco2' from the expected file");
         let expected_bad = expected_xco2.mapv(|x| x.is_nan());
         let actual_bad = binned_data.bin_flag.mapv(|f| f > 0);

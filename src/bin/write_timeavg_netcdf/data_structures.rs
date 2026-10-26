@@ -37,7 +37,7 @@ pub(crate) type AllGasAvgData = IndexMap<Gas, TimeAvgData>;
 pub(crate) struct TimeAvgData {
     /// The midpoint of each solar time bin.
     #[netcdf(dimensions("time"), map_units(write = map_chrono_naive_f64, read = map_cftime_naive::<f64, _>), kind = "array")]
-    pub(crate) solar_mid_time: Array1<NaiveDateTime>,
+    pub(crate) solar_time_bin: Array1<NaiveDateTime>,
 
     /// The mean UTC time of the bin, weighted by the uncertainty in the column
     /// averages.
@@ -186,13 +186,13 @@ pub(crate) struct TimeAvgData {
 
 impl TimeAvgData {
     pub(crate) fn new_with_bins(
-        solar_mid_time: Array1<NaiveDateTime>,
+        solar_time_bin: Array1<NaiveDateTime>,
         nlev: usize,
         wmo_scale: String,
     ) -> Self {
-        let nbin = solar_mid_time.len();
+        let nbin = solar_time_bin.len();
         Self {
-            solar_mid_time,
+            solar_time_bin,
             cdate: Array1::from_elem(nbin, chrono::DateTime::from_timestamp_nanos(0)),
             obs_id: Array1::from_elem(nbin, i64::MIN),
             station_id: Array1::from_elem(nbin, i8::MIN),
@@ -476,7 +476,7 @@ mod tests {
         init_test_logging(Some(log::LevelFilter::Debug));
 
         let orig = TimeAvgData {
-            solar_mid_time: array![
+            solar_time_bin: array![
                 utc_dt_ymdhms(2026, 1, 2, 3, 4, 5).naive_utc(),
                 utc_dt_ymdhms(2026, 2, 3, 4, 5, 6).naive_utc()
             ],

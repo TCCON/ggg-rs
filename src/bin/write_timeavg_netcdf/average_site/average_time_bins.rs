@@ -271,9 +271,9 @@ mod tests {
         let expected_ds = netcdf::open(expected_file)
             .expect("Should be able to open the file with expected values");
         check_timeavg_data(
-            &expected_ds,
+            &expected_ds.root().unwrap(),
             binned_data,
-            &CheckTimeAvgFields::default_for_gas(&Gas::CO2),
+            &CheckTimeAvgFields::default_vs_python_for_gas(&Gas::CO2),
         );
     }
 }

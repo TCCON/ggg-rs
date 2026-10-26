@@ -12,7 +12,7 @@ use approx::AbsDiffEq;
 use netcdf::NcTypeDescriptor;
 
 #[cfg(feature = "netcdf")]
-use crate::nc_utils::GetNcAttr;
+use crate::nc_utils::{GetNcAttr, GetNcVar};
 
 static INIT_LOGGING: std::sync::Once = std::sync::Once::new();
 pub const NCDF_F32_DEFAULT_FILL: f32 = 9.969209716543442e30;
@@ -277,8 +277,8 @@ macro_rules! test_struct_check_field_types {
 /// [`compare_to_netcdf_values_eq`] - for integer arrays
 /// [`compare_to_netcdf_quantities`] - for [`uom::si::Quantity`] arrays
 #[cfg(feature = "netcdf")]
-pub fn compare_to_netcdf_values_approx<T, D>(
-    expected_ds: &netcdf::File,
+pub fn compare_to_netcdf_values_approx<T, D, O>(
+    expected_ds: O,
     nc_var: &str,
     data: &ndarray::Array<T, D>,
 ) where
@@ -291,10 +291,11 @@ pub fn compare_to_netcdf_values_approx<T, D>(
         + From<f32>,
     <T as approx::AbsDiffEq>::Epsilon: Copy + Debug + From<f32> + Into<T>,
     D: ndarray::Dimension + Copy,
+    O: GetNcVar,
 {
     // The relative tolerance of 1e-7 was selected for timeavg read_l2 tests of the CO2 prior
     let rtol: <T as AbsDiffEq>::Epsilon = 1e-7.into();
-    compare_to_netcdf_values_approx_with_tolerance(expected_ds, nc_var, data, rtol);
+    compare_to_netcdf_values_approx_with_tolerance::<_, _, O>(expected_ds, nc_var, data, rtol);
 }
 
 /// Like [`compare_to_netcdf_values_approx`], but with a custom tolerance.
@@ -302,8 +303,8 @@ pub fn compare_to_netcdf_values_approx<T, D>(
 /// Don't let the trait bounds scare you, `rtol` should just be the same type as contained
 /// in `data` - `f32` or `f64`.
 #[cfg(feature = "netcdf")]
-pub fn compare_to_netcdf_values_approx_with_tolerance<T, D>(
-    expected_ds: &netcdf::File,
+pub fn compare_to_netcdf_values_approx_with_tolerance<T, D, O>(
+    expected_ds: O,
     nc_var: &str,
     data: &ndarray::Array<T, D>,
     rtol: <T as AbsDiffEq>::Epsilon,
@@ -317,8 +318,9 @@ pub fn compare_to_netcdf_values_approx_with_tolerance<T, D>(
         + From<f32>,
     <T as approx::AbsDiffEq>::Epsilon: Copy + Debug + From<f32> + Into<T>,
     D: ndarray::Dimension + Copy,
+    O: GetNcVar,
 {
-    let expected_data = crate::nc_utils::get_var_data::<T, D>(expected_ds, nc_var).expect(
+    let expected_data = crate::nc_utils::get_var_data::<T, D, O>(expected_ds, nc_var).expect(
         &format!("Could not get variable '{nc_var}' from the validation netCDF file"),
     );
     eprintln!("Checking against {nc_var}");
@@ -334,15 +336,16 @@ pub fn compare_to_netcdf_values_approx_with_tolerance<T, D>(
 /// [`compare_to_netcdf_values_approx`] - for float arrays
 /// [`compare_to_netcdf_quantities`] - for [`uom::si::Quantity`] arrays
 #[cfg(feature = "netcdf")]
-pub fn compare_to_netcdf_values_eq<T, D>(
-    expected_ds: &netcdf::File,
+pub fn compare_to_netcdf_values_eq<T, D, O>(
+    expected_ds: O,
     nc_var: &str,
     data: &ndarray::Array<T, D>,
 ) where
     T: Copy + NcTypeDescriptor + Eq + Debug,
     D: ndarray::Dimension,
+    O: GetNcVar,
 {
-    let expected_data = crate::nc_utils::get_var_data::<T, D>(expected_ds, nc_var).expect(
+    let expected_data = crate::nc_utils::get_var_data::<T, D, O>(expected_ds, nc_var).expect(
         &format!("Could not get variable '{nc_var}' from the validation netCDF file"),
     );
     eprintln!("Checking against {nc_var}");
@@ -377,8 +380,8 @@ pub fn compare_to_netcdf_quantities<T, D, Q>(
 
 /// Like [`compare_to_netcdf_quantities`], but with an option for a custom tolerance.
 #[cfg(feature = "netcdf")]
-pub fn compare_to_netcdf_quantities_with_tolerance<T, D, Q>(
-    expected_ds: &netcdf::File,
+pub fn compare_to_netcdf_quantities_with_tolerance<T, D, Q, O>(
+    expected_ds: O,
     nc_var: &str,
     data: &ndarray::ArrayRef<Q, D>,
     rtol: f64,
@@ -389,8 +392,9 @@ pub fn compare_to_netcdf_quantities_with_tolerance<T, D, Q>(
         + Copy
         + Mul<T, Output = Q>
         + crate::array_ops::FloatConversion,
+    O: GetNcVar,
 {
-    let expected_data = crate::nc_utils::get_var_data_quantity::<T, D, Q>(expected_ds, nc_var)
+    let expected_data = crate::nc_utils::get_var_data_quantity::<T, D, Q, O>(expected_ds, nc_var)
         .expect(&format!(
             "Could not get variable '{nc_var}' from the validation netCDF file"
         ));

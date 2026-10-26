@@ -99,7 +99,7 @@ fn read_private_file(
 
     // Expand the prior variables
     log::debug!("Expanding priors");
-    let prior_index = get_var_data::<u32, Ix1>(ds, "prior_index")?.mapv(|i| i as usize);
+    let prior_index = get_var_data::<u32, Ix1, _>(ds, "prior_index")?.mapv(|i| i as usize);
     data.p_levels_prior =
         nc_utils::expand_priors_2d(data.p_levels_prior.view(), prior_index.view())
             .change_context_lazy(|| {
@@ -115,14 +115,14 @@ fn read_private_file(
     // Expand the AKs. This duplicates a lot of logic from the public writer, but this can also go away
     // in GGG2020.2.
     log::debug!("Expanding AKs");
-    let airmass = get_var_data::<f32, Ix1>(ds, "o2_7885_am_o2")?;
+    let airmass = get_var_data::<f32, Ix1, _>(ds, "o2_7885_am_o2")?;
     let slant_xgas = Array1::from_iter(
         data.xgas
             .iter()
             .zip(airmass)
             .map(|(x, a)| x.get::<uom::si::ratio::ratio>() * a),
     );
-    let ak_bins = get_var_data::<f32, Ix1>(ds, var_def.ak_bin_var)?;
+    let ak_bins = get_var_data::<f32, Ix1, _>(ds, var_def.ak_bin_var)?;
     let ak_bin_units = get_string_attr_on_var(ds, var_def.ak_bin_var, None, "units")?;
     let tmp = nc_utils::expand_slant_xgas_binned_aks(
         slant_xgas.view(),
@@ -207,20 +207,20 @@ fn read_either_file(
             ))
         })?;
 
-    let utc_time = get_var_data::<f64, Ix1>(&ds, "time")?.mapv(|ts| convert_nc_timestamp(ts));
+    let utc_time = get_var_data::<f64, Ix1, _>(ds, "time")?.mapv(|ts| convert_nc_timestamp(ts));
     let is_public = Array1::<i8>::ones(utc_time.dim());
-    let latitude = get_var_data_quantity::<f32, Ix1, Angle>(&ds, "lat")?;
-    let longitude = get_var_data_quantity::<f32, Ix1, Angle>(&ds, "long")?;
-    let sza = get_var_data_quantity::<f32, Ix1, Angle>(&ds, "solzen")?;
-    let p_surf = get_var_data_quantity::<f32, Ix1, Pressure>(&ds, "pout")?;
-    let p_levels_prior = get_var_data_quantity::<f32, Ix2, Pressure>(&ds, "prior_pressure")?;
-    let p_levels_ak = get_var_data_quantity::<f32, Ix1, Pressure>(ds, "ak_pressure")?;
-    let prior_h2o_wet = get_var_data_quantity::<f32, Ix2, Ratio>(&ds, prior_h2o_var)?;
-    let prior_wet = get_var_data_quantity::<f32, Ix2, Ratio>(&ds, prior_var)?;
+    let latitude = get_var_data_quantity::<f32, Ix1, Angle, _>(ds, "lat")?;
+    let longitude = get_var_data_quantity::<f32, Ix1, Angle, _>(ds, "long")?;
+    let sza = get_var_data_quantity::<f32, Ix1, Angle, _>(ds, "solzen")?;
+    let p_surf = get_var_data_quantity::<f32, Ix1, Pressure, _>(ds, "pout")?;
+    let p_levels_prior = get_var_data_quantity::<f32, Ix2, Pressure, _>(ds, "prior_pressure")?;
+    let p_levels_ak = get_var_data_quantity::<f32, Ix1, Pressure, _>(ds, "ak_pressure")?;
+    let prior_h2o_wet = get_var_data_quantity::<f32, Ix2, Ratio, _>(ds, prior_h2o_var)?;
+    let prior_wet = get_var_data_quantity::<f32, Ix2, Ratio, _>(ds, prior_var)?;
     // let prior_dry = prior_wet / (-prior_h2o_wet + Ratio::new(1.0));
-    let avg_kernel = get_var_data::<f32, Ix2>(&ds, ak_var)?;
-    let xgas = get_var_data_quantity::<f32, Ix1, Ratio>(&ds, xgas_var)?;
-    let xgas_error = get_var_data_quantity::<f32, Ix1, Ratio>(&ds, &error_var_name(xgas_var))?;
+    let avg_kernel = get_var_data::<f32, Ix2, _>(ds, ak_var)?;
+    let xgas = get_var_data_quantity::<f32, Ix1, Ratio, _>(ds, xgas_var)?;
+    let xgas_error = get_var_data_quantity::<f32, Ix1, Ratio, _>(ds, &error_var_name(xgas_var))?;
 
     let unit_ratio = Ratio::new::<si::ratio::ratio>(1.0);
     let one_minus_h2o = prior_h2o_wet.map(|x| unit_ratio - *x);
@@ -273,7 +273,7 @@ pub(crate) fn read_tccon_metadata(
     let (source_release_lag, all_public_after) = if is_private {
         let lag_str = nc_utils::get_string_attr(&ds, "release_lag")?;
         let lag = nc_utils::parse_release_lag(&lag_str)?;
-        let times = nc_utils::get_var_cftime::<f64, Ix1>(&ds, "time")?;
+        let times = nc_utils::get_var_cftime::<f64, Ix1, _>(&ds, "time")?;
         let last_time = times.max().change_context_lazy(|| {
             GggNcError::context("error getting last ZPD time in private file")
         })?;

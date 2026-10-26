@@ -775,11 +775,11 @@ fn read_nc_site_metadata_json(
 ///
 /// If you already have a reference to the [`netcdf::Variable`], see
 /// [`get_data`].
-pub fn get_var_data<T: Copy + NcTypeDescriptor, D: ndarray::Dimension>(
-    ds: &netcdf::File,
+pub fn get_var_data<T: Copy + NcTypeDescriptor, D: ndarray::Dimension, O: GetNcVar>(
+    obj: O,
     varname: &str,
 ) -> error_stack::Result<Array<T, D>, GggNcError> {
-    let var = ds.variable(varname).ok_or_else(|| GggNcError::MissingVar {
+    let var = obj.get_var(varname).ok_or_else(|| GggNcError::MissingVar {
         variable: varname.to_owned(),
         group: None,
     })?;
@@ -884,11 +884,11 @@ pub fn map_cftime_naive<T: ToNanos, D: ndarray::Dimension>(
 /// # See also
 /// - [`get_cftime`] if you already have a reference to the [`netcdf::Variable`]
 /// - [`convert_cftime`] if you already have an array of CF time values.
-pub fn get_var_cftime<T: ToNanos, D: ndarray::Dimension>(
-    ds: &netcdf::File,
+pub fn get_var_cftime<T: ToNanos, D: ndarray::Dimension, O: GetNcVar>(
+    obj: O,
     varname: &str,
 ) -> error_stack::Result<Array<chrono::DateTime<chrono::Utc>, D>, GggNcError> {
-    let var = ds.variable(varname).ok_or_else(|| GggNcError::MissingVar {
+    let var = obj.get_var(varname).ok_or_else(|| GggNcError::MissingVar {
         variable: varname.to_owned(),
         group: None,
     })?;
@@ -1243,18 +1243,19 @@ pub fn map_chrono_naive_i64<D: ndarray::Dimension, A>(
 ///
 /// If you already have a reference to the variable, use [`get_data_quantity`]
 /// instead.
-pub fn get_var_data_quantity<T, D, Q>(
-    ds: &netcdf::File,
+pub fn get_var_data_quantity<T, D, Q, O>(
+    ds: O,
     varname: &str,
 ) -> error_stack::Result<Array<Q, D>, GggNcError>
 where
     T: Copy + NcTypeDescriptor,
     D: ndarray::Dimension,
     Q: FromStr<Err = uom::str::ParseQuantityError> + Copy + Mul<T, Output = Q>,
+    O: GetNcVar,
 {
     // We need the variable anyway, so we duplicate the code of get_var_data rather
     // than calling it
-    let var = ds.variable(varname).ok_or_else(|| GggNcError::MissingVar {
+    let var = ds.get_var(varname).ok_or_else(|| GggNcError::MissingVar {
         variable: varname.to_owned(),
         group: None,
     })?;
@@ -1412,6 +1413,24 @@ impl GetNcAttr for &netcdf::File {
 
     fn description(&self) -> String {
         "group '/'".to_string()
+    }
+}
+
+/// A trait used to allow generic access to netCDF variables across
+/// different netCDF constructs (files & groups).
+pub trait GetNcVar {
+    fn get_var<'s>(&'s self, name: &str) -> Option<netcdf::Variable<'s>>;
+}
+
+impl GetNcVar for &netcdf::File {
+    fn get_var<'s>(&'s self, name: &str) -> Option<netcdf::Variable<'s>> {
+        self.variable(name)
+    }
+}
+
+impl GetNcVar for &netcdf::Group<'_> {
+    fn get_var<'s>(&'s self, name: &str) -> Option<netcdf::Variable<'s>> {
+        self.variable(name)
     }
 }
 
