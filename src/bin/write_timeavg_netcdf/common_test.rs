@@ -106,12 +106,12 @@ pub(crate) fn check_timeavg_data(
 
     let expected_zpd_times = read_time(&expected_ds, field_to_var.zpd_times);
     let expected_zpd_ts = expected_zpd_times.mapv(|t| t.timestamp_millis());
-    let actual_zpd_ts = timeavg_data.utc_mean_time.mapv(|t| t.timestamp_millis());
+    let actual_zpd_ts = timeavg_data.cdate.mapv(|t| t.timestamp_millis());
     // Allow ~2 second difference in the ZPD times; since we use the solar times for the obs IDs, the ZPD times don't matter as much.
     assert!(
         approx::abs_diff_eq!(expected_zpd_ts, actual_zpd_ts, epsilon = 2000),
         "Bin mean ZPD times do not match.\nExpected = {expected_zpd_times:?}\nActual = {:?}",
-        timeavg_data.utc_mean_time
+        timeavg_data.cdate
     );
 
     // obs_id and station_id aren't in the original Python "truth" file, so the best we can do right now

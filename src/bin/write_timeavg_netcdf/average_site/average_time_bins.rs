@@ -111,10 +111,7 @@ fn assign_one_bin(
         chrono::DateTime::from_timestamp(v as i64, 0)
             .expect("mean timestamp should not be out of range")
     });
-    avg_data
-        .utc_mean_time
-        .slice_mut(i1d)
-        .assign(&mean_timestamps);
+    avg_data.cdate.slice_mut(i1d).assign(&mean_timestamps);
 
     // The obs ID is constructed from the bin center time and the station ID
     // The station ID can just be copied
