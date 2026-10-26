@@ -1,4 +1,3 @@
-use core::f32;
 use std::{
     collections::HashMap,
     io::{BufRead, BufReader},

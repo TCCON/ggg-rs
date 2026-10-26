@@ -101,22 +101,15 @@ impl Display for GggError {
             ),
 
             Self::CouldNotWrite { path, reason } => {
-                // WORKAROUND: vscode's rust-analyzer is improperly handling macro expansion,
-                // causing a type mismatch if the write! returns directly. Try removing the let r
-                // and return directly in the future
-                let r = write!(f, "Could not write to {} because: {reason}", path.display());
-                r
+                write!(f, "Could not write to {} because: {reason}", path.display())
             }
 
             Self::HeaderError(err) => write!(f, "{err}"),
             Self::DataError { path, cause } => {
-                // WORKAROUND: same as above
-                let r = write!(f, "Error in data format of {}: {cause}", path.display());
-                r
+                write!(f, "Error in data format of {}: {cause}", path.display())
             }
             Self::Lua(msg) => {
-                let r = write!(f, "{msg}");
-                r
+                write!(f, "{msg}")
             }
 
             Self::NotImplemented(case) => write!(f, "Not implemented: {case}"),
@@ -249,37 +242,27 @@ impl Display for GggNcError {
                 variable,
                 group,
             } => {
-                // WORKAROUND: vscode's rust-analyzer is improperly handling macro expansion,
-                // causing a type mismatch if the write! returns directly. Try removing the let r
-                // and return directly in the future
                 if let Some(grp) = group {
-                    let r = write!(
+                    write!(
                         f,
                         "Attribute '{attribute}' not found on variable '{grp}/{variable}'"
-                    );
-                    r
+                    )
                 } else {
-                    let r = write!(
+                    write!(
                         f,
                         "Attribute '{attribute}' not found on variable '{variable}'"
-                    );
-                    r
+                    )
                 }
             }
             GggNcError::MissingGroupAttr { attribute, group } => {
-                // WORKAROUND: As above
-                let r = write!(f, "Attribute '{attribute}' not found on group '{group}'");
-                r
+                write!(f, "Attribute '{attribute}' not found on group '{group}'")
             }
 
             GggNcError::MissingVar { variable, group } => {
-                // WORKAROUND: As above
                 if let Some(grp) = group {
-                    let r = write!(f, "Variable '{variable}' not found in group '{grp}'");
-                    r
+                    write!(f, "Variable '{variable}' not found in group '{grp}'")
                 } else {
-                    let r = write!(f, "Variable '{variable}' not found");
-                    r
+                    write!(f, "Variable '{variable}' not found")
                 }
             }
             GggNcError::WrongDimensionality {
@@ -287,16 +270,13 @@ impl Display for GggNcError {
                 group,
                 shape_err,
             } => {
-                // WORKAROUND: As above
                 if let Some(grp) = group {
-                    let r = write!(
+                    write!(
                         f,
                         "Variable '{variable}' in group '{grp}' has wrong number of dimensions, underlying error was: {shape_err}"
-                    );
-                    r
+                    )
                 } else {
-                    let r = write!(f, "Variable '{variable}' has wrong number of dimensions, underlying error was: {shape_err}");
-                    r
+                    write!(f, "Variable '{variable}' has wrong number of dimensions, underlying error was: {shape_err}")
                 }
             }
             GggNcError::NcErr(error) => write!(f, "{error}"),
@@ -528,11 +508,7 @@ impl Display for ApodizationFxn {
             ApodizationFxn::StrongNortonBeer => "N3",
             ApodizationFxn::Triangular => "TR",
         };
-        // WORKAROUND: vscode's rust-analyzer is improperly handling macro expansion,
-        // causing a type mismatch if the write! returns directly. Try removing the let r
-        // and return directly in the future
-        let r = write!(f, "{s}");
-        r
+        write!(f, "{s}")
     }
 }
 

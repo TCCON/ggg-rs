@@ -1,7 +1,5 @@
 //! High-level helper functions for computed variables
 
-use std::i8;
-
 use error_stack::ResultExt;
 use ggg_rs::nc_utils::{self, chars_to_string, NcChar};
 use itertools::Itertools;

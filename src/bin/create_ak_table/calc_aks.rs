@@ -1,5 +1,5 @@
 //! Function for computing the binned AKs
-use std::{collections::HashMap, f64};
+use std::collections::HashMap;
 
 use error_stack::ResultExt;
 use ndarray::{s, Array1, Array2, ArrayView1, Axis, Zip};

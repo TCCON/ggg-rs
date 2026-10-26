@@ -1,4 +1,3 @@
-use core::f32;
 use std::{collections::HashMap, fmt::Display, path::PathBuf};
 
 use error_stack::ResultExt;

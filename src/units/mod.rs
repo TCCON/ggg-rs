@@ -33,15 +33,10 @@ impl UnknownUnitError {
 
 impl Display for UnknownUnitError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // WORKAROUND: vscode rust-analyzer is not handling macro expansion
-        // properly when returned from a braced block. Remove the `let r =`
-        // later once this is fixed.
         if let Some(q) = self.quantity {
-            let r = write!(f, "Unknown {} unit '{}'", q, self.unit);
-            r
+            write!(f, "Unknown {} unit '{}'", q, self.unit)
         } else {
-            let r = write!(f, "Unknown unit '{}'", self.unit);
-            r
+            write!(f, "Unknown unit '{}'", self.unit)
         }
     }
 }
