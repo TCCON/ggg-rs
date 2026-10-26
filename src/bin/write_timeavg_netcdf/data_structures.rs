@@ -1,7 +1,6 @@
 use std::fmt::Debug;
 
 use chrono::{DateTime, Datelike, NaiveDateTime, Timelike, Utc};
-use ggg_rs::nc_utils::{map_cftime_naive, map_chrono_naive_f64};
 use ggg_rs::units::map_values_to_quantity;
 use ggg_rs_derive::{Concat, ReadNetcdf, Subset, WriteNetcdf};
 use indexmap::IndexMap;
@@ -36,7 +35,7 @@ pub(crate) type AllGasAvgData = IndexMap<Gas, TimeAvgData>;
 #[netcdf(describe)]
 pub(crate) struct TimeAvgData {
     /// The midpoint of each solar time bin.
-    #[netcdf(dimensions("time"), map_units(write = map_chrono_naive_f64, read = map_cftime_naive::<f64, _>), kind = "array")]
+    #[netcdf(dimensions("time", "idate"), map(write = map_datetimes_to_cdate, read = map_cdate_to_naive_datetimes), kind = "array")]
     pub(crate) solar_time_bin: Array1<NaiveDateTime>,
 
     /// The mean UTC time of the bin, weighted by the uncertainty in the column
@@ -429,7 +428,7 @@ fn opt_date_to_attr<A>(
     }
 }
 
-fn map_datetimes_to_cdate<A>(_: A, dt: &Array1<DateTime<Utc>>, _: &str) -> Array2<i16> {
+fn map_datetimes_to_cdate<A, D: Datelike + Timelike>(_: A, dt: &Array1<D>, _: &str) -> Array2<i16> {
     let mut cdate = Array2::from_elem([dt.len(), 6], i16::MIN);
     ndarray::Zip::from(cdate.rows_mut())
         .and(dt)
@@ -449,17 +448,25 @@ fn map_cdate_to_datetimes(
     _: &str,
     _: &netcdf::Variable<'_>,
 ) -> netcdf::Result<Array1<DateTime<Utc>>> {
+    cdate_to_datetimes(cdates).map(|arr| arr.mapv(|d| d.and_utc()))
+}
+
+fn map_cdate_to_naive_datetimes(
+    cdates: Array2<i16>,
+    _: &str,
+    _: &netcdf::Variable<'_>,
+) -> netcdf::Result<Array1<NaiveDateTime>> {
     cdate_to_datetimes(cdates)
 }
 
-fn cdate_to_datetimes(cdates: Array2<i16>) -> netcdf::Result<Array1<DateTime<Utc>>> {
+fn cdate_to_datetimes(cdates: Array2<i16>) -> netcdf::Result<Array1<NaiveDateTime>> {
     let datetimes: Vec<_> = cdates.rows().into_iter().map(|r| {
         chrono::NaiveDate::from_ymd_opt(r[0] as i32, r[1] as u32, r[2] as u32)
             .ok_or_else(|| netcdf::Error::Str(format!("Invalid year, month, or day in cdate array: year = {}, month = {}, day = {}", r[0], r[1], r[2])))
             .and_then(|date| {
                 date.and_hms_opt(r[3] as u32, r[4] as u32, r[5] as u32)
                     .ok_or_else(|| netcdf::Error::Str(format!("Invalid hour, minute, or second in cdate array: hour = {}, minute = {}, second = {}", r[3], r[4], r[5])))
-            }).map(|dt| dt.and_utc())
+            })
     }).try_collect()?;
     Ok(Array1::from_vec(datetimes))
 }
@@ -584,7 +591,9 @@ mod tests {
         let expected_cdates = array![[2026, 1, 2, 10, 20, 30], [2026, 2, 3, 20, 30, 40]];
         let test_cdates = map_datetimes_to_cdate(0, &dates, "");
         assert_eq!(expected_cdates, test_cdates, "conversion to cdate failed");
-        let test_dates = cdate_to_datetimes(test_cdates).unwrap();
+        let test_dates = cdate_to_datetimes(test_cdates)
+            .unwrap()
+            .mapv(|d| d.and_utc());
         assert_eq!(dates, test_dates, "conversion back to datetimes failed");
     }
 }
