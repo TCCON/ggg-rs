@@ -8,7 +8,7 @@ use ggg_rs::{
 };
 use ndarray::Ix1;
 
-use crate::data_structures::{Level2Data, TimeAvgData};
+use crate::data_structures::{Gas, Level2Data, TimeAvgData};
 
 pub(crate) fn check_l2_data(expected_ds: &netcdf::File, l2_data: Level2Data) {
     // The UTC times are best done by converting the expected values to DateTime types and checking
@@ -50,8 +50,53 @@ pub(crate) fn check_l2_data(expected_ds: &netcdf::File, l2_data: Level2Data) {
     );
 }
 
-pub(crate) fn check_timeavg_data(expected_ds: &netcdf::File, timeavg_data: TimeAvgData) {
-    let expected_solar_times = read_time(&expected_ds, "bin_center_time");
+pub(crate) struct CheckTimeAvgFields {
+    pub(crate) solar_time: &'static str,
+    pub(crate) zpd_times: &'static str,
+    pub(crate) num_spec: &'static str,
+    pub(crate) longitude: &'static str,
+    pub(crate) latitude: &'static str,
+    pub(crate) sza: &'static str,
+    pub(crate) pout: &'static str,
+    pub(crate) pres_prior: &'static str,
+    pub(crate) ak_pres: &'static str,
+    pub(crate) h2o_prior: &'static str,
+    pub(crate) gas_prior: &'static str,
+    pub(crate) ak: &'static str,
+    pub(crate) xgas: &'static str,
+    pub(crate) xgas_std: &'static str,
+}
+
+impl CheckTimeAvgFields {
+    pub(crate) fn default_for_gas(gas: &Gas) -> Self {
+        match gas {
+            Gas::CO2 => Self {
+                solar_time: "bin_center_time",
+                zpd_times: "binned_xco2_time",
+                num_spec: "binned_xco2_num_spec",
+                longitude: "long",
+                latitude: "lat",
+                sza: "binned_xco2_sza",
+                pout: "binned_xco2_pout",
+                pres_prior: "binned_co2_pres_prior",
+                ak_pres: "ak_pressure",
+                h2o_prior: "binned_co2_h2o_prior",
+                gas_prior: "binned_co2_prior",
+                ak: "binned_xco2_ak",
+                xgas: "binned_xco2",
+                xgas_std: "binned_xco2_std",
+            },
+            Gas::CH4 => todo!(),
+        }
+    }
+}
+
+pub(crate) fn check_timeavg_data(
+    expected_ds: &netcdf::File,
+    timeavg_data: TimeAvgData,
+    field_to_var: &CheckTimeAvgFields,
+) {
+    let expected_solar_times = read_time(&expected_ds, field_to_var.solar_time);
     let expected_solar_ts = expected_solar_times.mapv(|t| t.timestamp_millis());
     let actual_solar_ts = timeavg_data
         .solar_mid_time
@@ -59,7 +104,7 @@ pub(crate) fn check_timeavg_data(expected_ds: &netcdf::File, timeavg_data: TimeA
     // The solar time is stored in the Python 'truth' file as an int, so strict equality should be safe
     assert_eq!(expected_solar_ts, actual_solar_ts);
 
-    let expected_zpd_times = read_time(&expected_ds, "binned_xco2_time");
+    let expected_zpd_times = read_time(&expected_ds, field_to_var.zpd_times);
     let expected_zpd_ts = expected_zpd_times.mapv(|t| t.timestamp_millis());
     let actual_zpd_ts = timeavg_data.utc_mean_time.mapv(|t| t.timestamp_millis());
     // Allow ~2 second difference in the ZPD times; since we use the solar times for the obs IDs, the ZPD times don't matter as much.
@@ -77,49 +122,49 @@ pub(crate) fn check_timeavg_data(expected_ds: &netcdf::File, timeavg_data: TimeA
     // Most of the remaining fields can be checked with a bit looser tolerance than in the L2, since there is some math.
     compare_to_netcdf_values_eq::<u64, _>(
         &expected_ds,
-        "binned_xco2_num_spec",
+        field_to_var.num_spec,
         &timeavg_data.num_soundings,
     );
     compare_to_netcdf_values_eq::<i8, _>(&expected_ds, "public", &timeavg_data.public);
     compare_to_netcdf_quantities_with_tolerance::<f32, _, _>(
         &expected_ds,
-        "long",
+        field_to_var.longitude,
         &timeavg_data.longitude,
         1e-6,
     );
     compare_to_netcdf_quantities_with_tolerance::<f32, _, _>(
         &expected_ds,
-        "lat",
+        field_to_var.latitude,
         &timeavg_data.latitude,
         1e-6,
     );
     compare_to_netcdf_quantities_with_tolerance::<f32, _, _>(
         &expected_ds,
-        "binned_xco2_sza",
+        field_to_var.sza,
         &timeavg_data.sza,
         1e-6,
     );
     compare_to_netcdf_quantities_with_tolerance::<f32, _, _>(
         &expected_ds,
-        "binned_xco2_pout",
+        field_to_var.pout,
         &timeavg_data.p_surf,
         1e-6,
     );
     compare_to_netcdf_quantities_with_tolerance::<f32, _, _>(
         &expected_ds,
-        "binned_co2_pres_prior",
+        field_to_var.pres_prior,
         &timeavg_data.p_levels_prior,
         1e-6,
     );
     compare_to_netcdf_quantities_with_tolerance::<f32, _, _>(
         &expected_ds,
-        "ak_pressure",
+        field_to_var.ak_pres,
         &timeavg_data.p_levels_ak,
         1e-6,
     );
     compare_to_netcdf_quantities_with_tolerance::<f32, _, _>(
         &expected_ds,
-        "binned_co2_h2o_prior",
+        field_to_var.h2o_prior,
         &timeavg_data.prior_h2o,
         1e-6,
     );
@@ -127,19 +172,19 @@ pub(crate) fn check_timeavg_data(expected_ds: &netcdf::File, timeavg_data: TimeA
     // wait until we replace the Python files.
     compare_to_netcdf_quantities_with_tolerance::<f32, _, _>(
         &expected_ds,
-        "binned_co2_prior",
+        field_to_var.gas_prior,
         &timeavg_data.prior_mixing_tccon,
         1e-6,
     );
     compare_to_netcdf_values_approx_with_tolerance::<f32, _>(
         &expected_ds,
-        "binned_xco2_ak",
+        field_to_var.ak,
         &timeavg_data.avg_kernel,
         1e-6,
     );
     compare_to_netcdf_quantities_with_tolerance::<f32, _, _>(
         &expected_ds,
-        "binned_xco2",
+        field_to_var.xgas,
         &timeavg_data.column_mixing,
         1e-6,
     );
@@ -148,7 +193,7 @@ pub(crate) fn check_timeavg_data(expected_ds: &netcdf::File, timeavg_data: TimeA
     // where slight implementation differences can add up.
     compare_to_netcdf_quantities_with_tolerance::<f32, _, _>(
         &expected_ds,
-        "binned_xco2_std",
+        field_to_var.xgas_std,
         &timeavg_data.sigma_column_mixing,
         4e-5,
     );

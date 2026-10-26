@@ -242,7 +242,8 @@ mod tests {
             filter_l2::{BaseDataFilterer, L2DataFilterer},
             read_l2::{co2_bin_def, read_file},
         },
-        common_test::check_timeavg_data,
+        common_test::{check_timeavg_data, CheckTimeAvgFields},
+        data_structures::Gas,
     };
 
     #[test]
@@ -272,6 +273,10 @@ mod tests {
             BaseTimeBinAverager.compute_bins(&filtered_l2_data, &solar_time_bins, 1.0);
         let expected_ds = netcdf::open(expected_file)
             .expect("Should be able to open the file with expected values");
-        check_timeavg_data(&expected_ds, binned_data);
+        check_timeavg_data(
+            &expected_ds,
+            binned_data,
+            &CheckTimeAvgFields::default_for_gas(&Gas::CO2),
+        );
     }
 }

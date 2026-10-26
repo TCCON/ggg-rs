@@ -97,7 +97,11 @@ pub(super) fn average_site_driver(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ggg_rs::test_utils::init_test_logging;
+    use crate::{
+        common_test::{check_timeavg_data, CheckTimeAvgFields},
+        data_structures::{Gas, TimeAvgData},
+    };
+    use ggg_rs::test_utils::{init_test_logging, NCDF_F32_DEFAULT_FILL};
     use read_l2::co2_bin_def;
 
     #[test]
@@ -113,6 +117,8 @@ mod tests {
             test_dir.join("inputs/write-timeavg-netcdf/averaging/pa_input_test.private.qc.nc");
         let output_file =
             test_dir.join("outputs/write-timeavg-netcdf/averaging/pa_output_test.private.qc.nc");
+        let expected_file =
+            test_dir.join("expected/write-timeavg-netcdf/averaging/06_saved_output.nc");
         average_site_driver(
             &input_file,
             &output_file,
@@ -122,6 +128,29 @@ mod tests {
         )
         .expect("End-to-end run should not error");
 
-        todo!("Output file still needs compared to 'truth'");
+        let output_ds = netcdf::open(output_file).unwrap();
+        let mut timeavg_data =
+            TimeAvgData::read_netcdf(&output_ds.group("CO2").unwrap().unwrap()).unwrap();
+
+        // Since the fill values do not have physical meaning, construct the quantity
+        // directly to preserve the value.
+        let col_avg_fill = uom::si::f32::Ratio {
+            dimension: std::marker::PhantomData,
+            units: std::marker::PhantomData,
+            value: NCDF_F32_DEFAULT_FILL,
+        };
+        ndarray::azip!((x in &mut timeavg_data.column_mixing, flg in &timeavg_data.bin_flag) {
+            if *flg > 0 {
+                *x = col_avg_fill;
+            }
+        });
+        let expected_ds = netcdf::open(expected_file).unwrap();
+
+        let fields = CheckTimeAvgFields {
+            solar_time: "solar_time_bin",
+            ..CheckTimeAvgFields::default_for_gas(&Gas::CO2)
+        };
+
+        check_timeavg_data(&expected_ds, timeavg_data, &fields);
     }
 }

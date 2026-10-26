@@ -12,6 +12,7 @@ use approx::AbsDiffEq;
 use netcdf::NcTypeDescriptor;
 
 static INIT_LOGGING: std::sync::Once = std::sync::Once::new();
+pub const NCDF_F32_DEFAULT_FILL: f32 = 9.969209716543442e30;
 
 #[allow(dead_code)]
 pub fn test_data_dir() -> PathBuf {
