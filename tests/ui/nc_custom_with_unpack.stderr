@@ -1,0 +1,5 @@
+error: `custom` is incompatible with `skip`, `kind`, `dimensions`, `attribute`, `map`, `map_units`, `unpack`, and `on_fill`: the custom function does all the reading
+  --> tests/ui/nc_custom_with_unpack.rs:11:5
+   |
+11 |     values: Vec<f64>,
+   |     ^^^^^^

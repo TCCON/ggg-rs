@@ -4,9 +4,9 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 
 use crate::common_netcdf::{
-    DimList, Direction, FloatTy, MapFns, MapSpec, NcKind, OnFill, UnpackSpec, apply_rename_all,
-    float_element_type, infer_kind, kind_from_str, nc_name, not_float_message, resolve_unpack,
-    validate_dims,
+    CustomSpec, DimList, Direction, FloatTy, MapFns, MapSpec, NcKind, OnFill, UnpackSpec,
+    apply_rename_all, float_element_type, infer_kind, kind_from_str, nc_name, not_float_message,
+    resolve_unpack, validate_dims,
 };
 
 /// What unpacking a single field needs, once the container default, the field
@@ -48,6 +48,28 @@ pub(crate) fn expand(input: TokenStream) -> TokenStream {
     let mut field_names: Vec<syn::Ident> = Vec::new();
 
     for f in &fields {
+        let fieldname = f.ident.as_ref().unwrap().clone();
+
+        // A `custom` field bypasses all the derived machinery: no dimension
+        // check, no unpacking, just a call to the user's function.
+        match errors.handle(resolve_custom(f)) {
+            None => continue,
+            Some(Some(read_fn)) => {
+                let Some(name) =
+                    errors.handle(nc_name(&fieldname, f.rename.as_deref(), rename_all))
+                else {
+                    continue;
+                };
+                let field_str = fieldname.to_string();
+                field_blocks.push(quote! {
+                    let #fieldname = #read_fn(#field_str, #name, grp)?;
+                });
+                field_names.push(fieldname);
+                continue;
+            }
+            Some(None) => {}
+        }
+
         // Resolve the read strategy and the netCDF name, collecting errors so
         // every problem is reported in one compile.
         let Some((read_kind, map_fns, unpack)) =
@@ -55,7 +77,6 @@ pub(crate) fn expand(input: TokenStream) -> TokenStream {
         else {
             continue;
         };
-        let fieldname = f.ident.as_ref().unwrap().clone();
 
         // Unlike writing, every field has to be initialized to build `Self`, so
         // a skipped field falls back to `Default` instead of dropping out of the
@@ -183,6 +204,15 @@ struct ReadNetcdfField {
     /// If the variable has no `units`, the third argument is `None`.
     #[darling(default)]
     map_units: Option<MapSpec>,
+
+    /// Read the field with a user function instead of the derived helpers:
+    /// `custom(read = path::to::fn)`, where the function is
+    /// `fn(&str, &str, &netcdf::Group<'_>) -> netcdf::Result<FieldTy>`. Its
+    /// arguments are the Rust field name, the netCDF name (after
+    /// `rename`/`rename_all`), and the group to read from. A `write = ...` may
+    /// also be present for `WriteNetcdf`; it is ignored here.
+    #[darling(default)]
+    custom: Option<CustomSpec>,
 
     /// Override the container's unpacking behaviour for this field. Replaces the
     /// container setting wholesale rather than merging with it, the same way
@@ -620,6 +650,32 @@ impl HelpersNeeded {
 
         out
     }
+}
+
+/// If the field has a `custom(...)`, check that nothing else that controls how
+/// it is read is present and return the read function. The function owns the
+/// whole read, so every variable-level option would be silently ignored.
+fn resolve_custom(field: &ReadNetcdfField) -> Result<Option<&syn::Path>, darling::Error> {
+    let Some(custom) = &field.custom else {
+        return Ok(None);
+    };
+    let ident = field.ident.as_ref().unwrap();
+    if field.skip
+        || field.kind.is_some()
+        || field.dimensions.is_some()
+        || field.attribute
+        || field.map.is_some()
+        || field.map_units.is_some()
+        || field.unpack.is_some()
+        || field.on_fill.is_some()
+    {
+        return Err(darling::Error::custom(
+            "`custom` is incompatible with `skip`, `kind`, `dimensions`, `attribute`, `map`, \
+             `map_units`, `unpack`, and `on_fill`: the custom function does all the reading",
+        )
+        .with_span(ident));
+    }
+    custom.resolve(Direction::Read, ident).map(Some)
 }
 
 /// Resolve the netCDF kind of the field (array, string, skipped, etc.), the map

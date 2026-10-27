@@ -591,6 +591,44 @@ pub fn derive_concat(input: TokenStream) -> TokenStream {
 /// }
 /// ```
 ///
+/// `#[netcdf(custom(write = path::to::fn))]` goes a step further than `map`: rather
+/// than converting the value and leaving the derived code to write it, the function
+/// does the whole write itself. Use it when a field doesn't map onto a single
+/// variable, e.g. it should be split across several variables or needs dimensions
+/// the derive can't express. The signature is
+///
+/// `fn(&Self, &FieldTy, &str, &str, &mut netcdf::GroupMut<'_>) -> netcdf::Result<()>`
+///
+/// where the two `&str` arguments are the Rust field name and the netCDF name
+/// (after `rename`/`rename_all`), in that order. As with `map`, the direction is
+/// required; `ReadNetcdf` uses the `read = ...` half. The only other option
+/// `custom` can be combined with is `rename`. Since the function owns the write,
+/// `kind`, `dimensions`, `attribute`, `map`, `map_units`, `scale_offset`, `attr`,
+/// `describe`, and `no_describe` are errors on a `custom` field, and a container
+/// `describe` skips it.
+///
+/// ```no_run
+/// use ggg_rs_derive::WriteNetcdf;
+///
+/// fn write_coords(
+///     _data: &Data, coords: &[(f64, f64)], _field: &str, nc_name: &str,
+///     grp: &mut netcdf::GroupMut<'_>,
+/// ) -> netcdf::Result<()> {
+///     let lats: Vec<f64> = coords.iter().map(|c| c.0).collect();
+///     let lons: Vec<f64> = coords.iter().map(|c| c.1).collect();
+///     grp.add_dimension("site", coords.len())?;
+///     grp.add_variable::<f64>(&format!("{nc_name}_lat"), &["site"])?.put_values(&lats, ..)?;
+///     grp.add_variable::<f64>(&format!("{nc_name}_lon"), &["site"])?.put_values(&lons, ..)?;
+///     Ok(())
+/// }
+///
+/// #[derive(WriteNetcdf)]
+/// struct Data {
+///     #[netcdf(custom(write = write_coords))]
+///     coords: Vec<(f64, f64)>,
+/// }
+/// ```
+///
 /// `#[netcdf(scale_offset(scale = .., offset = .., nc_type = ".."))]` packs the
 /// field into a smaller on-disk type, following the netCDF attribute conventions.
 /// Values are stored as `(value - offset) / scale`, and the `scale_factor` and
@@ -712,6 +750,43 @@ pub fn derive_write_netcdf(input: TokenStream) -> TokenStream {
 /// rather than silently reading or writing the field unmapped. Supplying only
 /// `write = ...` is therefore fine for a struct that derives `WriteNetcdf`
 /// alone, and becomes an error as soon as `ReadNetcdf` is added.
+///
+/// # Custom read functions
+///
+/// `#[netcdf(custom(read = path::to::fn))]` hands the whole read of a field to
+/// a function, rather than reading it with the derived code and converting it
+/// as `map` does. It is the counterpart to `custom(write = ...)` on
+/// [`WriteNetcdf`]. The signature is
+///
+/// `fn(&str, &str, &netcdf::Group<'_>) -> netcdf::Result<FieldTy>`
+///
+/// where the two `&str` arguments are the Rust field name and the netCDF name
+/// (after `rename`/`rename_all`), in that order. The only other option `custom`
+/// can be combined with is `rename`. `kind`, `dimensions`, `attribute`, `map`,
+/// `map_units`, `unpack`, and `on_fill` are errors on a `custom` field, and a
+/// container `unpack`/`on_fill` skips it: any unpacking is the function's job.
+///
+/// ```no_run
+/// use ggg_rs_derive::ReadNetcdf;
+///
+/// fn read_coords(
+///     _field: &str, nc_name: &str, grp: &netcdf::Group<'_>,
+/// ) -> netcdf::Result<Vec<(f64, f64)>> {
+///     let get = |suffix: &str| {
+///         let name = format!("{nc_name}_{suffix}");
+///         grp.variable(&name)
+///             .ok_or_else(|| netcdf::Error::NotFound(format!("variable: '{name}'")))?
+///             .get_values::<f64, _>(..)
+///     };
+///     Ok(get("lat")?.into_iter().zip(get("lon")?).collect())
+/// }
+///
+/// #[derive(ReadNetcdf)]
+/// struct Data {
+///     #[netcdf(custom(read = read_coords))]
+///     coords: Vec<(f64, f64)>,
+/// }
+/// ```
 ///
 /// # Unpacking: `scale_factor` and `add_offset`
 ///

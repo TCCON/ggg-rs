@@ -37,8 +37,9 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 
 use crate::common_netcdf::{
-    DimList, Direction, FloatTy, MapFns, MapSpec, NcKind, ScaleOffsetSpec, apply_rename_all,
-    float_element_type, infer_kind, kind_from_str, nc_name, not_float_message, validate_dims,
+    CustomSpec, DimList, Direction, FloatTy, MapFns, MapSpec, NcKind, ScaleOffsetSpec,
+    apply_rename_all, float_element_type, infer_kind, kind_from_str, nc_name, not_float_message,
+    validate_dims,
 };
 
 // ---------------------------------------------------------------------------
@@ -129,6 +130,15 @@ struct WriteNetcdfField {
     #[darling(default)]
     map_units: Option<MapSpec>,
 
+    /// Write the field with a user function instead of the derived helpers:
+    /// `custom(write = path::to::fn)`, where the function is
+    /// `fn(&Self, &FieldTy, &str, &str, &mut netcdf::GroupMut<'_>) -> netcdf::Result<()>`.
+    /// Its arguments are the struct, the field value, the Rust field name, the
+    /// netCDF name (after `rename`/`rename_all`), and the group to write into.
+    /// A `read = ...` may also be present for `ReadNetcdf`; it is ignored here.
+    #[darling(default)]
+    custom: Option<CustomSpec>,
+
     /// Pack the field into a smaller on-disk type:
     /// `scale_offset(scale = 0.01, offset = 400.0, nc_type = "i16")`. Values are
     /// stored as `(value - offset) / scale`, rounded, and the `scale_factor` /
@@ -208,6 +218,35 @@ struct WriteNetcdfInput {
 // ---------------------------------------------------------------------------
 // Field classification
 // ---------------------------------------------------------------------------
+
+/// If the field has a `custom(...)`, check that nothing else that controls how
+/// it is written is present and return the write function. The function owns
+/// the whole write, so every variable-level option would be silently ignored.
+fn resolve_custom(f: &WriteNetcdfField) -> Result<Option<&syn::Path>, darling::Error> {
+    let Some(custom) = &f.custom else {
+        return Ok(None);
+    };
+    let ident = f.ident.as_ref().unwrap();
+    if f.skip
+        || f.kind.is_some()
+        || f.dimensions.is_some()
+        || f.attribute
+        || f.map.is_some()
+        || f.map_units.is_some()
+        || f.scale_offset.is_some()
+        || !f.var_attrs.is_empty()
+        || f.describe.is_some()
+        || f.no_describe
+    {
+        return Err(darling::Error::custom(
+            "`custom` is incompatible with `skip`, `kind`, `dimensions`, `attribute`, `map`, \
+             `map_units`, `scale_offset`, `attr`, `describe`, and `no_describe`: the custom \
+             function does all the writing",
+        )
+        .with_span(ident));
+    }
+    custom.resolve(Direction::Write, ident).map(Some)
+}
 
 /// Validate a field's attributes and determine its [`NcKind`] plus the map
 /// functions that apply when writing. All errors are spanned on the field ident
@@ -816,6 +855,26 @@ pub(crate) fn expand(input: TokenStream) -> TokenStream {
     let mut field_blocks: Vec<TokenStream2> = Vec::new();
 
     for f in &fields {
+        let ident = f.ident.as_ref().unwrap();
+
+        // A `custom` field bypasses all the derived machinery: no helpers, no
+        // description, just a call to the user's function.
+        match errors.handle(resolve_custom(f)) {
+            None => continue,
+            Some(Some(write_fn)) => {
+                let Some(name) = errors.handle(nc_name(ident, f.rename.as_deref(), rename_all))
+                else {
+                    continue;
+                };
+                let field_str = ident.to_string();
+                field_blocks.push(quote! {
+                    #write_fn(self, &self.#ident, #field_str, #name, grp)?;
+                });
+                continue;
+            }
+            Some(None) => {}
+        }
+
         // Resolve the write strategy and the netCDF name, collecting errors so
         // every problem is reported in one compile.
         let Some((wk, map_fns)) = errors.handle(resolve_field(f)) else {
@@ -824,11 +883,7 @@ pub(crate) fn expand(input: TokenStream) -> TokenStream {
         if wk == NcKind::Skip {
             continue;
         }
-        let Some(name) = errors.handle(nc_name(
-            f.ident.as_ref().unwrap(),
-            f.rename.as_deref(),
-            rename_all,
-        )) else {
+        let Some(name) = errors.handle(nc_name(ident, f.rename.as_deref(), rename_all)) else {
             continue;
         };
         // Descriptions only apply to variables, not to group-attribute fields.

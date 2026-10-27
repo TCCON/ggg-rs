@@ -148,18 +148,105 @@ fn direction_fn<'a>(
     let Some(spec) = spec else {
         return Ok(None);
     };
+    pick_direction(
+        spec.write.as_ref(),
+        spec.read.as_ref(),
+        attr_name,
+        dir,
+        ident,
+    )
+    .map(Some)
+}
+
+/// Choose the `dir` half of a `(write, read)` pair, erroring when it is absent.
+fn pick_direction<'a>(
+    write: Option<&'a syn::Path>,
+    read: Option<&'a syn::Path>,
+    attr_name: &str,
+    dir: Direction,
+    ident: &syn::Ident,
+) -> Result<&'a syn::Path, darling::Error> {
     let chosen = match dir {
-        Direction::Read => spec.read.as_ref(),
-        Direction::Write => spec.write.as_ref(),
+        Direction::Read => read,
+        Direction::Write => write,
     };
     match chosen {
-        Some(path) => Ok(Some(path)),
+        Some(path) => Ok(path),
         None => Err(darling::Error::custom(format!(
             "`{attr_name}` on this field has no `{} = ...`, which `{}` requires",
             dir.key(),
             dir.derive_name()
         ))
         .with_span(ident)),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// custom
+// ---------------------------------------------------------------------------
+
+const CUSTOM_FORM_HELP: &str = "`custom` needs an explicit direction, because reading and \
+     writing require different functions: `custom(write = path::to::fn)`, \
+     `custom(read = path::to::fn)`, or both";
+
+/// The function pair behind `#[netcdf(custom(...))]`, which hands the whole
+/// read or write of a field to user code instead of the derived helpers.
+///
+/// As with [`MapSpec`], the direction is always named and either half may be
+/// omitted; the derive that needs a missing half reports it.
+#[derive(Debug, Clone)]
+pub(crate) struct CustomSpec {
+    write: Option<syn::Path>,
+    read: Option<syn::Path>,
+}
+
+/// The `write = ...` / `read = ...` body of a `custom(...)`, parsed by darling.
+#[derive(FromMeta)]
+struct CustomSpecFields {
+    #[darling(default)]
+    write: Option<syn::Path>,
+    #[darling(default)]
+    read: Option<syn::Path>,
+}
+
+impl FromMeta for CustomSpec {
+    /// The only accepted form: `custom(write = ..., read = ...)`.
+    fn from_list(items: &[NestedMeta]) -> darling::Result<Self> {
+        let fields = CustomSpecFields::from_list(items)?;
+        if fields.write.is_none() && fields.read.is_none() {
+            return Err(darling::Error::custom(CUSTOM_FORM_HELP));
+        }
+        Ok(Self {
+            write: fields.write,
+            read: fields.read,
+        })
+    }
+
+    /// Rejects a bare `custom`.
+    fn from_word() -> darling::Result<Self> {
+        Err(darling::Error::custom(CUSTOM_FORM_HELP))
+    }
+
+    /// Rejects the non-directional `custom = path::to::fn` form.
+    fn from_expr(_expr: &syn::Expr) -> darling::Result<Self> {
+        Err(darling::Error::custom(CUSTOM_FORM_HELP))
+    }
+}
+
+impl CustomSpec {
+    /// The function for `dir`, or an error if this spec does not cover it.
+    pub(crate) fn resolve(
+        &self,
+        dir: Direction,
+        ident: &syn::Ident,
+    ) -> Result<&syn::Path, darling::Error> {
+        pick_direction(
+            self.write.as_ref(),
+            self.read.as_ref(),
+            "custom",
+            dir,
+            ident,
+        )
     }
 }
 
