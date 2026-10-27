@@ -274,6 +274,8 @@ pub fn derive_subset(input: TokenStream) -> TokenStream {
 ///     other => panic!("unexpected result: {other:?}"),
 /// }
 /// ```
+///
+/// [`ndarray::ShapeError`]: https://docs.rs/ndarray/0.17.2/ndarray/struct.ShapeError.html
 #[proc_macro_derive(Concat, attributes(concat))]
 pub fn derive_concat(input: TokenStream) -> TokenStream {
     concat::expand(input)
@@ -671,6 +673,11 @@ pub fn derive_concat(input: TokenStream) -> TokenStream {
 /// * `scale_offset` cannot be combined with `map`/`map_units`: a mapped value's
 ///   type is opaque to the macro, so it cannot check that what gets written is
 ///   floating-point. Pack inside the map function instead.
+///
+/// [`netcdf::VariableMut::put`]: https://docs.rs/netcdf/0.12.1/netcdf/struct.VariableMut.html#method.put
+/// [`netcdf::VariableMut::put_values`]: https://docs.rs/netcdf/0.12.1/netcdf/struct.VariableMut.html#method.put_values
+/// [`netcdf::VariableMut::put_string`]: https://docs.rs/netcdf/0.12.1/netcdf/struct.VariableMut.html#method.put_string
+/// [`chrono::DateTime`]: https://docs.rs/chrono/0.4/chrono/struct.DateTime.html
 #[proc_macro_derive(WriteNetcdf, attributes(netcdf))]
 pub fn derive_write_netcdf(input: TokenStream) -> TokenStream {
     write_netcdf::expand(input)
@@ -944,6 +951,8 @@ pub fn derive_write_netcdf(input: TokenStream) -> TokenStream {
 ///
 /// `missing_value` is read as an attribute and may list several sentinels.
 /// `valid_range`, `valid_min`, and `valid_max` are not yet honoured.
+///
+/// [`netcdf::Result`]: https://docs.rs/netcdf/0.12.1/netcdf/type.Result.html
 #[proc_macro_derive(ReadNetcdf, attributes(netcdf))]
 pub fn derive_read_netcdf(input: TokenStream) -> TokenStream {
     read_netcdf::expand(input)
