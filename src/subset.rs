@@ -1,7 +1,9 @@
 use darling::{FromDeriveInput, FromField, ast};
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{GenericParam, Type};
+use syn::GenericParam;
+
+use crate::common_subset::{FieldKind, ValueKind, resolve_kind};
 
 #[derive(FromField)]
 #[darling(attributes(subset))]
@@ -25,136 +27,6 @@ struct SubsetInput {
     ident: syn::Ident,
     generics: syn::Generics,
     data: ast::Data<darling::util::Ignored, SubsetField>,
-}
-
-enum ValueKind {
-    Vec,
-    NdArray { axis: usize },
-}
-
-enum FieldKind {
-    Vec,
-    NdArray { axis: usize },
-    HashMap { value: ValueKind },
-    Skip,
-}
-
-/// Given a `Vec<T>` or `Array*<T>` type, classify it. Reused for both
-/// top-level fields and HashMap values.
-fn classify_container(
-    ty: &Type,
-    explicit_kind: Option<&str>,
-    explicit_axis: Option<usize>,
-) -> Result<ValueKind, darling::Error> {
-    if let Some(kind) = explicit_kind {
-        return match kind {
-            "vec" => Ok(ValueKind::Vec),
-            "array" => Ok(ValueKind::NdArray {
-                axis: explicit_axis.unwrap_or(0),
-            }),
-            other => Err(darling::Error::custom(format!("unknown kind \"{other}\""))),
-        };
-    }
-    if let Type::Path(type_path) = ty
-        && let Some(seg) = type_path.path.segments.last()
-    {
-        let ident = seg.ident.to_string();
-        if ident == "Vec" {
-            return Ok(ValueKind::Vec);
-        }
-        if ident.starts_with("Array") {
-            return Ok(ValueKind::NdArray {
-                axis: explicit_axis.unwrap_or(0),
-            });
-        }
-    }
-    Err(darling::Error::custom("couldn't infer container kind"))
-}
-
-/// Extract the `V` type param out of `HashMap<K, V>`.
-fn hashmap_value_type(ty: &Type) -> Option<&Type> {
-    if let Type::Path(type_path) = ty {
-        let seg = type_path.path.segments.last()?;
-        if seg.ident != "HashMap" {
-            return None;
-        }
-        if let syn::PathArguments::AngleBracketed(args) = &seg.arguments {
-            // args: [K, V] — value is the second generic argument.
-            if let Some(syn::GenericArgument::Type(v_ty)) = args.args.iter().nth(1) {
-                return Some(v_ty);
-            }
-        }
-    }
-    None
-}
-
-fn resolve_kind(f: &SubsetField) -> Result<FieldKind, darling::Error> {
-    let ident = f.ident.as_ref().unwrap();
-
-    if f.skip {
-        if f.kind.is_some() || f.axis.is_some() {
-            return Err(
-                darling::Error::custom("`skip` cannot be combined with `kind` or `axis`")
-                    .with_span(ident),
-            );
-        }
-        return Ok(FieldKind::Skip);
-    }
-
-    if let Some(kind) = &f.kind {
-        return match kind.as_str() {
-            "array" => Ok(FieldKind::NdArray {
-                axis: f.axis.unwrap_or(0),
-            }),
-            "vec" => {
-                if f.axis.is_some() {
-                    return Err(darling::Error::custom(
-                        "`axis` has no effect on `kind = \"vec\"` fields",
-                    )
-                    .with_span(ident));
-                }
-                Ok(FieldKind::Vec)
-            }
-            other => Err(darling::Error::custom(format!(
-                "unknown kind \"{other}\", expected \"vec\" or \"array\""
-            ))
-            .with_span(ident)),
-        };
-    }
-
-    // Handle HashMaps of vecs/arrays
-    if let Some(value_ty) = hashmap_value_type(&f.ty) {
-        let value_kind = classify_container(value_ty, f.kind.as_deref(), f.axis)
-            .map_err(|e| e.with_span(ident))?;
-        return Ok(FieldKind::HashMap { value: value_kind });
-    }
-
-    // Fallback: infer from the type's last path segment.
-    if let Type::Path(type_path) = &f.ty
-        && let Some(seg) = type_path.path.segments.last()
-    {
-        let ty_ident = seg.ident.to_string();
-        if ty_ident == "Vec" {
-            if f.axis.is_some() {
-                return Err(
-                    darling::Error::custom("`axis` has no effect on inferred Vec fields")
-                        .with_span(ident),
-                );
-            }
-            return Ok(FieldKind::Vec);
-        }
-        if ty_ident.starts_with("Array") {
-            return Ok(FieldKind::NdArray {
-                axis: f.axis.unwrap_or(0),
-            });
-        }
-    }
-
-    Err(darling::Error::custom(
-        "couldn't infer field kind — annotate with #[subset(kind = \"vec\")], \
-         #[subset(kind = \"array\")], or #[subset(skip)]",
-    )
-    .with_span(ident))
 }
 
 pub(crate) fn expand(input: TokenStream) -> TokenStream {
@@ -181,7 +53,14 @@ pub(crate) fn expand(input: TokenStream) -> TokenStream {
     let mut errors = darling::Error::accumulator();
 
     for f in &fields {
-        if let Some(kind) = errors.handle(resolve_kind(f)) {
+        if let Some(kind) = errors.handle(resolve_kind(
+            f.ident.as_ref().unwrap(),
+            &f.ty,
+            f.skip,
+            f.kind.as_deref(),
+            f.axis,
+            "subset",
+        )) {
             let ident = f.ident.clone().unwrap();
             match kind {
                 FieldKind::Vec => vec_idents.push(ident),

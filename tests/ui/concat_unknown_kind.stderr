@@ -1,0 +1,5 @@
+error: unknown kind "list", expected "vec" or "array"
+ --> tests/ui/concat_unknown_kind.rs:6:5
+  |
+6 |     values: Vec<u8>,
+  |     ^^^^^^
