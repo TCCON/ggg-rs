@@ -37,7 +37,7 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 
 use crate::common_netcdf::{
-    CustomSpec, DimList, Direction, FloatTy, MapFns, MapSpec, NcKind, ScaleOffsetSpec,
+    ContextSpec, CustomSpec, DimList, Direction, FloatTy, MapFns, MapSpec, NcKind, ScaleOffsetSpec,
     apply_rename_all, float_element_type, infer_kind, kind_from_str, nc_name, not_float_message,
     validate_dims,
 };
@@ -203,6 +203,11 @@ struct WriteNetcdfInput {
     /// fields can override the name or opt out with `#[netcdf(no_describe)]`.
     #[darling(default)]
     describe: Option<Override<String>>,
+
+    /// A run-time value passed to every `custom` write function as its last
+    /// argument: `context(ty = "Ctx")`, optionally with `default`.
+    #[darling(default)]
+    context: Option<ContextSpec>,
 
     /// Accepted and ignored: container-level `ReadNetcdf` options. See the note
     /// on `WriteNetcdfField::unpack`.
@@ -853,6 +858,8 @@ pub(crate) fn expand(input: TokenStream) -> TokenStream {
 
     let mut helpers = HelpersNeeded::default();
     let mut field_blocks: Vec<TokenStream2> = Vec::new();
+    // With a context, every `custom` function takes it as a final argument.
+    let ctx_arg = parsed.context.as_ref().map(|_| quote!(, __ctx));
 
     for f in &fields {
         let ident = f.ident.as_ref().unwrap();
@@ -868,7 +875,7 @@ pub(crate) fn expand(input: TokenStream) -> TokenStream {
                 };
                 let field_str = ident.to_string();
                 field_blocks.push(quote! {
-                    #write_fn(self, &self.#ident, #field_str, #name, grp)?;
+                    #write_fn(self, &self.#ident, #field_str, #name, grp #ctx_arg)?;
                 });
                 continue;
             }
@@ -904,8 +911,8 @@ pub(crate) fn expand(input: TokenStream) -> TokenStream {
     let helper_fns = helpers.tokens();
     let (impl_generics, ty_generics, where_clause) = parsed.generics.split_for_impl();
 
-    let expanded = quote! {
-        impl #impl_generics #name #ty_generics #where_clause {
+    let methods = match &parsed.context {
+        None => quote! {
             /// Write this struct's fields into `grp` as netCDF variables and
             /// group attributes. Pass a file root (`FileMut::root_mut()`) or a
             /// subgroup. Missing dimensions are created automatically.
@@ -914,6 +921,45 @@ pub(crate) fn expand(input: TokenStream) -> TokenStream {
                 #(#field_blocks)*
                 Ok(())
             }
+        },
+        Some(ctx) => {
+            let ctx_ty = &ctx.ty;
+            // Rebinding `ctx` up front keeps the generated code's name for it
+            // out of the way of anything the field blocks define.
+            let with_ctx = quote! {
+                /// Write this struct's fields into `grp` as netCDF variables and
+                /// group attributes, passing `ctx` to each `custom` write
+                /// function. Pass a file root (`FileMut::root_mut()`) or a
+                /// subgroup. Missing dimensions are created automatically.
+                pub fn write_netcdf_context(
+                    &self,
+                    grp: &mut ::netcdf::GroupMut<'_>,
+                    ctx: &#ctx_ty,
+                ) -> ::netcdf::Result<()> {
+                    let __ctx = ctx;
+                    let _ = __ctx;
+                    #helper_fns
+                    #(#field_blocks)*
+                    Ok(())
+                }
+            };
+            let plain = ctx.default.then(|| {
+                let default_ctx = ctx.default_expr();
+                quote! {
+                    /// Like `write_netcdf_context`, with the context's
+                    /// `Default::default()`.
+                    pub fn write_netcdf(&self, grp: &mut ::netcdf::GroupMut<'_>) -> ::netcdf::Result<()> {
+                        self.write_netcdf_context(grp, #default_ctx)
+                    }
+                }
+            });
+            quote! { #with_ctx #plain }
+        }
+    };
+
+    let expanded = quote! {
+        impl #impl_generics #name #ty_generics #where_clause {
+            #methods
         }
     };
 

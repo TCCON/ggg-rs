@@ -1,0 +1,20 @@
+error[E0599]: no associated function or constant named `read_netcdf` found for struct `Data` in the current scope
+  --> tests/ui/nc_context_no_plain_method.rs:14:19
+   |
+ 8 | struct Data {
+   | ----------- associated function or constant `read_netcdf` not found for this struct
+...
+14 |     let _ = Data::read_netcdf(&file.root().unwrap());
+   |                   ^^^^^^^^^^^ associated function or constant not found in `Data`
+   |
+note: if you're trying to build a new `Data`, consider using `Data::read_netcdf_context` which returns `Result<Data, netcdf::Error>`
+  --> tests/ui/nc_context_no_plain_method.rs:6:10
+   |
+ 6 | #[derive(ReadNetcdf)]
+   |          ^^^^^^^^^^
+help: there is an associated function `read_netcdf_context` with a similar name
+  --> tests/ui/nc_context_no_plain_method.rs:6:10
+   |
+ 6 | #[derive(ReadNetcdf)]
+   |          ^^^^^^^^^^
+   = note: this error originates in the derive macro `ReadNetcdf` (in Nightly builds, run with -Z macro-backtrace for more info)

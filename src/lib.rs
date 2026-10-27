@@ -629,6 +629,10 @@ pub fn derive_concat(input: TokenStream) -> TokenStream {
 /// }
 /// ```
 ///
+/// A `custom` write function can also receive a value supplied at run time
+/// through the container-level `context` annotation; see [`ReadNetcdf`] for
+/// details. With `context`, the method is `write_netcdf_context(&self, grp, ctx)`.
+///
 /// `#[netcdf(scale_offset(scale = .., offset = .., nc_type = ".."))]` packs the
 /// field into a smaller on-disk type, following the netCDF attribute conventions.
 /// Values are stored as `(value - offset) / scale`, and the `scale_factor` and
@@ -765,6 +769,8 @@ pub fn derive_write_netcdf(input: TokenStream) -> TokenStream {
 /// can be combined with is `rename`. `kind`, `dimensions`, `attribute`, `map`,
 /// `map_units`, `unpack`, and `on_fill` are errors on a `custom` field, and a
 /// container `unpack`/`on_fill` skips it: any unpacking is the function's job.
+/// Note that `custom` functions must accept an additional argument if the `context`
+/// annotation is added to the structure; see [below](#run-time-context-for-custom-functions).
 ///
 /// ```no_run
 /// use ggg_rs_derive::ReadNetcdf;
@@ -786,6 +792,66 @@ pub fn derive_write_netcdf(input: TokenStream) -> TokenStream {
 ///     #[netcdf(custom(read = read_coords))]
 ///     coords: Vec<(f64, f64)>,
 /// }
+/// ```
+///
+/// # Run-time context for custom functions
+///
+/// `custom` functions sometimes need inputs that aren't in the file or the
+/// struct, such as a lookup table loaded separately. Reading can't get these
+/// from `Self`, since `Self` doesn't exist yet. The container-level
+/// `#[netcdf(context(ty = "Ctx"))]` annotation declares a context type, and both
+/// derives then generate methods that take one:
+///
+/// ```ignore
+/// pub fn read_netcdf_context(grp: &netcdf::Group<'_>, ctx: &Ctx) -> netcdf::Result<Self>
+/// pub fn write_netcdf_context(&self, grp: &mut netcdf::GroupMut<'_>, ctx: &Ctx) -> netcdf::Result<()>
+/// ```
+///
+/// `ctx` is passed by reference as an extra final argument to *every* `custom`
+/// function on the struct, in both directions, whether or not it uses it. Put
+/// several inputs together in one context struct. A borrowing context type is
+/// written with `'_`, e.g. `context(ty = "Lookup<'_>")`. Only `custom`
+/// functions receive the context; `map`, `map_units`, and `attr(func = ...)`
+/// are unchanged.
+///
+/// With a context, the plain `read_netcdf` / `write_netcdf` are *not* generated,
+/// so a caller cannot forget to supply it. Add `default` —
+/// `context(ty = "Ctx", default)` — to generate them as well. They then call the
+/// `_context` versions with `Ctx::default()`, and `Ctx` must implement
+/// [`Default`].
+///
+/// ```no_run
+/// use ggg_rs_derive::ReadNetcdf;
+///
+/// struct SiteTable {
+///     names: Vec<String>,
+/// }
+///
+/// fn read_sites(
+///     _field: &str, nc_name: &str, grp: &netcdf::Group<'_>, ctx: &SiteTable,
+/// ) -> netcdf::Result<Vec<String>> {
+///     let var = grp
+///         .variable(nc_name)
+///         .ok_or_else(|| netcdf::Error::NotFound(format!("variable: '{nc_name}'")))?;
+///     var.get_values::<i32, _>(..)?
+///         .into_iter()
+///         .map(|i| ctx.names.get(i as usize).cloned()
+///             .ok_or_else(|| netcdf::Error::Str(format!("site index {i} not in table"))))
+///         .collect()
+/// }
+///
+/// #[derive(ReadNetcdf)]
+/// #[netcdf(context(ty = "SiteTable"))]
+/// struct Data {
+///     #[netcdf(custom(read = read_sites))]
+///     sites: Vec<String>,
+/// }
+///
+/// # fn main() -> netcdf::Result<()> {
+/// let table = SiteTable { names: vec!["ci".into(), "pa".into()] };
+/// let file = netcdf::open("obs.nc")?;
+/// let data = Data::read_netcdf_context(&file.root().unwrap(), &table)?;
+/// # Ok(()) }
 /// ```
 ///
 /// # Unpacking: `scale_factor` and `add_offset`

@@ -1,0 +1,5 @@
+error: Missing field `ty`
+ --> tests/ui/nc_context_missing_ty.rs:5:10
+  |
+5 | #[netcdf(context(default))]
+  |          ^^^^^^^

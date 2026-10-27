@@ -250,6 +250,33 @@ impl CustomSpec {
     }
 }
 
+/// `#[netcdf(context(ty = "Ctx", default))]` on the container: a value supplied
+/// at run time and passed by reference to every `custom` function, as their
+/// final argument. It changes the generated methods to `read_netcdf_context` /
+/// `write_netcdf_context`; with `default`, the plain `read_netcdf` /
+/// `write_netcdf` are generated too, using `Ctx::default()`.
+#[derive(Debug, Clone, FromMeta)]
+pub(crate) struct ContextSpec {
+    /// The context type. A borrowing type is written with `'_`, e.g.
+    /// `ty = "Lookup<'_>"`.
+    pub(crate) ty: syn::Type,
+    /// Also generate the context-free methods, using `Default::default()`.
+    #[darling(default)]
+    pub(crate) default: bool,
+}
+
+impl ContextSpec {
+    /// The expression the context-free methods pass as the context. Spanned on
+    /// the annotated type so that a missing `Default` impl is reported there
+    /// rather than on the derive.
+    pub(crate) fn default_expr(&self) -> proc_macro2::TokenStream {
+        let ty = &self.ty;
+        quote::quote_spanned! {syn::spanned::Spanned::span(ty)=>
+            &<#ty as ::core::default::Default>::default()
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // rename_all
 // ---------------------------------------------------------------------------

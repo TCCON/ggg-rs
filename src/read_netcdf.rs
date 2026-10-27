@@ -4,9 +4,9 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 
 use crate::common_netcdf::{
-    CustomSpec, DimList, Direction, FloatTy, MapFns, MapSpec, NcKind, OnFill, UnpackSpec,
-    apply_rename_all, float_element_type, infer_kind, kind_from_str, nc_name, not_float_message,
-    resolve_unpack, validate_dims,
+    ContextSpec, CustomSpec, DimList, Direction, FloatTy, MapFns, MapSpec, NcKind, OnFill,
+    UnpackSpec, apply_rename_all, float_element_type, infer_kind, kind_from_str, nc_name,
+    not_float_message, resolve_unpack, validate_dims,
 };
 
 /// What unpacking a single field needs, once the container default, the field
@@ -46,6 +46,8 @@ pub(crate) fn expand(input: TokenStream) -> TokenStream {
     let mut helpers = HelpersNeeded::default();
     let mut field_blocks: Vec<TokenStream2> = Vec::new();
     let mut field_names: Vec<syn::Ident> = Vec::new();
+    // With a context, every `custom` function takes it as a final argument.
+    let ctx_arg = parsed.context.as_ref().map(|_| quote!(, __ctx));
 
     for f in &fields {
         let fieldname = f.ident.as_ref().unwrap().clone();
@@ -62,7 +64,7 @@ pub(crate) fn expand(input: TokenStream) -> TokenStream {
                 };
                 let field_str = fieldname.to_string();
                 field_blocks.push(quote! {
-                    let #fieldname = #read_fn(#field_str, #name, grp)?;
+                    let #fieldname = #read_fn(#field_str, #name, grp #ctx_arg)?;
                 });
                 field_names.push(fieldname);
                 continue;
@@ -113,8 +115,8 @@ pub(crate) fn expand(input: TokenStream) -> TokenStream {
 
     let helper_fns = helpers.tokens();
     let (impl_generics, ty_generics, where_clause) = parsed.generics.split_for_impl();
-    let expanded = quote! {
-        impl #impl_generics #name #ty_generics #where_clause {
+    let methods = match &parsed.context {
+        None => quote! {
             /// Read this struct's fields from netCDF variables or attributes under `grp`.
             /// Pass a file root (`File::root()`) or a subgroup.
             pub fn read_netcdf(grp: &::netcdf::Group<'_>) -> ::netcdf::Result<Self> {
@@ -122,6 +124,43 @@ pub(crate) fn expand(input: TokenStream) -> TokenStream {
                 #(#field_blocks)*
                 Ok(Self { #(#field_names),* })
             }
+        },
+        Some(ctx) => {
+            let ctx_ty = &ctx.ty;
+            // Rebind `ctx` before the field blocks run: they bind each field
+            // name as a local, and a field called `ctx` would otherwise shadow it.
+            let with_ctx = quote! {
+                /// Read this struct's fields from netCDF variables or attributes
+                /// under `grp`, passing `ctx` to each `custom` read function.
+                /// Pass a file root (`File::root()`) or a subgroup.
+                pub fn read_netcdf_context(
+                    grp: &::netcdf::Group<'_>,
+                    ctx: &#ctx_ty,
+                ) -> ::netcdf::Result<Self> {
+                    let __ctx = ctx;
+                    let _ = __ctx;
+                    #helper_fns
+                    #(#field_blocks)*
+                    Ok(Self { #(#field_names),* })
+                }
+            };
+            let plain = ctx.default.then(|| {
+                let default_ctx = ctx.default_expr();
+                quote! {
+                    /// Like `read_netcdf_context`, with the context's
+                    /// `Default::default()`.
+                    pub fn read_netcdf(grp: &::netcdf::Group<'_>) -> ::netcdf::Result<Self> {
+                        Self::read_netcdf_context(grp, #default_ctx)
+                    }
+                }
+            });
+            quote! { #with_ctx #plain }
+        }
+    };
+
+    let expanded = quote! {
+        impl #impl_generics #name #ty_generics #where_clause {
+            #methods
         }
     };
 
@@ -149,6 +188,11 @@ struct ReadNetcdfInput {
     /// `"ignore"`, or `"error"`.
     #[darling(default)]
     on_fill: Option<OnFill>,
+
+    /// A run-time value passed to every `custom` read function as its last
+    /// argument: `context(ty = "Ctx")`, optionally with `default`.
+    #[darling(default)]
+    context: Option<ContextSpec>,
 
     /// Accepted and ignored: `describe` is a `WriteNetcdf` option. Both derives
     /// read the same `netcdf` attribute, so each has to tolerate the other's

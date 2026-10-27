@@ -1,0 +1,14 @@
+error[E0061]: this function takes 3 arguments but 4 arguments were supplied
+  --> tests/ui/nc_context_fn_missing_arg.rs:13:28
+   |
+10 | #[derive(ReadNetcdf)]
+   |          ---------- unexpected argument #4 of type `&Ctx`
+...
+13 |     #[netcdf(custom(read = from_nc))]
+   |                            ^^^^^^^
+   |
+note: function defined here
+  --> tests/ui/nc_context_fn_missing_arg.rs:6:4
+   |
+ 6 | fn from_nc(_f: &str, _n: &str, _g: &netcdf::Group<'_>) -> netcdf::Result<f64> {
+   |    ^^^^^^^
