@@ -367,9 +367,10 @@ pub fn derive_concat(input: TokenStream) -> TokenStream {
 /// `fn(&Self, &mut netcdf::GroupMut<'_>) -> netcdf::Result<()>`
 ///
 /// With a container `context`, the function takes a final `&Ctx` argument too.
-/// It runs after every field has been written, so it can inspect the variables
-/// and dimensions already in the group. `attrs(...)` may be repeated; the
-/// functions run in the order written. `ReadNetcdf` ignores it.
+/// It runs after every field has been written, including the variables' data,
+/// so it can read the variables and dimensions already in the group to derive
+/// attribute values. `attrs(...)` may be repeated; the functions run in the
+/// order written. `ReadNetcdf` ignores it.
 ///
 /// ```no_run
 /// use ggg_rs_derive::WriteNetcdf;
@@ -583,6 +584,11 @@ pub fn derive_concat(input: TokenStream) -> TokenStream {
 /// written, and it can be combined with `attr(...)`. It is an error with `skip`,
 /// with `attribute` (there is no variable to write onto), and with `custom`
 /// (whose function can write its own attributes). `ReadNetcdf` ignores it.
+///
+/// The variable's values have already been written when the function runs, so
+/// it can read them back from `var` if that's more convenient than using the
+/// field value. One consequence: `_FillValue` cannot be set this way, because
+/// netCDF requires it before any data is written.
 ///
 /// ```no_run
 /// use ggg_rs_derive::WriteNetcdf;

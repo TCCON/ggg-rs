@@ -262,3 +262,74 @@ fn test_attrs_receive_context() {
     assert_eq!("1", var_str(&file, "xluft", "units"));
     assert_eq!("GGG2020.1", grp_str(&file, "version"));
 }
+
+// ---------------------------------------------------------------------------
+// The data is already written when `attrs` functions run
+// ---------------------------------------------------------------------------
+
+/// Derives attributes by reading the values back from the variable, which
+/// only works if they were written first.
+fn range_from_var(
+    _data: &Ranged,
+    _values: &[f64],
+    _field_name: &str,
+    _nc_name: &str,
+    var: &mut netcdf::VariableMut<'_>,
+) -> netcdf::Result<()> {
+    let stored = var.get_values::<f64, _>(..)?;
+    let lo = stored.iter().copied().fold(f64::INFINITY, f64::min);
+    let hi = stored.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    var.put_attribute("valid_min", lo)?;
+    var.put_attribute("valid_max", hi)?;
+    Ok(())
+}
+
+/// Reads a field's variable from the group to derive a group attribute.
+fn total_from_grp(_data: &Ranged, grp: &mut netcdf::GroupMut<'_>) -> netcdf::Result<()> {
+    let stored = grp
+        .variable("values")
+        .ok_or_else(|| netcdf::Error::Str("values not written yet".to_string()))?
+        .get_values::<f64, _>(..)?;
+    grp.add_attribute("total", stored.iter().sum::<f64>())?;
+    Ok(())
+}
+
+#[derive(WriteNetcdf)]
+#[netcdf(attrs(func = total_from_grp))]
+struct Ranged {
+    #[netcdf(attrs(func = range_from_var))]
+    values: Vec<f64>,
+}
+
+#[test]
+fn test_attrs_see_written_data() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("ranged.nc");
+    write(&path, |root| {
+        Ranged {
+            values: vec![3.0, -1.0, 2.0],
+        }
+        .write_netcdf(root)
+        .unwrap()
+    });
+
+    let file = netcdf::open(&path).unwrap();
+    let var = file.variable("values").unwrap();
+    let get = |name: &str| -> f64 {
+        var.attribute_value(name)
+            .unwrap()
+            .unwrap()
+            .try_into()
+            .unwrap()
+    };
+    assert_eq!(-1.0, get("valid_min"));
+    assert_eq!(3.0, get("valid_max"));
+    let total: f64 = file
+        .attribute("total")
+        .unwrap()
+        .value()
+        .unwrap()
+        .try_into()
+        .unwrap();
+    assert_eq!(4.0, total);
+}
