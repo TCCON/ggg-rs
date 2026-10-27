@@ -1,0 +1,5 @@
+error: `attrs` needs a function: `attrs(func = path::to::fn)`
+ --> tests/ui/nc_attrs_read_only_malformed.rs:6:10
+  |
+6 | #[netcdf(attrs = global_attrs)]
+  |          ^^^^^

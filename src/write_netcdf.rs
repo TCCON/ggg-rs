@@ -37,9 +37,9 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 
 use crate::common_netcdf::{
-    ContextSpec, CustomSpec, DimList, Direction, FloatTy, MapFns, MapSpec, NcKind, ScaleOffsetSpec,
-    apply_rename_all, float_element_type, infer_kind, kind_from_str, nc_name, not_float_message,
-    validate_dims,
+    AttrsSpec, ContextSpec, CustomSpec, DimList, Direction, FloatTy, MapFns, MapSpec, NcKind,
+    ScaleOffsetSpec, apply_rename_all, float_element_type, infer_kind, kind_from_str, nc_name,
+    not_float_message, validate_dims,
 };
 
 // ---------------------------------------------------------------------------
@@ -168,6 +168,16 @@ struct WriteNetcdfField {
     #[darling(default, multiple, rename = "attr")]
     var_attrs: Vec<NcVarAttr>,
 
+    /// Zero or more functions that each write any number of attributes onto
+    /// the created variable: `attrs(func = path::to::fn)` with
+    /// `fn(&Self, &FieldTy, &str, &str, &mut netcdf::VariableMut<'_>) -> netcdf::Result<()>`
+    /// (plus a final `&Ctx` with a container `context`). The `&str`s are the
+    /// Rust field name and the netCDF name. They run after every other
+    /// attribute, in the order written. Renamed for the same reason as
+    /// `var_attrs`.
+    #[darling(default, multiple, rename = "attrs")]
+    attrs_fns: Vec<AttrsSpec>,
+
     /// The raw field attributes, filled by darling because of the magic name
     /// `attrs`. Used only to read `///` doc comments (which the compiler lowers
     /// to `#[doc = "..."]`) for the description feature.
@@ -209,6 +219,14 @@ struct WriteNetcdfInput {
     #[darling(default)]
     context: Option<ContextSpec>,
 
+    /// Zero or more functions that each write any number of *group*
+    /// attributes: `attrs(func = path::to::fn)` with
+    /// `fn(&Self, &mut netcdf::GroupMut<'_>) -> netcdf::Result<()>` (plus a
+    /// final `&Ctx` with `context`). They run after every field is written,
+    /// in the order written.
+    #[darling(default, multiple, rename = "attrs")]
+    attrs_fns: Vec<AttrsSpec>,
+
     /// Accepted and ignored: container-level `ReadNetcdf` options. See the note
     /// on `WriteNetcdfField::unpack`.
     #[darling(default)]
@@ -240,13 +258,14 @@ fn resolve_custom(f: &WriteNetcdfField) -> Result<Option<&syn::Path>, darling::E
         || f.map_units.is_some()
         || f.scale_offset.is_some()
         || !f.var_attrs.is_empty()
+        || !f.attrs_fns.is_empty()
         || f.describe.is_some()
         || f.no_describe
     {
         return Err(darling::Error::custom(
             "`custom` is incompatible with `skip`, `kind`, `dimensions`, `attribute`, `map`, \
-             `map_units`, `scale_offset`, `attr`, `describe`, and `no_describe`: the custom \
-             function does all the writing",
+             `map_units`, `scale_offset`, `attr`, `attrs`, `describe`, and `no_describe`: the \
+             custom function does all the writing",
         )
         .with_span(ident));
     }
@@ -271,6 +290,7 @@ fn resolve_field(f: &WriteNetcdfField) -> Result<(NcKind, MapFns<'_>), darling::
             || f.map.is_some()
             || f.map_units.is_some()
             || !f.var_attrs.is_empty()
+            || !f.attrs_fns.is_empty()
             || f.describe.is_some()
             || f.no_describe
             || f.scale_offset.is_some()
@@ -338,13 +358,14 @@ fn resolve_field(f: &WriteNetcdfField) -> Result<(NcKind, MapFns<'_>), darling::
         if has_dims
             || f.kind.is_some()
             || !f.var_attrs.is_empty()
+            || !f.attrs_fns.is_empty()
             || f.map_units.is_some()
             || f.describe.is_some()
             || f.no_describe
             || f.scale_offset.is_some()
         {
             return Err(err(
-                "`attribute` is incompatible with `dimensions`, `kind`, `attr`, `map_units`, `scale_offset`, and `describe`",
+                "`attribute` is incompatible with `dimensions`, `kind`, `attr`, `attrs`, `map_units`, `scale_offset`, and `describe`",
             ));
         }
         return Ok((NcKind::Attribute, map_fns));
@@ -674,6 +695,7 @@ fn field_block(
     name: &str,
     description: Option<(String, String)>,
     map_fns: MapFns<'_>,
+    ctx_arg: Option<&TokenStream2>,
 ) -> TokenStream2 {
     let ident = field.ident.as_ref().unwrap();
     let mapped = map_fns.any();
@@ -748,6 +770,15 @@ fn field_block(
     }
     if let Some((_, unit_attr)) = map_fns.map_units {
         attr_stmts.extend(quote! { __var.put_attribute(#unit_attr, __units)?; });
+    }
+    // `attrs(func = ...)` functions go last, so they can overwrite any of the
+    // above.
+    let field_str = ident.to_string();
+    for a in &field.attrs_fns {
+        let func = &a.func;
+        attr_stmts.extend(quote! {
+            #func(self, &self.#ident, #field_str, #name, &mut __var #ctx_arg)?;
+        });
     }
     let needs_var = !attr_stmts.is_empty();
 
@@ -901,7 +932,14 @@ pub(crate) fn expand(input: TokenStream) -> TokenStream {
                 .and_then(|attr| extract_doc(&f.attrs).map(|doc| (attr, doc)))
         };
         helpers.note(wk);
-        field_blocks.push(field_block(f, wk, &name, description, map_fns));
+        field_blocks.push(field_block(
+            f,
+            wk,
+            &name,
+            description,
+            map_fns,
+            ctx_arg.as_ref(),
+        ));
     }
 
     if let Err(e) = errors.finish() {
@@ -910,6 +948,13 @@ pub(crate) fn expand(input: TokenStream) -> TokenStream {
 
     let helper_fns = helpers.tokens();
     let (impl_generics, ty_generics, where_clause) = parsed.generics.split_for_impl();
+    // Group-attribute functions run after the fields, so they can inspect what
+    // was written.
+    let group_attrs = parsed.attrs_fns.iter().map(|a| {
+        let func = &a.func;
+        quote! { #func(self, grp #ctx_arg)?; }
+    });
+    let group_attrs = quote! { #(#group_attrs)* };
 
     let methods = match &parsed.context {
         None => quote! {
@@ -919,6 +964,7 @@ pub(crate) fn expand(input: TokenStream) -> TokenStream {
             pub fn write_netcdf(&self, grp: &mut ::netcdf::GroupMut<'_>) -> ::netcdf::Result<()> {
                 #helper_fns
                 #(#field_blocks)*
+                #group_attrs
                 Ok(())
             }
         },
@@ -928,7 +974,7 @@ pub(crate) fn expand(input: TokenStream) -> TokenStream {
             // out of the way of anything the field blocks define.
             let with_ctx = quote! {
                 /// Write this struct's fields into `grp` as netCDF variables and
-                /// group attributes, passing `ctx` to each `custom` write
+                /// group attributes, passing `ctx` to each `custom` and `attrs`
                 /// function. Pass a file root (`FileMut::root_mut()`) or a
                 /// subgroup. Missing dimensions are created automatically.
                 pub fn write_netcdf_context(
@@ -940,6 +986,7 @@ pub(crate) fn expand(input: TokenStream) -> TokenStream {
                     let _ = __ctx;
                     #helper_fns
                     #(#field_blocks)*
+                    #group_attrs
                     Ok(())
                 }
             };

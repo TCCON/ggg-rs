@@ -361,6 +361,33 @@ pub fn derive_concat(input: TokenStream) -> TokenStream {
 /// }
 /// ```
 ///
+/// `#[netcdf(attrs(func = path::to::fn))]` — write any number of *group*
+/// attributes with a function:
+///
+/// `fn(&Self, &mut netcdf::GroupMut<'_>) -> netcdf::Result<()>`
+///
+/// With a container `context`, the function takes a final `&Ctx` argument too.
+/// It runs after every field has been written, so it can inspect the variables
+/// and dimensions already in the group. `attrs(...)` may be repeated; the
+/// functions run in the order written. `ReadNetcdf` ignores it.
+///
+/// ```no_run
+/// use ggg_rs_derive::WriteNetcdf;
+///
+/// fn global_attrs(data: &Data, grp: &mut netcdf::GroupMut<'_>) -> netcdf::Result<()> {
+///     grp.add_attribute("n_obs", data.xco2.len() as i32)?;
+///     grp.add_attribute("conventions", "CF-1.8")?;
+///     Ok(())
+/// }
+///
+/// #[derive(WriteNetcdf)]
+/// #[netcdf(attrs(func = global_attrs))]
+/// struct Data {
+///     #[netcdf(dimensions("time"))]
+///     xco2: Vec<f64>,
+/// }
+/// ```
+///
 /// # Field attributes
 /// `#[netcdf(dimensions("d0", "d1", ...))]` is required. It lists the dimension
 /// names that map to each dimension of the field. `Vec` types only need a single
@@ -538,6 +565,45 @@ pub fn derive_concat(input: TokenStream) -> TokenStream {
 ///         attr( name = "long_name", func = infer_long_name ),
 ///     )]
 ///     xco2: Vec<f64>
+/// }
+/// ```
+///
+/// `#[netcdf(attrs(func = path::to::fn))]` writes any number of attributes onto
+/// the field's variable with one function, for sets of attributes computed
+/// together or whose names are only known at run time. Rather than returning a
+/// value, the function writes to the variable directly:
+///
+/// `fn(&Self, &FieldTy, &str, &str, &mut netcdf::VariableMut<'_>) -> netcdf::Result<()>`
+///
+/// The two `&str` arguments are the Rust field name and the netCDF name, in that
+/// order. With a container `context`, the function takes a final `&Ctx`
+/// argument too. It runs after every other attribute source (the description,
+/// packing attributes, `attr(...)`, and `map_units` units), so it can overwrite
+/// any of them. `attrs(...)` may be repeated; the functions run in the order
+/// written, and it can be combined with `attr(...)`. It is an error with `skip`,
+/// with `attribute` (there is no variable to write onto), and with `custom`
+/// (whose function can write its own attributes). `ReadNetcdf` ignores it.
+///
+/// ```no_run
+/// use ggg_rs_derive::WriteNetcdf;
+///
+/// fn xco2_attrs(
+///     _data: &Data, values: &[f64], _field: &str, _nc_name: &str,
+///     var: &mut netcdf::VariableMut<'_>,
+/// ) -> netcdf::Result<()> {
+///     let (lo, hi) = values.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), &v| {
+///         (lo.min(v), hi.max(v))
+///     });
+///     var.put_attribute("units", "ppm")?;
+///     var.put_attribute("valid_min", lo)?;
+///     var.put_attribute("valid_max", hi)?;
+///     Ok(())
+/// }
+///
+/// #[derive(WriteNetcdf)]
+/// struct Data {
+///     #[netcdf(dimensions("time"), attrs(func = xco2_attrs))]
+///     xco2: Vec<f64>,
 /// }
 /// ```
 ///
@@ -817,9 +883,10 @@ pub fn derive_write_netcdf(input: TokenStream) -> TokenStream {
 /// `ctx` is passed by reference as an extra final argument to *every* `custom`
 /// function on the struct, in both directions, whether or not it uses it. Put
 /// several inputs together in one context struct. A borrowing context type is
-/// written with `'_`, e.g. `context(ty = "Lookup<'_>")`. Only `custom`
-/// functions receive the context; `map`, `map_units`, and `attr(func = ...)`
-/// are unchanged.
+/// written with `'_`, e.g. `context(ty = "Lookup<'_>")`. `WriteNetcdf`'s
+/// `attrs(func = ...)` functions, at both the field and container level, also
+/// receive it as a final argument. `map`, `map_units`, and `attr(func = ...)`
+/// do not.
 ///
 /// With a context, the plain `read_netcdf` / `write_netcdf` are *not* generated,
 /// so a caller cannot forget to supply it. Add `default` —

@@ -278,6 +278,48 @@ impl ContextSpec {
 }
 
 // ---------------------------------------------------------------------------
+// attrs
+// ---------------------------------------------------------------------------
+
+const ATTRS_FORM_HELP: &str = "`attrs` needs a function: `attrs(func = path::to::fn)`";
+
+/// `#[netcdf(attrs(func = ...))]`: a function that writes any number of
+/// attributes, onto the field's variable (field level) or the group (container
+/// level). Only `WriteNetcdf` calls it.
+#[derive(Debug, Clone)]
+pub(crate) struct AttrsSpec {
+    pub(crate) func: syn::Path,
+}
+
+/// The body of an `attrs(...)`, parsed by darling.
+#[derive(FromMeta)]
+struct AttrsSpecFields {
+    #[darling(default)]
+    func: Option<syn::Path>,
+}
+
+impl FromMeta for AttrsSpec {
+    /// The only accepted form: `attrs(func = ...)`.
+    fn from_list(items: &[NestedMeta]) -> darling::Result<Self> {
+        let fields = AttrsSpecFields::from_list(items)?;
+        match fields.func {
+            Some(func) => Ok(Self { func }),
+            None => Err(darling::Error::custom(ATTRS_FORM_HELP)),
+        }
+    }
+
+    /// Rejects a bare `attrs`.
+    fn from_word() -> darling::Result<Self> {
+        Err(darling::Error::custom(ATTRS_FORM_HELP))
+    }
+
+    /// Rejects `attrs = path::to::fn`.
+    fn from_expr(_expr: &syn::Expr) -> darling::Result<Self> {
+        Err(darling::Error::custom(ATTRS_FORM_HELP))
+    }
+}
+
+// ---------------------------------------------------------------------------
 // rename_all
 // ---------------------------------------------------------------------------
 

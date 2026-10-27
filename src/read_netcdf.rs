@@ -4,8 +4,8 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 
 use crate::common_netcdf::{
-    ContextSpec, CustomSpec, DimList, Direction, FloatTy, MapFns, MapSpec, NcKind, OnFill,
-    UnpackSpec, apply_rename_all, float_element_type, infer_kind, kind_from_str, nc_name,
+    AttrsSpec, ContextSpec, CustomSpec, DimList, Direction, FloatTy, MapFns, MapSpec, NcKind,
+    OnFill, UnpackSpec, apply_rename_all, float_element_type, infer_kind, kind_from_str, nc_name,
     not_float_message, resolve_unpack, validate_dims,
 };
 
@@ -202,6 +202,13 @@ struct ReadNetcdfInput {
     #[darling(default)]
     #[allow(dead_code)]
     describe: Option<darling::util::Ignored>,
+
+    /// Accepted and ignored: group-attribute functions are a `WriteNetcdf`
+    /// option. Parsed with the real type so a malformed `attrs(...)` is still
+    /// reported on a struct that only derives `ReadNetcdf`.
+    #[darling(default, multiple, rename = "attrs")]
+    #[allow(dead_code)]
+    attrs_fns: Vec<AttrsSpec>,
 }
 
 #[derive(FromField)]
@@ -282,6 +289,12 @@ struct ReadNetcdfField {
     #[darling(default, multiple, rename = "attr")]
     #[allow(dead_code)]
     var_attrs: Vec<darling::util::Ignored>,
+
+    /// Accepted and ignored, like `attr`. Parsed with the real type so a
+    /// malformed `attrs(...)` is still reported.
+    #[darling(default, multiple, rename = "attrs")]
+    #[allow(dead_code)]
+    attrs_fns: Vec<AttrsSpec>,
 
     #[darling(default)]
     #[allow(dead_code)]
