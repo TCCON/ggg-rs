@@ -47,7 +47,11 @@ pub(crate) fn expand(input: TokenStream) -> TokenStream {
     let mut field_blocks: Vec<TokenStream2> = Vec::new();
     let mut field_names: Vec<syn::Ident> = Vec::new();
     // With a context, every `custom` function takes it as a final argument.
-    let ctx_arg = parsed.context.as_ref().map(|_| quote!(, __ctx));
+    let context = parsed
+        .context
+        .as_ref()
+        .and_then(|c| c.for_direction(Direction::Read));
+    let ctx_arg = context.map(|_| quote!(, __ctx));
 
     for f in &fields {
         let fieldname = f.ident.as_ref().unwrap().clone();
@@ -115,7 +119,7 @@ pub(crate) fn expand(input: TokenStream) -> TokenStream {
 
     let helper_fns = helpers.tokens();
     let (impl_generics, ty_generics, where_clause) = parsed.generics.split_for_impl();
-    let methods = match &parsed.context {
+    let methods = match context {
         None => quote! {
             /// Read this struct's fields from netCDF variables or attributes under `grp`.
             /// Pass a file root (`File::root()`) or a subgroup.
@@ -190,7 +194,7 @@ struct ReadNetcdfInput {
     on_fill: Option<OnFill>,
 
     /// A run-time value passed to every `custom` read function as its last
-    /// argument: `context(ty = "Ctx")`, optionally with `default`.
+    /// argument; see [`ContextSpec`] for the forms. Only the read half is used.
     #[darling(default)]
     context: Option<ContextSpec>,
 

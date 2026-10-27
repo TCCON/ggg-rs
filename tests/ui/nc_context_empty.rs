@@ -1,4 +1,4 @@
-// `context(...)` must name its type.
+// `context()` must name a type for at least one direction.
 use ggg_rs_derive::WriteNetcdf;
 
 #[derive(WriteNetcdf)]

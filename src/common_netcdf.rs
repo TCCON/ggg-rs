@@ -250,22 +250,130 @@ impl CustomSpec {
     }
 }
 
-/// `#[netcdf(context(ty = "Ctx", default))]` on the container: a value supplied
-/// at run time and passed by reference to every `custom` function, as their
-/// final argument. It changes the generated methods to `read_netcdf_context` /
-/// `write_netcdf_context`; with `default`, the plain `read_netcdf` /
-/// `write_netcdf` are generated too, using `Ctx::default()`.
-#[derive(Debug, Clone, FromMeta)]
+const CONTEXT_FORM_HELP: &str = "`context` needs a type: `context(ty = \"Ctx\")` for both \
+     directions, or `context(read = \"R\", write = \"W\")` with either half optional";
+
+/// `#[netcdf(context(...))]` on the container: a value supplied at run time and
+/// passed by reference as the final argument to the struct's `custom` and
+/// `attrs` functions. Each direction has its own, optional context:
+///
+/// - `context(ty = "Ctx")` — the same type for reading and writing;
+/// - `context(read = "R", write = "W")` — separate types, either one optional;
+/// - `context(read(ty = "R", default), write = "W")` — per-direction `default`.
+///
+/// A top-level `default` applies to every declared direction. A derive whose
+/// direction has a context generates `read_netcdf_context` /
+/// `write_netcdf_context` instead of the plain method, and also the plain one
+/// (calling it with `Ctx::default()`) when that direction has `default`.
+#[derive(Debug, Clone)]
 pub(crate) struct ContextSpec {
-    /// The context type. A borrowing type is written with `'_`, e.g.
-    /// `ty = "Lookup<'_>"`.
+    read: Option<DirContext>,
+    write: Option<DirContext>,
+}
+
+/// One direction's context: its type, and whether to also generate the plain
+/// method using `Default::default()`.
+#[derive(Debug, Clone)]
+pub(crate) struct DirContext {
+    /// A borrowing type is written with `'_`, e.g. `"Lookup<'_>"`.
     pub(crate) ty: syn::Type,
-    /// Also generate the context-free methods, using `Default::default()`.
-    #[darling(default)]
     pub(crate) default: bool,
 }
 
+/// The body of a `context(...)`, parsed by darling.
+#[derive(FromMeta)]
+struct ContextSpecFields {
+    #[darling(default)]
+    ty: Option<syn::Type>,
+    #[darling(default)]
+    read: Option<DirContextMeta>,
+    #[darling(default)]
+    write: Option<DirContextMeta>,
+    #[darling(default)]
+    default: bool,
+}
+
+/// `read = "R"` or `read(ty = "R", default)` (likewise `write`).
+struct DirContextMeta {
+    ty: syn::Type,
+    default: bool,
+}
+
+/// The nested form's body, parsed by darling.
+#[derive(FromMeta)]
+struct DirContextFields {
+    ty: syn::Type,
+    #[darling(default)]
+    default: bool,
+}
+
+impl FromMeta for DirContextMeta {
+    /// `read(ty = "R", default)`.
+    fn from_list(items: &[NestedMeta]) -> darling::Result<Self> {
+        let fields = DirContextFields::from_list(items)?;
+        Ok(Self {
+            ty: fields.ty,
+            default: fields.default,
+        })
+    }
+
+    /// `read = "R"`: delegate to darling's own string-literal type parsing.
+    fn from_expr(expr: &syn::Expr) -> darling::Result<Self> {
+        Ok(Self {
+            ty: syn::Type::from_expr(expr)?,
+            default: false,
+        })
+    }
+}
+
+impl FromMeta for ContextSpec {
+    fn from_list(items: &[NestedMeta]) -> darling::Result<Self> {
+        let fields = ContextSpecFields::from_list(items)?;
+        let resolve = |d: DirContextMeta| DirContext {
+            ty: d.ty,
+            default: d.default || fields.default,
+        };
+        let (read, write) = match (fields.ty, fields.read, fields.write) {
+            (Some(_), Some(_), _) | (Some(_), _, Some(_)) => {
+                return Err(darling::Error::custom(
+                    "`context(ty = ...)` sets one type for both directions, so it cannot be \
+                     combined with `read = ...` or `write = ...`",
+                ));
+            }
+            (Some(ty), None, None) => {
+                let both = DirContext {
+                    ty,
+                    default: fields.default,
+                };
+                (Some(both.clone()), Some(both))
+            }
+            (None, None, None) => return Err(darling::Error::custom(CONTEXT_FORM_HELP)),
+            (None, read, write) => (read.map(resolve), write.map(resolve)),
+        };
+        Ok(Self { read, write })
+    }
+
+    fn from_word() -> darling::Result<Self> {
+        Err(darling::Error::custom(CONTEXT_FORM_HELP))
+    }
+
+    fn from_expr(_expr: &syn::Expr) -> darling::Result<Self> {
+        Err(darling::Error::custom(CONTEXT_FORM_HELP))
+    }
+}
+
 impl ContextSpec {
+    /// The context for `dir`, or `None` if that direction has none, in which
+    /// case its derive generates exactly what it would with no `context`.
+    pub(crate) fn for_direction(&self, dir: Direction) -> Option<&DirContext> {
+        match dir {
+            Direction::Read => self.read.as_ref(),
+            Direction::Write => self.write.as_ref(),
+        }
+    }
+}
+
+impl DirContext {
     /// The expression the context-free methods pass as the context. Spanned on
     /// the annotated type so that a missing `Default` impl is reported there
     /// rather than on the derive.

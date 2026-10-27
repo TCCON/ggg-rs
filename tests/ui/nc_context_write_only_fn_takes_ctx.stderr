@@ -1,0 +1,18 @@
+error[E0061]: this function takes 4 arguments but 3 arguments were supplied
+  --> tests/ui/nc_context_write_only_fn_takes_ctx.rs:13:28
+   |
+10 | #[derive(ReadNetcdf)]
+   |          ---------- argument #4 of type `&Ctx` is missing
+...
+13 |     #[netcdf(custom(read = from_nc))]
+   |                            ^^^^^^^
+   |
+note: function defined here
+  --> tests/ui/nc_context_write_only_fn_takes_ctx.rs:6:4
+   |
+ 6 | fn from_nc(_f: &str, _n: &str, _g: &netcdf::Group<'_>, _c: &Ctx) -> netcdf::Result<f64> {
+   |    ^^^^^^^                                             --------
+help: provide the argument
+   |
+13 |     #[netcdf(custom(read = from_nc(ReadNetcdf, ReadNetcdf, ReadNetcdf, /* &Ctx */)))]
+   |                                   ++++++++++++++++++++++++++++++++++++++++++++++++

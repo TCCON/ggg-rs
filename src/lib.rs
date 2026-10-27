@@ -900,6 +900,24 @@ pub fn derive_write_netcdf(input: TokenStream) -> TokenStream {
 /// `_context` versions with `Ctx::default()`, and `Ctx` must implement
 /// [`Default`].
 ///
+/// ## Separate contexts for reading and writing
+///
+/// `ty = ...` uses one type in both directions. To give each direction its own
+/// type, or a context in only one direction, use `read = ...` / `write = ...`
+/// instead (the two forms cannot be mixed):
+///
+/// ```ignore
+/// #[netcdf(context(read = "SiteTable", write = "Provenance"))]  // different types
+/// #[netcdf(context(read = "SiteTable"))]                        // reading only
+/// #[netcdf(context(write = "Provenance"))]                      // writing only
+/// ```
+///
+/// A direction without a context behaves exactly as if there were no `context`
+/// annotation: its derive generates only the plain method, and its `custom` and
+/// `attrs` functions take no `&Ctx` argument. A top-level `default` applies to
+/// every declared direction. To set it for one direction only, use the nested
+/// form, e.g. `context(read(ty = "SiteTable", default), write = "Provenance")`.
+///
 /// ```no_run
 /// use ggg_rs_derive::ReadNetcdf;
 ///

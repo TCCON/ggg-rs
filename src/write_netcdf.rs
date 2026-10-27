@@ -214,8 +214,9 @@ struct WriteNetcdfInput {
     #[darling(default)]
     describe: Option<Override<String>>,
 
-    /// A run-time value passed to every `custom` write function as its last
-    /// argument: `context(ty = "Ctx")`, optionally with `default`.
+    /// A run-time value passed to every `custom` and `attrs` function as its
+    /// last argument; see [`ContextSpec`] for the forms. Only the write half is
+    /// used.
     #[darling(default)]
     context: Option<ContextSpec>,
 
@@ -890,7 +891,11 @@ pub(crate) fn expand(input: TokenStream) -> TokenStream {
     let mut helpers = HelpersNeeded::default();
     let mut field_blocks: Vec<TokenStream2> = Vec::new();
     // With a context, every `custom` function takes it as a final argument.
-    let ctx_arg = parsed.context.as_ref().map(|_| quote!(, __ctx));
+    let context = parsed
+        .context
+        .as_ref()
+        .and_then(|c| c.for_direction(Direction::Write));
+    let ctx_arg = context.map(|_| quote!(, __ctx));
 
     for f in &fields {
         let ident = f.ident.as_ref().unwrap();
@@ -956,7 +961,7 @@ pub(crate) fn expand(input: TokenStream) -> TokenStream {
     });
     let group_attrs = quote! { #(#group_attrs)* };
 
-    let methods = match &parsed.context {
+    let methods = match context {
         None => quote! {
             /// Write this struct's fields into `grp` as netCDF variables and
             /// group attributes. Pass a file root (`FileMut::root_mut()`) or a

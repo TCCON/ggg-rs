@@ -251,3 +251,215 @@ fn test_borrowed_context() {
     let read = Labelled::read_netcdf_context(&file.root().unwrap(), &Prefix(&prefix)).unwrap();
     assert_eq!("tccon_xco2", read.label);
 }
+
+// ---------------------------------------------------------------------------
+// Per-direction contexts
+// ---------------------------------------------------------------------------
+
+/// Write-side context: multiplies the values before storing them.
+#[derive(Default)]
+struct WScale(f64);
+
+/// Read-side context: adds to the stored values.
+#[derive(Default)]
+struct ROffset(f64);
+
+fn put_plain(nc_name: &str, grp: &mut netcdf::GroupMut<'_>, v: &[f64]) -> netcdf::Result<()> {
+    grp.add_dimension(&format!("{nc_name}_n"), v.len())?;
+    grp.add_variable::<f64>(nc_name, &[&format!("{nc_name}_n")])?
+        .put_values(v, ..)?;
+    Ok(())
+}
+
+fn get_plain(nc_name: &str, grp: &netcdf::Group<'_>) -> netcdf::Result<Vec<f64>> {
+    grp.variable(nc_name)
+        .ok_or_else(|| netcdf::Error::NotFound(format!("variable: '{nc_name}'")))?
+        .get_values::<f64, _>(..)
+}
+
+macro_rules! write_fns {
+    ($s:ty, $plain:ident, $scaled:ident) => {
+        #[allow(dead_code)]
+        fn $plain(
+            _d: &$s,
+            v: &[f64],
+            _f: &str,
+            n: &str,
+            g: &mut netcdf::GroupMut<'_>,
+        ) -> netcdf::Result<()> {
+            put_plain(n, g, v)
+        }
+        #[allow(dead_code)]
+        fn $scaled(
+            _d: &$s,
+            v: &[f64],
+            _f: &str,
+            n: &str,
+            g: &mut netcdf::GroupMut<'_>,
+            ctx: &WScale,
+        ) -> netcdf::Result<()> {
+            let scaled: Vec<f64> = v.iter().map(|x| x * ctx.0).collect();
+            put_plain(n, g, &scaled)
+        }
+    };
+}
+
+fn read_plain(_f: &str, n: &str, g: &netcdf::Group<'_>) -> netcdf::Result<Vec<f64>> {
+    get_plain(n, g)
+}
+
+fn read_offset(
+    _f: &str,
+    n: &str,
+    g: &netcdf::Group<'_>,
+    ctx: &ROffset,
+) -> netcdf::Result<Vec<f64>> {
+    Ok(get_plain(n, g)?.into_iter().map(|x| x + ctx.0).collect())
+}
+
+fn create(path: &std::path::Path) -> netcdf::FileMut {
+    netcdf::create(path).unwrap()
+}
+
+fn stored(path: &std::path::Path) -> Vec<f64> {
+    get_plain("values", &netcdf::open(path).unwrap().root().unwrap()).unwrap()
+}
+
+/// Different types per direction: each derive's functions get their own.
+#[derive(Debug, PartialEq, ReadNetcdf, WriteNetcdf)]
+#[netcdf(context(read = "ROffset", write = "WScale"))]
+struct BothDirs {
+    #[netcdf(custom(write = both_write, read = read_offset))]
+    values: Vec<f64>,
+}
+write_fns!(BothDirs, _both_plain, both_write);
+
+#[test]
+fn test_separate_read_and_write_contexts() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("both.nc");
+    BothDirs {
+        values: vec![1.0, 2.0],
+    }
+    .write_netcdf_context(&mut create(&path).root_mut().unwrap(), &WScale(2.0))
+    .unwrap();
+    assert_eq!(vec![2.0, 4.0], stored(&path));
+
+    let file = netcdf::open(&path).unwrap();
+    let read = BothDirs::read_netcdf_context(&file.root().unwrap(), &ROffset(1.0)).unwrap();
+    assert_eq!(vec![3.0, 5.0], read.values);
+}
+
+/// Read-only context: writing uses the plain method and context-free
+/// functions; reading takes the context.
+#[derive(Debug, PartialEq, ReadNetcdf, WriteNetcdf)]
+#[netcdf(context(read = "ROffset"))]
+struct ReadOnlyCtx {
+    #[netcdf(custom(write = ro_write, read = read_offset))]
+    values: Vec<f64>,
+}
+write_fns!(ReadOnlyCtx, ro_write, _ro_scaled);
+
+#[test]
+fn test_read_only_context() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("ro.nc");
+    ReadOnlyCtx {
+        values: vec![1.0, 2.0],
+    }
+    .write_netcdf(&mut create(&path).root_mut().unwrap())
+    .unwrap();
+    assert_eq!(vec![1.0, 2.0], stored(&path));
+
+    let file = netcdf::open(&path).unwrap();
+    let read = ReadOnlyCtx::read_netcdf_context(&file.root().unwrap(), &ROffset(10.0)).unwrap();
+    assert_eq!(vec![11.0, 12.0], read.values);
+}
+
+/// Write-only context: the mirror image.
+#[derive(Debug, PartialEq, ReadNetcdf, WriteNetcdf)]
+#[netcdf(context(write = "WScale"))]
+struct WriteOnlyCtx {
+    #[netcdf(custom(write = wo_write, read = read_plain))]
+    values: Vec<f64>,
+}
+write_fns!(WriteOnlyCtx, _wo_plain, wo_write);
+
+#[test]
+fn test_write_only_context() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("wo.nc");
+    WriteOnlyCtx {
+        values: vec![1.0, 2.0],
+    }
+    .write_netcdf_context(&mut create(&path).root_mut().unwrap(), &WScale(3.0))
+    .unwrap();
+
+    let file = netcdf::open(&path).unwrap();
+    let read = WriteOnlyCtx::read_netcdf(&file.root().unwrap()).unwrap();
+    assert_eq!(vec![3.0, 6.0], read.values);
+}
+
+/// `default` inside one direction only: the plain `read_netcdf` exists (and
+/// uses `ROffset::default()`), while writing still needs a context.
+#[derive(Debug, PartialEq, ReadNetcdf, WriteNetcdf)]
+#[netcdf(context(read(ty = "ROffset", default), write = "WScale"))]
+struct ReadDefault {
+    #[netcdf(custom(write = rd_write, read = read_offset))]
+    values: Vec<f64>,
+}
+write_fns!(ReadDefault, _rd_plain, rd_write);
+
+#[test]
+fn test_per_direction_default() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("rd.nc");
+    ReadDefault {
+        values: vec![1.0, 2.0],
+    }
+    .write_netcdf_context(&mut create(&path).root_mut().unwrap(), &WScale(2.0))
+    .unwrap();
+
+    let file = netcdf::open(&path).unwrap();
+    let root = file.root().unwrap();
+    assert_eq!(
+        vec![2.0, 4.0],
+        ReadDefault::read_netcdf(&root).unwrap().values
+    );
+    assert_eq!(
+        vec![3.0, 5.0],
+        ReadDefault::read_netcdf_context(&root, &ROffset(1.0))
+            .unwrap()
+            .values
+    );
+}
+
+/// A top-level `default` applies to every declared direction.
+#[derive(Debug, PartialEq, ReadNetcdf, WriteNetcdf)]
+#[netcdf(context(read = "ROffset", write = "WScale", default))]
+struct AllDefault {
+    #[netcdf(custom(write = ad_write, read = read_offset))]
+    values: Vec<f64>,
+}
+write_fns!(AllDefault, _ad_plain, ad_write);
+
+#[test]
+fn test_top_level_default_applies_to_both() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("ad.nc");
+    // `WScale::default()` is 0, so the plain write stores zeros.
+    AllDefault {
+        values: vec![1.0, 2.0],
+    }
+    .write_netcdf(&mut create(&path).root_mut().unwrap())
+    .unwrap();
+    assert_eq!(vec![0.0, 0.0], stored(&path));
+
+    let file = netcdf::open(&path).unwrap();
+    assert_eq!(
+        vec![0.0, 0.0],
+        AllDefault::read_netcdf(&file.root().unwrap())
+            .unwrap()
+            .values
+    );
+}
