@@ -1,3 +1,30 @@
+error[E0277]: this `custom(read = ...)` function takes a context argument, but this struct has no read context
+  --> tests/ui/nc_context_write_only_fn_takes_ctx.rs:13:28
+   |
+10 | #[derive(ReadNetcdf)]
+   |          ---------- required by a bound introduced by this call
+...
+13 |     #[netcdf(custom(read = from_nc))]
+   |                            ^^^^^^^ remove the final context parameter from this function
+   |
+help: the trait `__ExpectCustomRead` is not implemented for `__TakesContext`
+  --> tests/ui/nc_context_write_only_fn_takes_ctx.rs:10:10
+   |
+10 | #[derive(ReadNetcdf)]
+   |          ^^^^^^^^^^
+   = note: `context(...)` declares a context for writing only, so `ReadNetcdf` does not pass one; add `read = "..."` to `context(...)` if this function needs it
+help: the trait `__ExpectCustomRead` is implemented for `__TakesNoContext`
+  --> tests/ui/nc_context_write_only_fn_takes_ctx.rs:10:10
+   |
+10 | #[derive(ReadNetcdf)]
+   |          ^^^^^^^^^^
+note: required by a bound in `__check_CustomRead`
+  --> tests/ui/nc_context_write_only_fn_takes_ctx.rs:10:10
+   |
+10 | #[derive(ReadNetcdf)]
+   |          ^^^^^^^^^^ required by this bound in `__check_CustomRead`
+   = note: this error originates in the derive macro `ReadNetcdf` (in Nightly builds, run with -Z macro-backtrace for more info)
+
 error[E0061]: this function takes 4 arguments but 3 arguments were supplied
   --> tests/ui/nc_context_write_only_fn_takes_ctx.rs:13:28
    |

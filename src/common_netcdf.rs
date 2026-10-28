@@ -386,6 +386,265 @@ impl DirContext {
 }
 
 // ---------------------------------------------------------------------------
+// Signature checks for user functions that may take a context
+// ---------------------------------------------------------------------------
+
+/// A kind of user function whose arity depends on the struct's `context`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CheckedFn {
+    CustomRead,
+    CustomWrite,
+    FieldAttrs,
+    GroupAttrs,
+}
+
+impl CheckedFn {
+    const ALL: [Self; 4] = [
+        Self::CustomRead,
+        Self::CustomWrite,
+        Self::FieldAttrs,
+        Self::GroupAttrs,
+    ];
+
+    fn direction(self) -> Direction {
+        match self {
+            Self::CustomRead => Direction::Read,
+            _ => Direction::Write,
+        }
+    }
+
+    /// The number of arguments without a context.
+    fn base_arity(self) -> usize {
+        match self {
+            Self::CustomRead => 3,
+            Self::CustomWrite | Self::FieldAttrs => 5,
+            Self::GroupAttrs => 2,
+        }
+    }
+
+    /// How the annotation is written, for messages.
+    fn annotation(self) -> &'static str {
+        match self {
+            Self::CustomRead => "`custom(read = ...)`",
+            Self::CustomWrite => "`custom(write = ...)`",
+            Self::FieldAttrs => "field-level `attrs(func = ...)`",
+            Self::GroupAttrs => "container-level `attrs(func = ...)`",
+        }
+    }
+
+    /// The expected signature without a context, for messages.
+    fn signature(self) -> &'static str {
+        match self {
+            Self::CustomRead => "fn(&str, &str, &netcdf::Group<'_>) -> netcdf::Result<FieldTy>",
+            Self::CustomWrite => {
+                "fn(&Self, &FieldTy, &str, &str, &mut netcdf::GroupMut<'_>) -> netcdf::Result<()>"
+            }
+            Self::FieldAttrs => {
+                "fn(&Self, &FieldTy, &str, &str, &mut netcdf::VariableMut<'_>) -> netcdf::Result<()>"
+            }
+            Self::GroupAttrs => "fn(&Self, &mut netcdf::GroupMut<'_>) -> netcdf::Result<()>",
+        }
+    }
+
+    fn ident(self, prefix: &str) -> syn::Ident {
+        let suffix = match self {
+            Self::CustomRead => "CustomRead",
+            Self::CustomWrite => "CustomWrite",
+            Self::FieldAttrs => "FieldAttrs",
+            Self::GroupAttrs => "GroupAttrs",
+        };
+        syn::Ident::new(&format!("{prefix}{suffix}"), proc_macro2::Span::call_site())
+    }
+}
+
+/// `on_unimplemented` strings are format strings, so literal braces are doubled.
+fn escape_braces(s: &str) -> String {
+    s.replace('{', "{{").replace('}', "}}")
+}
+
+/// Generates a check that a user function's *argument count* matches whether
+/// the struct passes it a context, so that a mismatch is reported in terms of
+/// the `context(...)` annotation rather than as a bare "takes 4 arguments but 3
+/// were supplied".
+///
+/// Only the arity is checked, never the argument types. The function is still
+/// called directly, so the usual coercions (such as `&Vec<f64>` to a `&[f64]`
+/// parameter) keep working, and any other signature mistake gets rustc's
+/// normal error from that call.
+pub(crate) struct ArityChecks<'a> {
+    context: Option<&'a ContextSpec>,
+    used: Vec<CheckedFn>,
+}
+
+impl<'a> ArityChecks<'a> {
+    pub(crate) fn new(context: Option<&'a ContextSpec>) -> Self {
+        Self {
+            context,
+            used: Vec::new(),
+        }
+    }
+
+    fn dir_context(&self, dir: Direction) -> Option<&DirContext> {
+        self.context.and_then(|c| c.for_direction(dir))
+    }
+
+    /// An expression that evaluates to the function at `path`, checking its
+    /// arity on the way. Call the result with the real arguments. The function
+    /// is bound once so that a generic function is instantiated once, for both
+    /// the check and the call. Spanned on `path` so errors point at the
+    /// annotation.
+    pub(crate) fn checked(
+        &mut self,
+        kind: CheckedFn,
+        path: &syn::Path,
+    ) -> proc_macro2::TokenStream {
+        if !self.used.contains(&kind) {
+            self.used.push(kind);
+        }
+        let check = kind.ident("__check_");
+        let span = syn::spanned::Spanned::span(path);
+        // Parenthesized so that, at the start of a statement, the block is
+        // still an expression that can be called rather than a block followed
+        // by a tuple.
+        quote::quote_spanned! {span=>
+            ({
+                let __f = #path;
+                #check(&__f, ::core::marker::PhantomData);
+                __f
+            })
+        }
+    }
+
+    /// The trait and function definitions behind [`Self::checked`], to splice
+    /// into the generated method body. Empty if nothing was checked.
+    pub(crate) fn defs(&self) -> proc_macro2::TokenStream {
+        let mut out = proc_macro2::TokenStream::new();
+        if self.used.is_empty() {
+            return out;
+        }
+        out.extend(quote::quote! {
+            // Markers for "called without / with a context". Never constructed.
+            #[allow(dead_code)]
+            struct __TakesNoContext;
+            #[allow(dead_code)]
+            struct __TakesContext;
+        });
+        for kind in CheckedFn::ALL {
+            if self.used.contains(&kind) {
+                out.extend(self.defs_for(kind));
+            }
+        }
+        out
+    }
+
+    fn defs_for(&self, kind: CheckedFn) -> proc_macro2::TokenStream {
+        let dir = kind.direction();
+        let derive = dir.derive_name();
+        let key = dir.key();
+        let annotation = kind.annotation();
+        let ctx = self.dir_context(dir);
+        let ctx_name = ctx.map(|c| type_name(&c.ty));
+        let other_dir = match dir {
+            Direction::Read => Direction::Write,
+            Direction::Write => Direction::Read,
+        };
+        let other_has_ctx = self.dir_context(other_dir).is_some();
+
+        // The arity trait: matches any function with the right argument
+        // count, recording which count in the marker `M`. Its message covers a
+        // function with neither count.
+        let arity = kind.ident("__Arity");
+        let expect = kind.ident("__Expect");
+        let check = kind.ident("__check_");
+        let n = kind.base_arity();
+        let args: Vec<syn::Ident> = (0..=n)
+            .map(|i| syn::Ident::new(&format!("__A{i}"), proc_macro2::Span::call_site()))
+            .collect();
+        let (no_ctx_args, with_ctx_args) = (&args[..n], &args[..]);
+
+        let expected_sig = match &ctx_name {
+            None => kind.signature().to_string(),
+            Some(name) => format!("{}, plus a final `&{name}` argument", kind.signature()),
+        };
+        let arity_msg = escape_braces(&format!(
+            "this {annotation} function does not have the expected signature `{expected_sig}`"
+        ));
+        let arity_label = escape_braces(&format!("{annotation} expects `{expected_sig}`"));
+
+        // The expectation trait: implemented only for the marker this
+        // direction allows, so the other one triggers the tailored message.
+        let (allowed, expect_msg, expect_label, expect_note) = match &ctx_name {
+            None => {
+                let note = if other_has_ctx {
+                    format!(
+                        "`context(...)` declares a context for {} only, so `{derive}` does \
+                         not pass one; add `{key} = \"...\"` to `context(...)` if this function \
+                         needs it",
+                        match other_dir {
+                            Direction::Read => "reading",
+                            Direction::Write => "writing",
+                        }
+                    )
+                } else {
+                    format!(
+                        "this struct has no `context(...)` annotation, so `{derive}` passes no \
+                         context; add `#[netcdf(context({key} = \"...\"))]` if this function \
+                         needs one"
+                    )
+                };
+                (
+                    quote::quote!(__TakesNoContext),
+                    format!(
+                        "this {annotation} function takes a context argument, but this struct \
+                         has no {key} context"
+                    ),
+                    "remove the final context parameter from this function".to_string(),
+                    note,
+                )
+            }
+            Some(name) => (
+                quote::quote!(__TakesContext),
+                format!("this {annotation} function does not take the {key} context, `&{name}`"),
+                format!("add a final `&{name}` parameter to this function"),
+                format!(
+                    "`context(...)` declares a {key} context, so `{derive}` passes `&{name}` as \
+                     the final argument to every {annotation} function"
+                ),
+            ),
+        };
+        let expect_msg = escape_braces(&expect_msg);
+        let expect_label = escape_braces(&expect_label);
+        let expect_note = escape_braces(&expect_note);
+
+        quote::quote! {
+            #[diagnostic::on_unimplemented(message = #arity_msg, label = #arity_label)]
+            trait #arity<__Args, __M> {}
+            impl<__F, #(#no_ctx_args,)* __R> #arity<(#(#no_ctx_args,)* __R), __TakesNoContext> for __F
+            where
+                __F: Fn(#(#no_ctx_args),*) -> __R,
+            {}
+            impl<__F, #(#with_ctx_args,)* __R> #arity<(#(#with_ctx_args,)* __R), __TakesContext> for __F
+            where
+                __F: Fn(#(#with_ctx_args),*) -> __R,
+            {}
+
+            #[diagnostic::on_unimplemented(
+                message = #expect_msg,
+                label = #expect_label,
+                note = #expect_note
+            )]
+            trait #expect {}
+            impl #expect for #allowed {}
+
+            fn #check<__F: #arity<__Args, __M>, __Args, __M: #expect>(
+                _: &__F,
+                _: ::core::marker::PhantomData<__M>,
+            ) {}
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // attrs
 // ---------------------------------------------------------------------------
 

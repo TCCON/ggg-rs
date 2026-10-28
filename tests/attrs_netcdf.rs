@@ -333,3 +333,52 @@ fn test_attrs_see_written_data() {
         .unwrap();
     assert_eq!(4.0, total);
 }
+
+// ---------------------------------------------------------------------------
+// Generic attrs functions
+// ---------------------------------------------------------------------------
+
+/// Generic over the struct and the field: usable on any field of any struct.
+fn tag_any<S, V>(
+    _data: &S,
+    _values: &V,
+    field_name: &str,
+    _nc_name: &str,
+    var: &mut netcdf::VariableMut<'_>,
+) -> netcdf::Result<()> {
+    var.put_attribute("tag", field_name)?;
+    Ok(())
+}
+
+fn group_tag_any<S>(_data: &S, grp: &mut netcdf::GroupMut<'_>) -> netcdf::Result<()> {
+    grp.add_attribute("tagged", 1i32)?;
+    Ok(())
+}
+
+#[derive(WriteNetcdf)]
+#[netcdf(attrs(func = group_tag_any))]
+struct Tagged {
+    #[netcdf(attrs(func = tag_any))]
+    xco2: Vec<f64>,
+    #[netcdf(attrs(func = tag_any))]
+    n: i32,
+}
+
+#[test]
+fn test_generic_attrs_functions() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("tagged.nc");
+    write(&path, |root| {
+        Tagged {
+            xco2: vec![400.0],
+            n: 1,
+        }
+        .write_netcdf(root)
+        .unwrap()
+    });
+
+    let file = netcdf::open(&path).unwrap();
+    assert_eq!("xco2", var_str(&file, "xco2", "tag"));
+    assert_eq!("n", var_str(&file, "n", "tag"));
+    assert!(file.attribute("tagged").is_some());
+}

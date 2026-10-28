@@ -143,3 +143,57 @@ fn test_custom_read_error_propagates() {
         "unexpected error message: {msg}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Generic custom functions
+// ---------------------------------------------------------------------------
+
+/// Generic over the struct and the element type: the signature check must
+/// not get in the way of inference.
+fn write_any<S, T: netcdf::NcTypeDescriptor + Copy>(
+    _data: &S,
+    v: &[T],
+    _field: &str,
+    nc_name: &str,
+    grp: &mut netcdf::GroupMut<'_>,
+) -> netcdf::Result<()> {
+    grp.add_dimension(&format!("{nc_name}_n"), v.len())?;
+    grp.add_variable::<T>(nc_name, &[&format!("{nc_name}_n")])?
+        .put_values(v, ..)?;
+    Ok(())
+}
+
+/// Generic over the returned type, fixed only by the field it is assigned to.
+fn read_any<T: netcdf::NcTypeDescriptor + Copy>(
+    _field: &str,
+    nc_name: &str,
+    grp: &netcdf::Group<'_>,
+) -> netcdf::Result<Vec<T>> {
+    grp.variable(nc_name)
+        .ok_or_else(|| netcdf::Error::NotFound(format!("variable: '{nc_name}'")))?
+        .get_values::<T, _>(..)
+}
+
+#[derive(Debug, PartialEq, ReadNetcdf, WriteNetcdf)]
+struct Generic {
+    #[netcdf(custom(write = write_any, read = read_any))]
+    floats: Vec<f64>,
+    #[netcdf(custom(write = write_any, read = read_any))]
+    ints: Vec<i32>,
+}
+
+#[test]
+fn test_generic_custom_functions() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("generic.nc");
+    let data = Generic {
+        floats: vec![1.5, 2.5],
+        ints: vec![3, 4, 5],
+    };
+    {
+        let mut file = netcdf::create(&path).unwrap();
+        data.write_netcdf(&mut file.root_mut().unwrap()).unwrap();
+    }
+    let file = netcdf::open(&path).unwrap();
+    assert_eq!(data, Generic::read_netcdf(&file.root().unwrap()).unwrap());
+}

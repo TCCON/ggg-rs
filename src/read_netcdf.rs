@@ -4,9 +4,9 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 
 use crate::common_netcdf::{
-    AttrsSpec, ContextSpec, CustomSpec, DimList, Direction, FloatTy, MapFns, MapSpec, NcKind,
-    OnFill, UnpackSpec, apply_rename_all, float_element_type, infer_kind, kind_from_str, nc_name,
-    not_float_message, resolve_unpack, validate_dims,
+    ArityChecks, AttrsSpec, CheckedFn, ContextSpec, CustomSpec, DimList, Direction, FloatTy,
+    MapFns, MapSpec, NcKind, OnFill, UnpackSpec, apply_rename_all, float_element_type, infer_kind,
+    kind_from_str, nc_name, not_float_message, resolve_unpack, validate_dims,
 };
 
 /// What unpacking a single field needs, once the container default, the field
@@ -52,6 +52,7 @@ pub(crate) fn expand(input: TokenStream) -> TokenStream {
         .as_ref()
         .and_then(|c| c.for_direction(Direction::Read));
     let ctx_arg = context.map(|_| quote!(, __ctx));
+    let mut arity = ArityChecks::new(parsed.context.as_ref());
 
     for f in &fields {
         let fieldname = f.ident.as_ref().unwrap().clone();
@@ -67,6 +68,7 @@ pub(crate) fn expand(input: TokenStream) -> TokenStream {
                     continue;
                 };
                 let field_str = fieldname.to_string();
+                let read_fn = arity.checked(CheckedFn::CustomRead, read_fn);
                 field_blocks.push(quote! {
                     let #fieldname = #read_fn(#field_str, #name, grp #ctx_arg)?;
                 });
@@ -117,7 +119,8 @@ pub(crate) fn expand(input: TokenStream) -> TokenStream {
         return e.write_errors().into();
     }
 
-    let helper_fns = helpers.tokens();
+    let mut helper_fns = helpers.tokens();
+    helper_fns.extend(arity.defs());
     let (impl_generics, ty_generics, where_clause) = parsed.generics.split_for_impl();
     let methods = match context {
         None => quote! {

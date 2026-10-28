@@ -37,9 +37,9 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 
 use crate::common_netcdf::{
-    AttrsSpec, ContextSpec, CustomSpec, DimList, Direction, FloatTy, MapFns, MapSpec, NcKind,
-    ScaleOffsetSpec, apply_rename_all, float_element_type, infer_kind, kind_from_str, nc_name,
-    not_float_message, validate_dims,
+    ArityChecks, AttrsSpec, CheckedFn, ContextSpec, CustomSpec, DimList, Direction, FloatTy,
+    MapFns, MapSpec, NcKind, ScaleOffsetSpec, apply_rename_all, float_element_type, infer_kind,
+    kind_from_str, nc_name, not_float_message, validate_dims,
 };
 
 // ---------------------------------------------------------------------------
@@ -697,6 +697,7 @@ fn field_block(
     description: Option<(String, String)>,
     map_fns: MapFns<'_>,
     ctx_arg: Option<&TokenStream2>,
+    arity: &mut ArityChecks<'_>,
 ) -> TokenStream2 {
     let ident = field.ident.as_ref().unwrap();
     let mapped = map_fns.any();
@@ -776,7 +777,7 @@ fn field_block(
     // above.
     let field_str = ident.to_string();
     for a in &field.attrs_fns {
-        let func = &a.func;
+        let func = arity.checked(CheckedFn::FieldAttrs, &a.func);
         attr_stmts.extend(quote! {
             #func(self, &self.#ident, #field_str, #name, &mut __var #ctx_arg)?;
         });
@@ -896,6 +897,7 @@ pub(crate) fn expand(input: TokenStream) -> TokenStream {
         .as_ref()
         .and_then(|c| c.for_direction(Direction::Write));
     let ctx_arg = context.map(|_| quote!(, __ctx));
+    let mut arity = ArityChecks::new(parsed.context.as_ref());
 
     for f in &fields {
         let ident = f.ident.as_ref().unwrap();
@@ -910,6 +912,7 @@ pub(crate) fn expand(input: TokenStream) -> TokenStream {
                     continue;
                 };
                 let field_str = ident.to_string();
+                let write_fn = arity.checked(CheckedFn::CustomWrite, write_fn);
                 field_blocks.push(quote! {
                     #write_fn(self, &self.#ident, #field_str, #name, grp #ctx_arg)?;
                 });
@@ -944,6 +947,7 @@ pub(crate) fn expand(input: TokenStream) -> TokenStream {
             description,
             map_fns,
             ctx_arg.as_ref(),
+            &mut arity,
         ));
     }
 
@@ -951,15 +955,21 @@ pub(crate) fn expand(input: TokenStream) -> TokenStream {
         return e.write_errors().into();
     }
 
-    let helper_fns = helpers.tokens();
     let (impl_generics, ty_generics, where_clause) = parsed.generics.split_for_impl();
     // Group-attribute functions run after the fields, so they can inspect what
     // was written.
-    let group_attrs = parsed.attrs_fns.iter().map(|a| {
-        let func = &a.func;
-        quote! { #func(self, grp #ctx_arg)?; }
-    });
+    let group_attrs: Vec<TokenStream2> = parsed
+        .attrs_fns
+        .iter()
+        .map(|a| {
+            let func = arity.checked(CheckedFn::GroupAttrs, &a.func);
+            quote! { #func(self, grp #ctx_arg)?; }
+        })
+        .collect();
     let group_attrs = quote! { #(#group_attrs)* };
+    // Emitted last: every checked call above registers what it needs.
+    let mut helper_fns = helpers.tokens();
+    helper_fns.extend(arity.defs());
 
     let methods = match context {
         None => quote! {
