@@ -898,6 +898,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "float-cmp"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "98de4bbd547a563b716d8dfa9aad1cb19bfab00f4fa09a6a4ed21dbcf44ce9c4"
+dependencies = [
+ "num-traits",
+]
+
+[[package]]
 name = "fnv"
 version = "1.0.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1064,7 +1073,8 @@ dependencies = [
  "lstsq",
  "mlua",
  "nalgebra",
- "ndarray",
+ "nccompare",
+ "ndarray 0.17.2",
  "ndarray-npy",
  "ndarray-stats",
  "netcdf",
@@ -1598,6 +1608,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "nccompare"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "error-stack 0.4.1",
+ "float-cmp",
+ "itertools 0.11.0",
+ "ndarray 0.15.6",
+ "netcdf",
+ "num-traits",
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "ndarray"
+version = "0.15.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "adb12d4e967ec485a5f71c6311fe28158e9d6f4bc4a447b474184d0f91a8fa32"
+dependencies = [
+ "matrixmultiply",
+ "num-complex",
+ "num-integer",
+ "num-traits",
+ "rawpointer",
+]
+
+[[package]]
 name = "ndarray"
 version = "0.17.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1620,7 +1657,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "58e8a348bca0075000d999d750420d74434fd0d3e0993b456554f885e7657a11"
 dependencies = [
  "byteorder",
- "ndarray",
+ "ndarray 0.17.2",
  "num-complex",
  "num-traits",
  "py_literal",
@@ -1635,7 +1672,7 @@ checksum = "9b6e54a8b65764f71827a90ca1d56965ec0c67f069f996477bd493402a901d1f"
 dependencies = [
  "indexmap 2.14.0",
  "itertools 0.13.0",
- "ndarray",
+ "ndarray 0.17.2",
  "noisy_float",
  "num-integer",
  "num-traits",
@@ -1650,7 +1687,7 @@ checksum = "db1b055d2ad9d2e845876173c99ac9d8874a56413d5579618da22df35abe342c"
 dependencies = [
  "bitflags 2.13.1",
  "libc",
- "ndarray",
+ "ndarray 0.17.2",
  "netcdf-sys",
  "semver",
 ]

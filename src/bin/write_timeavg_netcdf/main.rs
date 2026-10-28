@@ -3,9 +3,9 @@ use std::{path::PathBuf, process::ExitCode};
 use clap::Parser;
 use clap_verbosity_flag::{InfoLevel, Verbosity};
 use ggg_rs::logging::init_logging;
+use itertools::Itertools;
 
-use crate::data_structures::Gas;
-use average_site::read_l2::{ch4_bin_def, co2_bin_def};
+use crate::{average_site::read_l2::bin_def_from_gas, data_structures::Gas};
 
 mod average_site;
 #[cfg(test)]
@@ -64,14 +64,19 @@ struct AvgSiteCli {
     /// The width of the time bins in minutes.
     #[clap(short = 'm', long, default_value_t = 30)]
     time_bin_minutes: u32,
+
+    /// Control which gases to average, repeat to include multiple gases.
+    #[clap(short = 'g', long, default_values_t = vec![Gas::CO2, Gas::CH4])]
+    gas: Vec<Gas>,
 }
 
 impl AvgSiteCli {
     fn driver(&self) -> error_stack::Result<(), CliError> {
+        let gas_defs = self.gas.iter().map(|g| bin_def_from_gas(*g)).collect_vec();
         average_site::average_site_driver(
             &self.level2_file,
             self.get_timeavg_file()?.as_path(),
-            &[co2_bin_def(), ch4_bin_def()],
+            &gas_defs,
             self.get_time_bin(),
             None,
         )

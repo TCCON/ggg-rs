@@ -2,7 +2,7 @@ use std::path::Path;
 
 use error_stack::ResultExt;
 
-use crate::{average_site::read_l2::SourceBinDef, CliError};
+use crate::{average_site::read_l2::SourceBinDef, data_structures::AllSitesMetaAttrs, CliError};
 
 mod assign_l2_time_bins;
 mod average_time_bins;
@@ -29,6 +29,7 @@ pub(super) fn average_site_driver(
     let site_meta = read_l2::read_tccon_metadata(l2_file).change_context_lazy(|| {
         CliError::Context(format!("Error reading metadata from {}", l2_file.display()))
     })?;
+
     for var_def in gas_defs {
         let l2_filterer = filter_l2::get_l2_filterer_for_site(&site_id);
         let l2_binner = assign_l2_time_bins::get_l2_time_binner_for_site(&site_id);
@@ -57,13 +58,26 @@ pub(super) fn average_site_driver(
                     output_file.display()
                 ))
             })?;
-        binned_data.write_netcdf(&mut grp).change_context_lazy(|| {
-            CliError::Context(format!(
-                "Error writing data to the '{}' group in the output file {}",
-                var_def.output_group,
-                output_file.display()
-            ))
-        })?;
+
+        // Creating this every time through the loop is a little wasteful, but I
+        // decided that it's worth the cleaner interface of the L2 reader handling
+        // the site_id -> station_id mapping rather than passing the station ID to
+        // the L2 reader function stack.
+        let meta_for_write = AllSitesMetaAttrs::from_one(
+            site_meta.clone(),
+            site_id.clone(),
+            filtered_l2_data.station_id,
+        );
+
+        binned_data
+            .write_netcdf_context(&mut grp, &meta_for_write)
+            .change_context_lazy(|| {
+                CliError::Context(format!(
+                    "Error writing data to the '{}' group in the output file {}",
+                    var_def.output_group,
+                    output_file.display()
+                ))
+            })?;
 
         // If this errors, it's a bug, because this variable should be written.
         // The most likely mistake is the variable's name changed.
@@ -83,16 +97,8 @@ pub(super) fn average_site_driver(
             output_file.display()
         ))
     })?;
-    site_meta
-        .write_netcdf(&mut out_root)
-        .change_context_lazy(|| {
-            CliError::Context(format!(
-                "Error writing site metadata to {}",
-                output_file.display()
-            ))
-        })?;
 
-    // Lastly, create the history and creation time attributes
+    // Lastly, create the history and creation time attributes.
     let create_time = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%z").to_string();
     let history = format!(
         "{}: Per-site time average file {} created by write_timeavg_netcdf from v{} of ggg-rs",
@@ -126,7 +132,7 @@ pub(super) fn average_site_driver(
 mod tests {
     use super::*;
     use crate::{
-        common_test::{check_timeavg_data, CheckTimeAvgFields},
+        common_test::{check_station_meta_attrs, check_timeavg_data, CheckTimeAvgFields},
         data_structures::{Gas, TimeAvgData},
     };
     use ggg_rs::test_utils::{compare_nc_attrs, init_test_logging, NCDF_F32_DEFAULT_FILL};
@@ -173,6 +179,7 @@ mod tests {
             }
         });
         let expected_ds = netcdf::open(expected_file).unwrap();
+        let test_grp = output_ds.group(Gas::CO2.output_group()).unwrap().unwrap();
 
         let fields = CheckTimeAvgFields {
             solar_time: "solar_time_bin",
@@ -182,16 +189,7 @@ mod tests {
         check_timeavg_data(&expected_ds.root().unwrap(), timeavg_data, &fields);
 
         // Last, check the values of the key metadata attributes that we should copy over
-        compare_nc_attrs(
-            &expected_ds,
-            &output_ds,
-            &[
-                "source_release_lag",
-                "source_data_doi",
-                "source_data_reference",
-                "source_data_reference",
-                "all_public_after",
-            ],
-        );
+        // The test uses Park Falls, which is station ID 29 as of 27 Oct 2029
+        check_station_meta_attrs(&expected_ds, &test_grp, 29);
     }
 }

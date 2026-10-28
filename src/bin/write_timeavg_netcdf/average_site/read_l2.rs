@@ -60,6 +60,13 @@ pub(crate) fn ch4_bin_def() -> SourceBinDef {
     }
 }
 
+pub(crate) fn bin_def_from_gas(gas: Gas) -> SourceBinDef {
+    match gas {
+        Gas::CO2 => co2_bin_def(),
+        Gas::CH4 => ch4_bin_def(),
+    }
+}
+
 /// Read data for a single Xgas from a private or public L2 TCCON file.
 pub(crate) fn read_file(
     nc_file: &Path,
@@ -199,7 +206,10 @@ fn read_either_file(
         ggg_rs::utils::site_id_from_filename(&file_path).change_context_lazy(|| {
             GggNcError::context("Error getting the site ID from the input L2 file name")
         })?;
-    let station_id = crate::station_ids::get_mip_station_id(&tccon_site_id, None)
+    let mip_mapping = crate::station_ids::load_mip_config(None)
+        .change_context_lazy(|| GggNcError::context("error loading the MIP station mapping"))?;
+    let station_id = mip_mapping
+        .get_station_id(&tccon_site_id)
         .change_context_lazy(|| {
             GggNcError::context(format!(
                 "Error getting MIP station ID for the input L2 file {}",
@@ -262,6 +272,20 @@ fn read_either_file(
 pub(crate) fn read_tccon_metadata(
     file: &Path,
 ) -> error_stack::Result<StationMetaAttrs, GggNcError> {
+    let tccon_site_id = ggg_rs::utils::site_id_from_filename(&file).change_context_lazy(|| {
+        GggNcError::context("Error getting the site ID from the input L2 file name")
+    })?;
+    let mip_mapping = crate::station_ids::load_mip_config(None)
+        .change_context_lazy(|| GggNcError::context("error loading the MIP station mapping"))?;
+    let station_name = mip_mapping
+        .get_station_name(&tccon_site_id)
+        .change_context_lazy(|| {
+            GggNcError::context(format!(
+                "Error getting MIP station name for the input L2 file {}",
+                file.display()
+            ))
+        })?;
+
     let ds = netcdf::open(file).change_context_lazy(|| {
         GggNcError::Context(format!(
             "Error opening file {} to read metadata",
@@ -295,6 +319,7 @@ pub(crate) fn read_tccon_metadata(
     let source_data_reference = nc_utils::get_string_attr(&ds, "data_reference")?;
 
     Ok(StationMetaAttrs {
+        station_name: station_name.to_string(),
         source_release_lag,
         source_data_doi,
         source_data_revision,

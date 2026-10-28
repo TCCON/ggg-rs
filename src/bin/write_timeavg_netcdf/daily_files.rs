@@ -5,7 +5,7 @@ use ggg_rs::utils::{iter_dates, site_id_from_filename};
 use indexmap::IndexMap;
 
 use crate::{
-    data_structures::{AllGasAvgData, Gas, TimeAvgData},
+    data_structures::{AllGasAvgData, AllSitesMetaAttrs, Gas, TimeAvgData},
     CliError,
 };
 
@@ -19,14 +19,22 @@ pub(super) fn daily_files_driver<F: AsRef<Path>>(
     end_date: Option<chrono::NaiveDate>,
 ) -> error_stack::Result<(), CliError> {
     let all_data = load_site_files(average_files, gases)?;
+    let all_metadata = AllSitesMetaAttrs::from_site_files(average_files, gases)?;
     let gas_date_ranges =
         split_dates::get_date_range_all_gases(&all_data, gases, start_date, end_date)?;
+    log::debug!(
+        "Will process {} to {}",
+        gas_date_ranges.overall_start,
+        gas_date_ranges.overall_end
+    );
     for date in iter_dates(gas_date_ranges.overall_start, gas_date_ranges.overall_end) {
+        log::info!("Processing date {date}");
         let filename = date.format("tccon_timeavg_%Y%m%d.nc4").to_string();
         let file = output_dir.join(filename);
         let mut ds = netcdf::create(&file).change_context_lazy(|| {
             CliError::Context(format!("error creating daily file {}", file.display()))
         })?;
+        add_global_info(&mut ds)?;
         for gas in gases {
             if !gas_date_ranges.gas_has_date(gas, date) {
                 continue;
@@ -47,12 +55,22 @@ pub(super) fn daily_files_driver<F: AsRef<Path>>(
                     file.display()
                 ))
             })?;
-            day_data.write_netcdf(&mut grp).change_context_lazy(|| {
-                CliError::Context(format!("error writing data for gas {gas} on {date}"))
-            })?;
+            day_data
+                .write_netcdf_context(&mut grp, &all_metadata)
+                .change_context_lazy(|| {
+                    CliError::Context(format!("error writing data for gas {gas} on {date}"))
+                })?;
         }
     }
 
+    Ok(())
+}
+
+fn add_global_info(ds: &mut netcdf::FileMut) -> error_stack::Result<(), CliError> {
+    // Write the idate dimension to the root
+    ds.add_dimension("idate", 6).change_context_lazy(|| {
+        CliError::context("error adding idate dimension to the root group")
+    })?;
     Ok(())
 }
 
@@ -116,4 +134,70 @@ fn load_site_files<F: AsRef<Path>>(
     }
 
     Ok(data)
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::common_test::{check_timeavg_files, CheckTimeAvgFields};
+
+    use super::*;
+    use ggg_rs::test_utils::{init_test_logging, utc_dt_ymd};
+
+    #[test]
+    fn test_daily_files_end2end() {
+        init_test_logging(None);
+        let test_dir = ggg_rs::test_utils::test_data_dir();
+
+        // TODO: update to checked in input files once tests are working
+        let site_files = [
+            test_dir.join("inputs/write-timeavg-netcdf/daily/pa.private.qc.avg30min.nc"),
+            test_dir.join("inputs/write-timeavg-netcdf/daily/ci.private.qc.avg30min.nc"),
+        ];
+        let expected_dir = test_dir.join("expected/write-timeavg-netcdf/daily");
+        let output_dir = test_dir.join("outputs/write-timeavg-netcdf/daily");
+
+        // We want to test at least two days to check that the data gets split across them appropriately.
+        let start = utc_dt_ymd(2025, 6, 4).date_naive();
+        let end = utc_dt_ymd(2025, 6, 5).date_naive();
+        daily_files_driver(
+            &site_files,
+            &output_dir,
+            &[Gas::CO2],
+            Some(start),
+            Some(end),
+        )
+        .unwrap();
+
+        let field_to_var = CheckTimeAvgFields::default();
+        let nccomp_def = nccompare::CompElements {
+            no_values: true,
+            no_shapes: true,
+            no_att_values: false,
+        };
+        for date in iter_dates(start, end) {
+            let fname = format!("tccon_timeavg_{}.nc4", date.format("%Y%m%d"));
+            let expected_file = expected_dir.join(&fname);
+            let test_file = output_dir.join(&fname);
+            check_timeavg_files(&expected_file, &test_file, Gas::CO2, &field_to_var);
+
+            // Use nccompare to check that all attributes and variables are present.
+            // For now, we're handling value checks separately for more control over
+            // required precision.
+            let att_check = nccompare::compare_files(
+                &expected_file,
+                &test_file,
+                nccompare::DetailLevel::Medium,
+                &nccomp_def,
+                false,
+                true,
+            )
+            .unwrap();
+            assert!(
+                att_check,
+                "Attribute or simple variable presence mismatch between {} and {}",
+                expected_file.display(),
+                test_file.display()
+            );
+        }
+    }
 }

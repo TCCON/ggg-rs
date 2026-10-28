@@ -43,6 +43,7 @@ pub(super) fn get_date_range_all_gases(
         let dates = get_date_range(it, start, end).change_context_lazy(|| {
             CliError::Context(format!("Error getting start/end dates for gas {gas}"))
         })?;
+        log::debug!("For {gas}, available dates are {} to {}", dates.0, dates.1);
         gas_ranges.insert(*gas, dates);
     }
     let overall_start = gas_ranges
@@ -52,7 +53,7 @@ pub(super) fn get_date_range_all_gases(
         .expect("gases was not empty, so should get an overall start date");
     let overall_end = gas_ranges
         .values()
-        .map(|(d, _)| *d)
+        .map(|(_, d)| *d)
         .max()
         .expect("gases was not empty, so should get an overall end date");
 
@@ -71,8 +72,8 @@ fn get_date_range<'i, I: Iterator<Item = &'i TimeAvgData>>(
     let mut min_date: Option<chrono::NaiveDate> = None;
     let mut max_date: Option<chrono::NaiveDate> = None;
     for file in gas_data {
-        let this_min = file.utc_mean_time.iter().min().map(|d| d.date_naive());
-        let this_max = file.utc_mean_time.iter().max().map(|d| d.date_naive());
+        let this_min = file.cdate.iter().min().map(|d| d.date_naive());
+        let this_max = file.cdate.iter().max().map(|d| d.date_naive());
         if let Some(fmin) = this_min {
             min_date = min_date.and_then(|d| Some(d.min(fmin))).or(Some(fmin));
         }
@@ -103,11 +104,12 @@ pub(super) fn extract_date_subset<'i, I: Iterator<Item = &'i TimeAvgData>>(
 
     for data in all_site_data {
         let inds = data
-            .utc_mean_time
+            .cdate
             .iter()
+            .zip_eq(&data.bin_flag)
             .enumerate()
-            .filter_map(|(i, d)| {
-                if d.date_naive() == date {
+            .filter_map(|(i, (d, flag))| {
+                if d.date_naive() == date && *flag == 0 {
                     Some(i)
                 } else {
                     None
@@ -133,7 +135,7 @@ pub(super) fn extract_date_subset<'i, I: Iterator<Item = &'i TimeAvgData>>(
 }
 
 fn make_sort_indices(data: &TimeAvgData) -> Vec<usize> {
-    let mut indices = (0..data.utc_mean_time.len()).collect_vec();
+    let mut indices = (0..data.cdate.len()).collect_vec();
     // To maintain equivalence with the Python code, we want to sort by time and then station ID.
     // The original reasoning was: "it looks like Sourish's files sort obs by time, interleaving
     // sites if needed. I'll also sort by station ID to produce a repeatable order in case two bins
@@ -143,7 +145,7 @@ fn make_sort_indices(data: &TimeAvgData) -> Vec<usize> {
     // which does sort by UTC time then station ID.
 
     indices.sort_by_key(|&i| {
-        let time = data.utc_mean_time[i];
+        let time = data.cdate[i];
         let mip_id = data.station_id[i];
         (time, mip_id)
     });
@@ -162,7 +164,7 @@ mod tests {
         // those are all we need.
         let data = vec![
             TimeAvgData {
-                utc_mean_time: array![
+                cdate: array![
                     utc_dt_ymdhms(2026, 1, 1, 12, 30, 0),
                     utc_dt_ymdhms(2026, 2, 1, 13, 30, 0),
                     utc_dt_ymdhms(2026, 3, 1, 11, 30, 0)
@@ -170,7 +172,7 @@ mod tests {
                 ..Default::default()
             },
             TimeAvgData {
-                utc_mean_time: array![
+                cdate: array![
                     utc_dt_ymdhms(2025, 12, 1, 12, 30, 0),
                     utc_dt_ymdhms(2026, 1, 1, 13, 30, 0),
                     utc_dt_ymdhms(2026, 2, 1, 11, 30, 0)
@@ -178,7 +180,7 @@ mod tests {
                 ..Default::default()
             },
             TimeAvgData {
-                utc_mean_time: array![
+                cdate: array![
                     utc_dt_ymdhms(2026, 3, 1, 13, 30, 0),
                     utc_dt_ymdhms(2026, 4, 1, 11, 30, 0)
                 ],

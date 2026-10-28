@@ -103,11 +103,18 @@ testdoc: $(NC_LIB)
 check: $(NC_LIB)
 	$(CARGOCMD) check $(CARGOARGS)
 
+run: $(NC_LIB)
+	# Use as, e.g.: make run BIN=write_public_netcdf ARGS="tccon-std pa20040721_20041221.private.nc"
+	$(CARGOCMD) run $(CARGOARGS) --bin $(BIN) -- $(ARGS)
+
 docs: $(NC_LIB)
 	$(CARGOCMD) doc --no-deps $(CARGOARGS)
 
 all-docs: $(NC_LIB)
 	$(CARGOCMD) doc $(CARGOARGS)
+
+clean:
+	cargo clean
 
 ifeq ("$(BUILD_ENV)", "1")
 $(NC_LIB):

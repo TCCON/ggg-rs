@@ -8,13 +8,8 @@ use crate::CliError;
 /// TOML string mapping between the TCCON site IDs, TCCON names, and MIP station IDs
 static DEFAULT_SITE_CONFIG_TOML: &'static str = include_str!("mip_site_mapping.toml");
 
-/// Structure mapping between the TCCON site IDs, TCCON names, and MIP station IDs.
-/// Should be parsed from [`DEFAULT_SITE_CONFIG_TOML`] the first time it is needed.
-static DEFAULT_SITE_CONFIG: std::sync::OnceLock<MipIdMap> = std::sync::OnceLock::new();
-
-/// Get the MIP station ID for a given TCCON site ID.
+/// Load the mapping of TCCON site IDs to MIP numerical IDs and names.
 ///
-/// The MIP station ID is an integer, whereas the TCCON site ID is two characters, e.g. "pa".
 /// If `custom_cfg_toml` is `Some(_)`, then it will be read and the site to station ID mapping
 /// in it takes precedence over the default. That is, if both the custom and default configurations
 /// specify a station ID for "pa", the custom one will be used, but if the custom configuration
@@ -26,29 +21,19 @@ static DEFAULT_SITE_CONFIG: std::sync::OnceLock<MipIdMap> = std::sync::OnceLock:
 ///
 /// # Panics
 /// If the default configuration is an invalid TOML string.
-pub(crate) fn get_mip_station_id(
-    site_id: &str,
+pub(crate) fn load_mip_config(
     custom_cfg_toml: Option<&Path>,
-) -> error_stack::Result<i8, CliError> {
+) -> error_stack::Result<MipIdMap, CliError> {
     if let Some(custom_path) = custom_cfg_toml {
-        let custom_cfg = MipIdMap::from_file(custom_path).change_context_lazy(|| {
-            CliError::context("Error reading the custom MIP station ID configuration")
-        })?;
-        if let Ok(station_id) = custom_cfg.get_station_id(site_id) {
-            return Ok(station_id);
-        }
+        MipIdMap::from_custom_file(custom_path)
+    } else {
+        Ok(MipIdMap::from_default_str())
     }
-
-    let std_cfg = DEFAULT_SITE_CONFIG.get_or_init(|| {
-        MipIdMap::from_str(DEFAULT_SITE_CONFIG_TOML)
-            .expect("Deserializing the standard MIP station ID configuration should succeed")
-    });
-    Ok(std_cfg.get_station_id(site_id)?)
 }
 
 /// A structure representing the TCCON site ID -> MIP station mapping.
 #[derive(Debug, serde::Deserialize)]
-struct MipIdMap {
+pub(crate) struct MipIdMap {
     site_mapping: IndexMap<String, MipId>,
 }
 
@@ -56,11 +41,27 @@ impl MipIdMap {
     /// Return the MIP station ID for the given site ID.
     ///
     /// Returns an error if `site_id` is not included in the mapping.
-    fn get_station_id(&self, site_id: &str) -> Result<i8, CliError> {
+    pub(crate) fn get_station_id(&self, site_id: &str) -> Result<i8, CliError> {
         let site_info = self.site_mapping.get(site_id).ok_or_else(|| {
             CliError::Custom(format!("No mapping defined for site ID '{site_id}"))
         })?;
         Ok(site_info.mip_site_id)
+    }
+
+    pub(crate) fn get_station_name<'s>(&'s self, site_id: &str) -> Result<&'s str, CliError> {
+        let site_info = self.site_mapping.get(site_id).ok_or_else(|| {
+            CliError::Custom(format!("No mapping defined for site ID '{site_id}"))
+        })?;
+        Ok(&site_info.mip_name)
+    }
+
+    fn from_custom_file(file: &Path) -> error_stack::Result<Self, CliError> {
+        let mut cfg_out = Self::from_default_str();
+        let overrides = Self::from_file(file)?;
+        for (key, value) in overrides.site_mapping {
+            cfg_out.site_mapping.insert(key, value);
+        }
+        Ok(cfg_out)
     }
 
     /// Parse the given TOML file into an instance of this struct.
@@ -90,6 +91,11 @@ impl MipIdMap {
         toml::from_str(s).change_context_lazy(|| {
             CliError::context("Error deserializing the MIP station ID configuration")
         })
+    }
+
+    fn from_default_str() -> Self {
+        Self::from_str(DEFAULT_SITE_CONFIG_TOML)
+            .expect("Deserializing the standard MIP station ID configuration should succeed")
     }
 }
 

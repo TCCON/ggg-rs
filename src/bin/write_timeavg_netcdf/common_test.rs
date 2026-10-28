@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use ggg_rs::{
-    nc_utils::{self, GetNcVar},
+    nc_utils::{self, get_string_attr, GetNcVar},
     test_utils::{
         compare_to_netcdf_quantities, compare_to_netcdf_quantities_with_tolerance,
         compare_to_netcdf_values_approx, compare_to_netcdf_values_approx_with_tolerance,
@@ -54,7 +54,9 @@ pub(crate) fn check_l2_data(expected_ds: &netcdf::File, l2_data: Level2Data) {
 
 pub(crate) struct CheckTimeAvgFields {
     pub(crate) solar_time: &'static str,
+    pub(crate) solar_time_is_2d: bool,
     pub(crate) cdate: &'static str,
+    pub(crate) cdate_is_2d: bool,
     pub(crate) num_spec: &'static str,
     pub(crate) longitude: &'static str,
     pub(crate) latitude: &'static str,
@@ -78,7 +80,9 @@ impl CheckTimeAvgFields {
         match gas {
             Gas::CO2 => Self {
                 solar_time: "bin_center_time",
+                solar_time_is_2d: false,
                 cdate: "binned_xco2_time",
+                cdate_is_2d: false,
                 num_spec: "binned_xco2_num_spec",
                 longitude: "long",
                 latitude: "lat",
@@ -105,7 +109,9 @@ impl Default for CheckTimeAvgFields {
     fn default() -> Self {
         Self {
             solar_time: "solar_time_bin",
+            solar_time_is_2d: true,
             cdate: "cdate",
+            cdate_is_2d: true,
             num_spec: "num_soundings",
             longitude: "longitude",
             latitude: "latitude",
@@ -153,7 +159,14 @@ pub(crate) fn check_timeavg_data(
     timeavg_data: TimeAvgData,
     field_to_var: &CheckTimeAvgFields,
 ) {
-    let expected_solar_times = read_time(expected_ds, field_to_var.solar_time);
+    let expected_solar_times = if field_to_var.solar_time_is_2d {
+        let cdates = nc_utils::get_var_data(expected_ds, field_to_var.solar_time).unwrap();
+        crate::data_structures::cdate_to_datetimes(cdates)
+            .unwrap()
+            .mapv(|d| d.and_utc())
+    } else {
+        read_time(expected_ds, field_to_var.solar_time)
+    };
     let expected_solar_ts = expected_solar_times.mapv(|t| t.timestamp_millis());
     let actual_solar_ts = timeavg_data
         .solar_time_bin
@@ -161,7 +174,14 @@ pub(crate) fn check_timeavg_data(
     // The solar time is stored in the Python 'truth' file as an int, so strict equality should be safe
     assert_eq!(expected_solar_ts, actual_solar_ts);
 
-    let expected_zpd_times = read_time(expected_ds, field_to_var.cdate);
+    let expected_zpd_times = if field_to_var.cdate_is_2d {
+        let cdates = nc_utils::get_var_data(expected_ds, field_to_var.cdate).unwrap();
+        crate::data_structures::cdate_to_datetimes(cdates)
+            .unwrap()
+            .mapv(|d| d.and_utc())
+    } else {
+        read_time(expected_ds, field_to_var.cdate)
+    };
     let expected_zpd_ts = expected_zpd_times.mapv(|t| t.timestamp_millis());
     let actual_zpd_ts = timeavg_data.cdate.mapv(|t| t.timestamp_millis());
     // Allow ~2 second difference in the ZPD times; since we use the solar times for the obs IDs, the ZPD times don't matter as much.
@@ -170,11 +190,6 @@ pub(crate) fn check_timeavg_data(
         "Bin mean ZPD times do not match.\nExpected = {expected_zpd_times:?}\nActual = {:?}",
         timeavg_data.cdate
     );
-
-    // obs_id and station_id aren't in the original Python "truth" file, so the best we can do right now
-    // is check that the station_id is correct for Park Falls: 29 as of 31 Aug 2026
-    let expected_obs_id = ndarray::Array1::from_elem(timeavg_data.station_id.dim(), 29);
-    assert_eq!(timeavg_data.station_id, expected_obs_id);
 
     // Most of the remaining fields can be checked with a bit looser tolerance than in the L2, since there is some math.
     compare_to_netcdf_values_eq::<u64, _, _>(
@@ -267,10 +282,17 @@ pub(crate) fn check_timeavg_data(
     assert_eq!(timeavg_data.wmo_or_analagous_scale, "WMO CO2 X2019");
 
     // Fields which are not in the original Python 'truth' files, so we can only check
-    // when we get to the daily files. In the future, these should always be checked.
+    // against the expected dataset when we get to the daily files. In the future, these
+    // should always be checked against truth files rather than assumed.
     if let Some(station_id_var) = field_to_var.station_id {
         compare_to_netcdf_values_eq(expected_ds, station_id_var, &timeavg_data.station_id);
-    }
+    } else {
+        // station_id isn't in the original Python "truth" file for the per-site files,
+        // so the best we can do right now is check that the station_id is correct for
+        // Park Falls: 29 as of 31 Aug 2026. We should only be in this branch if testing a per-site file.
+        let expected_station_id = ndarray::Array1::from_elem(timeavg_data.station_id.dim(), 29);
+        assert_eq!(timeavg_data.station_id, expected_station_id);
+    };
 
     if let Some(obs_id_var) = field_to_var.obs_id {
         compare_to_netcdf_values_eq(expected_ds, obs_id_var, &timeavg_data.obs_id);
@@ -282,4 +304,31 @@ pub(crate) fn read_time<O: GetNcVar>(
     varname: &str,
 ) -> ndarray::Array1<chrono::DateTime<chrono::Utc>> {
     nc_utils::get_var_cftime::<i64, Ix1, _>(ds, varname).expect("reading time should succeed")
+}
+
+pub(crate) fn check_station_meta_attrs(
+    expected_ds: &netcdf::File,
+    test_grp: &netcdf::Group<'_>,
+    station_id: i8,
+) {
+    let attrs = [
+        "source_release_lag",
+        "source_data_doi",
+        "source_data_reference",
+        "source_data_reference",
+        "all_public_after",
+    ];
+
+    let var = test_grp
+        .variable("station_id")
+        .expect("should be a 'station_id' variable on the test group");
+    for attr in attrs {
+        let var_attr = format!("station_{station_id:03}_{attr}");
+        let expected_attr = get_string_attr(expected_ds, attr).unwrap();
+        let test_attr = get_string_attr(&var, &var_attr).unwrap();
+        assert_eq!(
+            expected_attr, test_attr,
+            "{attr} did not match {var_attr} on 'station_id' variable"
+        );
+    }
 }

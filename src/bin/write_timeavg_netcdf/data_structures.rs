@@ -1,7 +1,12 @@
-use std::fmt::Debug;
+use std::collections::HashMap;
+use std::fmt::{Debug, Display};
+use std::path::Path;
 
 use chrono::{DateTime, Datelike, NaiveDateTime, Timelike, Utc};
+use error_stack::ResultExt;
+use ggg_rs::nc_utils::{get_string_attr, get_var_data};
 use ggg_rs::units::map_values_to_quantity;
+use ggg_rs::utils::site_id_from_filename;
 use ggg_rs_derive::{Concat, ReadNetcdf, Subset, WriteNetcdf};
 use indexmap::IndexMap;
 use itertools::Itertools;
@@ -10,6 +15,8 @@ use uom::si::angle::degree;
 use uom::si::f32::{Angle, Pressure, Ratio};
 use uom::si::pressure::pascal;
 use uom::si::ratio::{part_per_million, ratio};
+
+use crate::CliError;
 
 ///
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, clap::ValueEnum, strum::Display)]
@@ -32,47 +39,50 @@ pub(crate) type AllGasAvgData = IndexMap<Gas, TimeAvgData>;
 /// A structure representing time-averaged data from one or more TCCON sites.
 #[derive(ReadNetcdf, WriteNetcdf, Subset, Concat)]
 #[cfg_attr(test, derive(Debug, Default, PartialEq))]
-#[netcdf(describe)]
+#[netcdf(describe, context(write = AllSitesMetaAttrs))]
 pub(crate) struct TimeAvgData {
     /// The midpoint of each solar time bin.
-    #[netcdf(dimensions("time", "idate"), map(write = map_datetimes_to_cdate, read = map_cdate_to_naive_datetimes), kind = "array")]
+    #[netcdf(dimensions("n_obs_instr", "idate"), map(write = map_datetimes_to_cdate, read = map_cdate_to_naive_datetimes), kind = "array")]
     pub(crate) solar_time_bin: Array1<NaiveDateTime>,
 
     /// The mean UTC time of the bin, weighted by the uncertainty in the column
     /// averages.
-    #[netcdf(dimensions("time", "idate"), map(write = map_datetimes_to_cdate, read = map_cdate_to_datetimes), kind = "array")]
+    #[netcdf(dimensions("n_obs_instr", "idate"), map(write = map_datetimes_to_cdate, read = map_cdate_to_datetimes), kind = "array")]
     pub(crate) cdate: Array1<DateTime<Utc>>,
 
     /// A unique identifier for each bin in the format YYYYmmddHHMMSSII, where
     /// II is the station ID and the rest is the time string of the solar mean time.
-    #[netcdf(dimensions("time"))]
+    #[netcdf(dimensions("n_obs_instr"))]
     pub(crate) obs_id: Array1<i64>,
 
     /// The numeric ID of the TCCON station from which each bin was derived.
-    #[netcdf(dimensions("time"))]
+    #[netcdf(
+        dimensions("n_obs_instr"),
+        attrs(func = Self::station_id_attrs)
+    )]
     pub(crate) station_id: Array1<i8>,
 
     /// A flag indicating if this bin contains only data that would be public
     /// at the time of creation (1) or contained at least one private spectrum (0).
     #[netcdf(
-        dimensions("time"),
+        dimensions("n_obs_instr"),
         attr( name = "flag_values", value = vec![0_i8, 1_i8]),
         attr( name = "flag_meanings", value = "bin_contained_private_data bin_contained_only_public_data")
     )]
     pub(crate) public: Array1<i8>,
 
     /// A flag indicating if the bin is safe to use/include in the daily files.
-    #[netcdf(dimensions("time"))]
+    #[netcdf(dimensions("n_obs_instr"))]
     // bin flags are to be added separately by the flagging object
     pub(crate) bin_flag: Array1<u64>,
 
     /// How many TCCON observations are included in the bin
-    #[netcdf(dimensions("time"))]
+    #[netcdf(dimensions("n_obs_instr"))]
     pub(crate) num_soundings: Array1<u64>,
 
     /// The TCCON latitudes
     #[netcdf(
-        dimensions("time"),
+        dimensions("n_obs_instr"),
         map(write = ggg_rs::units::angle::map::<degree, _, _, _, _>, read = map_deg_to_q),
         attr(name = "units", value = "degrees_north"),
         kind = "array",
@@ -81,7 +91,7 @@ pub(crate) struct TimeAvgData {
 
     /// The TCCON longitudes
     #[netcdf(
-        dimensions("time"),
+        dimensions("n_obs_instr"),
         map(write = ggg_rs::units::angle::map::<degree, _, _, _, _>, read = map_deg_to_q),
         attr(name = "units", value = "degrees_east"),
         kind = "array",
@@ -91,9 +101,10 @@ pub(crate) struct TimeAvgData {
     /// The mean solar zenith angle of the bin, weighted by the uncertainty in
     /// the column averages.
     #[netcdf(
-        dimensions("time"),
+        dimensions("n_obs_instr"),
         map(write = ggg_rs::units::angle::map::<degree, _, _, _, _>, read = map_deg_to_q),
         attr(name = "units", value = "degrees"),
+        attr(name = "comment", value = "Calculated as the weighted mean of SZAs in the bin, not the SZA at the bin center time."),
         kind = "array",
     )]
     pub(crate) sza: Array1<Angle>,
@@ -101,7 +112,8 @@ pub(crate) struct TimeAvgData {
     /// The TCCON surface pressures, weighted by the uncertainty in the column
     /// averages.
     #[netcdf(
-        dimensions("time"),
+        dimensions("n_obs_instr"),
+        attr(name = "long_units", value = "Pascals"),
         map_units(write = ggg_rs::units::pressure::map_units::<pascal, _, _, _, _>, read = map_values_to_quantity::<Pressure, f32, _>),
         kind = "array",
     )]
@@ -109,7 +121,8 @@ pub(crate) struct TimeAvgData {
 
     /// The pressure levels of the priors, with one row per bin.
     #[netcdf(
-        dimensions("time", "n_lev"),
+        dimensions("n_obs_instr", "n_lev"),
+        attr(name = "long_units", value = "Pascals"),
         map_units(write = ggg_rs::units::pressure::map_units::<pascal, _, _, _, _>, read = map_values_to_quantity::<Pressure, f32, _>),
         kind = "array",
     )]
@@ -121,16 +134,21 @@ pub(crate) struct TimeAvgData {
     /// single vector for all bins.
     #[netcdf(
         dimensions("n_lev"),
+        attr(name = "long_units", value = "Pascals"),
+        attr(name = "comment", value = "First index is the surface layer, last index is TOA"),
         map_units(write = ggg_rs::units::pressure::map_units::<pascal, _, _, _, _>, read = map_values_to_quantity::<Pressure, f32, _>),
         kind = "array",
     )]
     #[subset(skip)]
+    #[concat(skip)]
     pub(crate) p_levels_ak: Array1<Pressure>,
 
     /// The TCCON H2O priors in wet mole fraction, weighted by the uncertainty
     /// in the column averages.
     #[netcdf(
-        dimensions("time", "n_lev"),
+        dimensions("n_obs_instr", "n_lev"),
+        attr(name = "long_units", value = "Wet air mole fraction in mole/mole"),
+        attr(name = "comment", value = "First index is the surface layer, last index is TOA"),
         map_units(write = ggg_rs::units::ratio::map_units::<ratio, _, _, _, _>, read = map_values_to_quantity::<Ratio, f32, _>),
         kind = "array",
     )]
@@ -139,7 +157,10 @@ pub(crate) struct TimeAvgData {
     /// The a priori profile for the retrieved gas, dried with the TCCON H2O profile,
     /// and weighted by the column average uncertainties.
     #[netcdf(
-        dimensions("time", "n_lev"),
+        dimensions("n_obs_instr", "n_lev"),
+        attr(name = "comment", value = "First index is the surface layer, last index is TOA"),
+        attr(name = "long_units", value = "Dry air mole fraction in parts per million"),
+        attr(name = "adjustment", value = "This has been dried with the TCCON prior water profile"),
         map_units(write = ggg_rs::units::ratio::map_units::<part_per_million, _, _, _, _>, read = map_values_to_quantity::<Ratio, f32, _>),
         kind = "array",
     )]
@@ -148,36 +169,46 @@ pub(crate) struct TimeAvgData {
     /// The original TCCON a priori profile for the retrieved gas (in wet mole fraction),
     /// weighted by the column average uncertainties.
     #[netcdf(
-        dimensions("time", "n_lev"),
+        dimensions("n_obs_instr", "n_lev"),
+        attr(name = "comment", value = "First index is the surface layer, last index is TOA"),
+        attr(name = "long_units", value = "Wet air mole fraction in parts per million"),
         map_units(write = ggg_rs::units::ratio::map_units::<part_per_million, _, _, _, _>, read = map_values_to_quantity::<Ratio, f32, _>),
         kind = "array",
     )]
     pub(crate) prior_mixing_tccon: Array2<Ratio>,
 
     /// The averaging kernels, weighted by the column average uncertainties.
-    #[netcdf(dimensions("time", "n_lev"), attr(name = "units", value = "1"))]
+    #[netcdf(
+        dimensions("n_obs_instr", "n_lev"),
+        attr(name = "units", value = "1"),
+        attr(
+            name = "comment",
+            value = "First index is the surface layer, last index is TOA"
+        )
+    )]
     pub(crate) avg_kernel: Array2<f32>,
 
     /// The bin averaged TCCON column average values, weighted by the uncertainty
     /// in the individual observations.
     #[netcdf(
-        dimensions("time"),
+        dimensions("n_obs_instr"),
+        attr(name = "long_units", value = "Dry air mole fraction in parts per million"),
         map_units(write = ggg_rs::units::ratio::map_units::<part_per_million, _, _, _, _>, read = map_values_to_quantity::<Ratio, f32, _>),
         kind = "array",
-        attr( name = "wmo_or_analogous_scale", func = Self::wmo_scale_attr)
-    )]
+    )] // NB: the WMO scale is written through its field on this struct.
     pub(crate) column_mixing: Array1<Ratio>,
 
     /// The propagated uncertainty in the bin averaged TCCON column average values.
     #[netcdf(
-        dimensions("time"),
+        dimensions("n_obs_instr"),
+        attr(name = "long_units", value = "Dry air mole fraction in parts per million"),
         map_units(write = ggg_rs::units::ratio::map_units::<part_per_million, _, _, _, _>, read = map_values_to_quantity::<Ratio, f32, _>),
         kind = "array",
     )]
     pub(crate) sigma_column_mixing: Array1<Ratio>,
 
     /// The WMO or analagous calibration scale to which the column mixing values are tied.
-    #[netcdf(attribute)]
+    #[netcdf(custom(write = Self::add_wmo_scale_attr, read = Self::get_wmo_scale_attr))]
     #[subset(skip)]
     #[concat(skip = "equal")]
     pub(crate) wmo_or_analagous_scale: String,
@@ -234,6 +265,57 @@ impl TimeAvgData {
 
     fn wmo_scale_attr<'a, A>(&'a self, _xgas: &A, _name: &str) -> &'a str {
         &self.wmo_or_analagous_scale
+    }
+
+    fn add_wmo_scale_attr<'a>(
+        &'a self,
+        scale: &str,
+        _rust_name: &str,
+        _nc_name: &str,
+        grp: &mut netcdf::GroupMut<'_>,
+        _ctx: &AllSitesMetaAttrs,
+    ) -> netcdf::Result<()> {
+        let mut var = grp
+            .variable_mut("column_mixing")
+            .expect("the column_mixing variable must be written before the WMO scale value");
+        var.put_attribute("wmo_or_analogous_scale", scale)
+            .map(|_| ())
+    }
+
+    fn get_wmo_scale_attr(
+        _rust_name: &str,
+        _nc_name: &str,
+        grp: &netcdf::Group<'_>,
+    ) -> netcdf::Result<String> {
+        let var = grp.variable("column_mixing").ok_or_else(|| {
+            netcdf::Error::Str("the column_mixing variable could not be found".to_string())
+        })?;
+        let scale = get_string_attr(&var, "wmo_or_analogous_scale").map_err(|e| {
+            netcdf::Error::Str(format!("could not retrieve the WMO scale value: {e}"))
+        })?;
+        Ok(scale)
+    }
+
+    fn station_id_attrs<'a>(
+        &'a self,
+        station_ids: &Array1<i8>,
+        _rs_name: &str,
+        _nc_name: &str,
+        var: &mut netcdf::VariableMut<'_>,
+        ctx: &AllSitesMetaAttrs,
+    ) -> netcdf::Result<()> {
+        let mut unique_stations = station_ids.iter().copied().unique().collect_vec();
+        unique_stations.sort();
+        var.put_attribute("num_stations", unique_stations.len() as i32)?;
+
+        for id in unique_stations {
+            let meta = ctx.meta_for_station(id).ok_or_else(|| {
+                netcdf::Error::Str(format!("No metadata available for station ID = {id}"))
+            })?;
+            meta.write_station_var_attrs(id, var)?;
+        }
+
+        Ok(())
     }
 }
 
@@ -381,29 +463,347 @@ impl Level2Data {
     }
 }
 
-#[derive(Debug, WriteNetcdf)]
+#[derive(Debug, Clone, PartialEq, Eq, ReadNetcdf, WriteNetcdf)]
+#[netcdf(context(ty = i8))]
 pub(crate) struct StationMetaAttrs {
+    /// The long name of the TCCON station defined in the MIP mapping.
+    /// Usually, this is the TCCON name without trailing numbers,
+    /// e.g., "parkfalls".
+    #[netcdf(custom(write = Self::write_to_var, read = Self::get_from_var))]
+    pub(crate) station_name: String,
+
     /// The number of days from acquisition for which data from this station
     /// is withheld from the public archive.
-    #[netcdf(attribute, map(write = opt_to_attr))]
+    #[netcdf(custom(write = Self::write_opt_to_var, read = Self::get_opt_from_var))]
     pub(crate) source_release_lag: Option<String>,
 
     /// The DOI for the level 2 data from this site, starting with "10."
-    #[netcdf(attribute)]
+    #[netcdf(custom(write = Self::write_to_var, read = Self::get_from_var))]
     pub(crate) source_data_doi: String,
 
     /// The revision identifier for the level 2 data from this site, usually
     /// "R0", "R1", etc.
-    #[netcdf(attribute)]
+    #[netcdf(custom(write = Self::write_to_var, read = Self::get_from_var))]
     pub(crate) source_data_revision: String,
 
     /// The citation for the level 2 data from this site.
-    #[netcdf(attribute)]
+    #[netcdf(custom(write = Self::write_to_var, read = Self::get_from_var))]
     pub(crate) source_data_reference: String,
 
     /// The date/time after which all data in this file will be public
-    #[netcdf(attribute, map(write = opt_date_to_attr))]
+    #[netcdf(custom(write = Self::write_opt_date_to_var, read = Self::get_opt_date_from_var))]
     pub(crate) all_public_after: Option<chrono::NaiveDate>,
+}
+
+impl StationMetaAttrs {
+    /// Write the attributes for the station_id variable for this station.
+    /// Note that the numeric station ID must be passed, as it is not included
+    /// in the metadata.
+    pub(crate) fn write_station_var_attrs(
+        &self,
+        station_id: i8,
+        var: &mut netcdf::VariableMut<'_>,
+    ) -> netcdf::Result<()> {
+        var.put_attribute(
+            &Self::attr_name(station_id, None),
+            self.station_name.as_str(),
+        )?;
+        var.put_attribute(
+            &Self::attr_name(station_id, Some("source_release_lag")),
+            self.source_release_lag.as_deref().unwrap_or("N/A"),
+        )?;
+        var.put_attribute(
+            &Self::attr_name(station_id, Some("source_data_doi")),
+            self.source_data_doi.as_str(),
+        )?;
+        var.put_attribute(
+            &Self::attr_name(station_id, Some("source_data_revision")),
+            self.source_data_revision.as_str(),
+        )?;
+        var.put_attribute(
+            &Self::attr_name(station_id, Some("source_data_reference")),
+            self.source_data_reference.as_str(),
+        )?;
+
+        let public_after = self
+            .all_public_after
+            .map(|d| d.format("%Y-%m-%d").to_string())
+            .unwrap_or_else(|| "N/A".to_string());
+        var.put_attribute(
+            &Self::attr_name(station_id, Some("all_public_after")),
+            public_after,
+        )?;
+
+        Ok(())
+    }
+
+    fn get_from_var(
+        _rust_name: &str,
+        nc_name: &str,
+        grp: &netcdf::Group<'_>,
+        station_id: &i8,
+    ) -> netcdf::Result<String> {
+        let var = grp.variable("station_id").ok_or_else(|| {
+            netcdf::Error::Str(
+                "expected a variable named 'station_id' on the input group".to_string(),
+            )
+        })?;
+
+        let opt_nc_name = if nc_name == "station_name" {
+            None
+        } else {
+            Some(nc_name)
+        };
+
+        get_string_attr(&var, &Self::attr_name(*station_id, opt_nc_name))
+            .map_err(|e| netcdf::Error::Str(e.to_string()))
+    }
+
+    fn get_opt_from_var(
+        _rust_name: &str,
+        nc_name: &str,
+        grp: &netcdf::Group<'_>,
+        station_id: &i8,
+    ) -> netcdf::Result<Option<String>> {
+        let val = Self::get_from_var(_rust_name, nc_name, grp, station_id)?;
+        if val == "N/A" {
+            Ok(None)
+        } else {
+            Ok(Some(val))
+        }
+    }
+
+    fn get_opt_date_from_var(
+        _rust_name: &str,
+        nc_name: &str,
+        grp: &netcdf::Group<'_>,
+        station_id: &i8,
+    ) -> netcdf::Result<Option<chrono::NaiveDate>> {
+        let s = Self::get_opt_from_var(_rust_name, nc_name, grp, station_id)?;
+        if let Some(s) = s {
+            let date = chrono::NaiveDate::parse_from_str(&s, "%Y-%m-%d").map_err(|e| {
+                netcdf::Error::Str(format!(
+                    "could not parse '{s}' as a date in YYYY-MM-DD format: {e}"
+                ))
+            })?;
+            Ok(Some(date))
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn write_to_var<S: ToString>(
+        &self,
+        value: S,
+        _rust_name: &str,
+        nc_name: &str,
+        grp: &mut netcdf::GroupMut<'_>,
+        station_id: &i8,
+    ) -> netcdf::Result<()> {
+        let mut var = grp.variable_mut("station_id").ok_or_else(|| {
+            netcdf::Error::Str(
+                "expected a variable named 'station_id' on the input group".to_string(),
+            )
+        })?;
+
+        let opt_nc_name = if nc_name == "station_name" {
+            None
+        } else {
+            Some(nc_name)
+        };
+
+        var.put_attribute(
+            &Self::attr_name(*station_id, opt_nc_name),
+            value.to_string(),
+        )?;
+        Ok(())
+    }
+
+    fn write_opt_to_var(
+        &self,
+        value: &Option<String>,
+        rust_name: &str,
+        nc_name: &str,
+        grp: &mut netcdf::GroupMut<'_>,
+        station_id: &i8,
+    ) -> netcdf::Result<()> {
+        if let Some(s) = value {
+            Self::write_to_var(&self, s, rust_name, nc_name, grp, station_id)
+        } else {
+            Self::write_to_var(&self, "N/A", rust_name, nc_name, grp, station_id)
+        }
+    }
+
+    fn write_opt_date_to_var(
+        &self,
+        value: &Option<chrono::NaiveDate>,
+        rust_name: &str,
+        nc_name: &str,
+        grp: &mut netcdf::GroupMut<'_>,
+        station_id: &i8,
+    ) -> netcdf::Result<()> {
+        let s = value.map(|d| d.format("%Y-%m-%d").to_string());
+        Self::write_opt_to_var(&self, &s, rust_name, nc_name, grp, station_id)
+    }
+
+    fn attr_name(station_id: i8, name: Option<&str>) -> String {
+        if let Some(name) = name {
+            format!("station_{station_id:03}_{name}")
+        } else {
+            format!("station_{station_id:03}")
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct AllSitesMetaAttrs {
+    meta: Vec<StationMetaAttrs>,
+    site_ids: HashMap<String, usize>,
+    station_ids: HashMap<i8, usize>,
+}
+
+impl AllSitesMetaAttrs {
+    pub(crate) fn from_one(meta: StationMetaAttrs, site_id: String, station_id: i8) -> Self {
+        let mut out = Self::default();
+        out.add_meta(meta, site_id, station_id)
+            .expect("adding the first metadata should never error");
+        out
+    }
+
+    fn add_meta<S: ToString + Display>(
+        &mut self,
+        meta: StationMetaAttrs,
+        site_id: S,
+        station_id: i8,
+    ) -> error_stack::Result<(), CliError> {
+        let idx = self.meta.len();
+        self.meta.push(meta);
+        if let Some(old_idx) = self.site_ids.insert(site_id.to_string(), idx) {
+            return Err(CliError::Custom(format!(
+                "site ID {site_id} inferred from multiple input files (#{} and {}), not supported",
+                old_idx + 1,
+                idx + 1
+            ))
+            .into());
+        }
+        if let Some(old_idx) = self.station_ids.insert(station_id, idx) {
+            return Err(CliError::Custom(format!("station ID {station_id} inferred from multiple input files (#{} and {}), not supported", old_idx+1, idx+1)).into());
+        }
+        Ok(())
+    }
+
+    pub(crate) fn from_site_files<P: AsRef<Path>>(
+        files: &[P],
+        gases: &[Gas],
+    ) -> error_stack::Result<Self, CliError> {
+        let mut out = Self::default();
+
+        for file in files {
+            let (this_meta, this_site_id, this_station_id) =
+                Self::load_site_file(file.as_ref(), gases)?;
+            out.add_meta(this_meta, this_site_id, this_station_id)?;
+        }
+
+        Ok(out)
+    }
+
+    pub(crate) fn meta_for_station(&self, station_id: i8) -> Option<&StationMetaAttrs> {
+        self.station_ids
+            .get(&station_id)
+            // Will only panic if our map holds an incorrect index, which it
+            // should not if this was constructed via `from_site_files`
+            .map(|idx| &self.meta[*idx])
+    }
+
+    fn load_site_file(
+        file: &Path,
+        gases: &[Gas],
+    ) -> error_stack::Result<(StationMetaAttrs, String, i8), CliError> {
+        let ds = netcdf::open(file).change_context_lazy(|| {
+            CliError::Context(format!("error opening file {}", file.display()))
+        })?;
+        let root = ds.root().ok_or_else(|| {
+            CliError::Custom(format!(
+                "could not get root group while reading station metadata from file {}",
+                file.display()
+            ))
+        })?;
+        let site_id = site_id_from_filename(file).change_context_lazy(|| {
+            CliError::Custom(format!(
+                "error inferring site ID from file path {}",
+                file.display()
+            ))
+        })?;
+
+        // Need to verify that there is only a single station ID across all groups
+        let mut station_id: Option<i8> = None;
+        let mut meta: Option<StationMetaAttrs> = None;
+        for gas in gases {
+            let grp_name = gas.output_group();
+            let grp = root.group(grp_name).ok_or_else(|| {
+                CliError::Custom(format!(
+                    "group '{grp_name}' not found in {}",
+                    file.display()
+                ))
+            })?;
+            let station_ids = get_var_data::<i8, ndarray::Ix1, _>(&grp, "station_id")
+                .change_context_lazy(|| {
+                    CliError::Context(format!(
+                        "error getting station_id values from group {grp_name} of {}",
+                        file.display()
+                    ))
+                })?;
+            if let Some((this_station_id,)) = station_ids.iter().copied().unique().collect_tuple() {
+                if station_id.is_some_and(|s| s != this_station_id) {
+                    return Err(CliError::Custom(format!(
+                        "file {} contains different stations IDs across gas groups",
+                        file.display()
+                    ))
+                    .into());
+                } else {
+                    station_id = Some(this_station_id);
+                }
+            } else {
+                return Err(CliError::Custom(format!(
+                    "file {} contains multiple station IDs in group {grp_name}",
+                    file.display()
+                ))
+                .into());
+            };
+
+            let this_meta = StationMetaAttrs::read_netcdf_context(
+                &grp,
+                &station_id.expect("station_id should be set here"),
+            )
+            .change_context_lazy(|| {
+                CliError::Context(format!(
+                    "error occurred while reading station metadata from file {}",
+                    file.display()
+                ))
+            })?;
+
+            if meta.is_some_and(|m| m != this_meta) {
+                return Err(CliError::Custom(format!(
+                    "metadata for station {} differs across gases in file {}",
+                    station_id.unwrap(),
+                    file.display()
+                ))
+                .into());
+            } else {
+                meta = Some(this_meta);
+            }
+        }
+
+        if let (Some(sid), Some(meta)) = (station_id, meta) {
+            Ok((meta, site_id, sid))
+        } else {
+            Err(CliError::Custom(format!(
+                "no station IDs and/or metadata found in {} (usually means there were no groups",
+                file.display()
+            ))
+            .into())
+        }
+    }
 }
 
 fn opt_to_attr<A, T>(_: A, opt: &Option<T>, _: &str) -> netcdf::AttributeValue
@@ -417,6 +817,20 @@ where
     }
 }
 
+fn opt_from_attr<T: TryFrom<netcdf::AttributeValue, Error = netcdf::Error>>(
+    att_val: netcdf::AttributeValue,
+    _: &str,
+    _: &netcdf::Variable<'_>,
+) -> netcdf::Result<Option<T>> {
+    if let netcdf::AttributeValue::Str(s) = &att_val {
+        if s == "N/A" {
+            return Ok(None);
+        }
+    }
+
+    T::try_from(att_val).map(|v| Some(v))
+}
+
 fn opt_date_to_attr<A>(
     _: A,
     opt_date: &Option<chrono::NaiveDate>,
@@ -425,6 +839,23 @@ fn opt_date_to_attr<A>(
     match opt_date {
         Some(date) => netcdf::AttributeValue::Str(date.format("%Y-%m-%d").to_string()),
         None => netcdf::AttributeValue::Str("N/A".to_string()),
+    }
+}
+
+fn opt_date_from_attr(
+    att_val: String,
+    _: &str,
+    _: &netcdf::Variable,
+) -> netcdf::Result<Option<chrono::NaiveDate>> {
+    if att_val == "N/A" {
+        Ok(None)
+    } else {
+        let date = chrono::NaiveDate::parse_from_str(&att_val, "%Y-%m-%d").map_err(|e| {
+            netcdf::Error::Str(format!(
+                "could not parse '{att_val}' as a date in YYYY-MM-DD format: {e}"
+            ))
+        })?;
+        Ok(Some(date))
     }
 }
 
@@ -459,7 +890,7 @@ fn map_cdate_to_naive_datetimes(
     cdate_to_datetimes(cdates)
 }
 
-fn cdate_to_datetimes(cdates: Array2<i16>) -> netcdf::Result<Array1<NaiveDateTime>> {
+pub(crate) fn cdate_to_datetimes(cdates: Array2<i16>) -> netcdf::Result<Array1<NaiveDateTime>> {
     let datetimes: Vec<_> = cdates.rows().into_iter().map(|r| {
         chrono::NaiveDate::from_ymd_opt(r[0] as i32, r[1] as u32, r[2] as u32)
             .ok_or_else(|| netcdf::Error::Str(format!("Invalid year, month, or day in cdate array: year = {}, month = {}, day = {}", r[0], r[1], r[2])))
@@ -568,12 +999,40 @@ mod tests {
             wmo_or_analagous_scale: "XTEST".to_string(),
         };
 
+        let mut meta = AllSitesMetaAttrs::default();
+        meta.add_meta(
+            StationMetaAttrs {
+                station_name: "first".to_string(),
+                source_release_lag: Some("0 days".to_string()),
+                source_data_doi: "10.xxxx".to_string(),
+                source_data_revision: "R0".to_string(),
+                source_data_reference: "Doe, John. A paper!".to_string(),
+                all_public_after: None,
+            },
+            "fi",
+            1,
+        )
+        .unwrap();
+        meta.add_meta(
+            StationMetaAttrs {
+                station_name: "second".to_string(),
+                source_release_lag: Some("90 days".to_string()),
+                source_data_doi: "10.yyyy".to_string(),
+                source_data_revision: "R1".to_string(),
+                source_data_reference: "Doe, Jane. Another paper!".to_string(),
+                all_public_after: None,
+            },
+            "se",
+            11,
+        )
+        .unwrap();
+
         let test_dir = ggg_rs::test_utils::test_data_dir();
         let file = test_dir.join("outputs/write-timeavg-netcdf/other/time_avg_round_trip.nc");
         {
             let mut ds = netcdf::create(&file).unwrap();
             let mut root = ds.root_mut().unwrap();
-            orig.write_netcdf(&mut root).unwrap();
+            orig.write_netcdf_context(&mut root, &meta).unwrap();
         }
 
         let ds = netcdf::open(&file).unwrap();
