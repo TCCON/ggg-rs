@@ -4,7 +4,7 @@ use std::path::Path;
 
 use chrono::{DateTime, Datelike, NaiveDateTime, Timelike, Utc};
 use error_stack::ResultExt;
-use ggg_rs::nc_utils::{get_string_attr, get_var_data};
+use ggg_rs::nc_utils::{get_string_attr, get_var_data, parse_release_lag};
 use ggg_rs::units::map_values_to_quantity;
 use ggg_rs::utils::site_id_from_filename;
 use ggg_rs_derive::{Concat, ReadNetcdf, Subset, WriteNetcdf};
@@ -463,35 +463,37 @@ impl Level2Data {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, ReadNetcdf, WriteNetcdf)]
+#[derive(Debug, Clone, PartialEq, Eq, ReadNetcdf)]
 #[netcdf(context(ty = i8))]
 pub(crate) struct StationMetaAttrs {
     /// The long name of the TCCON station defined in the MIP mapping.
     /// Usually, this is the TCCON name without trailing numbers,
     /// e.g., "parkfalls".
-    #[netcdf(custom(write = Self::write_to_var, read = Self::get_from_var))]
+    #[netcdf(custom(read = Self::get_from_var))]
     pub(crate) station_name: String,
 
     /// The number of days from acquisition for which data from this station
-    /// is withheld from the public archive.
-    #[netcdf(custom(write = Self::write_opt_to_var, read = Self::get_opt_from_var))]
+    /// is withheld from the public archive. `None` if L2 data came from a public
+    /// file.
+    #[netcdf(custom(read = Self::get_opt_from_var))]
     pub(crate) source_release_lag: Option<String>,
 
     /// The DOI for the level 2 data from this site, starting with "10."
-    #[netcdf(custom(write = Self::write_to_var, read = Self::get_from_var))]
+    #[netcdf(custom(read = Self::get_from_var))]
     pub(crate) source_data_doi: String,
 
     /// The revision identifier for the level 2 data from this site, usually
     /// "R0", "R1", etc.
-    #[netcdf(custom(write = Self::write_to_var, read = Self::get_from_var))]
+    #[netcdf(custom(read = Self::get_from_var))]
     pub(crate) source_data_revision: String,
 
     /// The citation for the level 2 data from this site.
-    #[netcdf(custom(write = Self::write_to_var, read = Self::get_from_var))]
+    #[netcdf(custom(read = Self::get_from_var))]
     pub(crate) source_data_reference: String,
 
-    /// The date/time after which all data in this file will be public
-    #[netcdf(custom(write = Self::write_opt_date_to_var, read = Self::get_opt_date_from_var))]
+    /// The date/time after which all data in this file will be public.
+    /// `None` if the L2 data came from a public file.
+    #[netcdf(custom(read = Self::get_opt_date_from_var))]
     pub(crate) all_public_after: Option<chrono::NaiveDate>,
 }
 
@@ -504,6 +506,10 @@ impl StationMetaAttrs {
         station_id: i8,
         var: &mut netcdf::VariableMut<'_>,
     ) -> netcdf::Result<()> {
+        // Must use this to write the attributes, rather than an implementation
+        // of WriteNetcdf with custom overrides; that needs a group passed in to
+        // the custom functions, but to call this from the station_id attrs() annotation,
+        // it must take a variable.
         var.put_attribute(
             &Self::attr_name(station_id, None),
             self.station_name.as_str(),
@@ -592,60 +598,6 @@ impl StationMetaAttrs {
         }
     }
 
-    fn write_to_var<S: ToString>(
-        &self,
-        value: S,
-        _rust_name: &str,
-        nc_name: &str,
-        grp: &mut netcdf::GroupMut<'_>,
-        station_id: &i8,
-    ) -> netcdf::Result<()> {
-        let mut var = grp.variable_mut("station_id").ok_or_else(|| {
-            netcdf::Error::Str(
-                "expected a variable named 'station_id' on the input group".to_string(),
-            )
-        })?;
-
-        let opt_nc_name = if nc_name == "station_name" {
-            None
-        } else {
-            Some(nc_name)
-        };
-
-        var.put_attribute(
-            &Self::attr_name(*station_id, opt_nc_name),
-            value.to_string(),
-        )?;
-        Ok(())
-    }
-
-    fn write_opt_to_var(
-        &self,
-        value: &Option<String>,
-        rust_name: &str,
-        nc_name: &str,
-        grp: &mut netcdf::GroupMut<'_>,
-        station_id: &i8,
-    ) -> netcdf::Result<()> {
-        if let Some(s) = value {
-            Self::write_to_var(&self, s, rust_name, nc_name, grp, station_id)
-        } else {
-            Self::write_to_var(&self, "N/A", rust_name, nc_name, grp, station_id)
-        }
-    }
-
-    fn write_opt_date_to_var(
-        &self,
-        value: &Option<chrono::NaiveDate>,
-        rust_name: &str,
-        nc_name: &str,
-        grp: &mut netcdf::GroupMut<'_>,
-        station_id: &i8,
-    ) -> netcdf::Result<()> {
-        let s = value.map(|d| d.format("%Y-%m-%d").to_string());
-        Self::write_opt_to_var(&self, &s, rust_name, nc_name, grp, station_id)
-    }
-
     fn attr_name(station_id: i8, name: Option<&str>) -> String {
         if let Some(name) = name {
             format!("station_{station_id:03}_{name}")
@@ -713,6 +665,27 @@ impl AllSitesMetaAttrs {
             // Will only panic if our map holds an incorrect index, which it
             // should not if this was constructed via `from_site_files`
             .map(|idx| &self.meta[*idx])
+    }
+
+    pub(crate) fn release_lag_for_station(
+        &self,
+        station_id: i8,
+    ) -> error_stack::Result<Option<chrono::TimeDelta>, CliError> {
+        let idx = self
+            .station_ids
+            .get(&station_id)
+            .ok_or_else(|| CliError::Custom(format!("No metadata for station #{station_id}")))?;
+        if let Some(lag) = &self.meta[*idx].source_release_lag {
+            parse_release_lag(lag)
+                .change_context_lazy(|| {
+                    CliError::Custom(format!(
+                        "error parsing release lag for station #{station_id}"
+                    ))
+                })
+                .map(Some)
+        } else {
+            Ok(None)
+        }
     }
 
     fn load_site_file(

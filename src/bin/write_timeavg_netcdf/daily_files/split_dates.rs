@@ -3,7 +3,7 @@ use indexmap::IndexMap;
 use itertools::Itertools;
 
 use crate::{
-    data_structures::{AllGasAvgData, Gas, TimeAvgData},
+    data_structures::{AllGasAvgData, AllSitesMetaAttrs, Gas, TimeAvgData},
     CliError,
 };
 
@@ -150,6 +150,46 @@ fn make_sort_indices(data: &TimeAvgData) -> Vec<usize> {
         (time, mip_id)
     });
     indices
+}
+
+pub(crate) fn extract_allpub_date(
+    day_data: &TimeAvgData,
+    all_meta: &AllSitesMetaAttrs,
+) -> error_stack::Result<Option<chrono::NaiveDate>, CliError> {
+    if day_data.public.iter().all(|p| *p == 1) {
+        return Ok(None);
+    }
+
+    // We need to get the longest release lag for data that is still private
+    let res: error_stack::Result<chrono::TimeDelta, CliError> = day_data
+        .station_id
+        .iter()
+        .zip(day_data.public.iter())
+        .try_fold(chrono::TimeDelta::zero(), |max_lag, (id, p)| {
+            if *p == 1 {
+                return Ok(max_lag);
+            } else if *p != 0 {
+                unimplemented!("expected the public flag to be 0 or 1, got {p}");
+            }
+
+            let site_lag = all_meta.release_lag_for_station(*id)?;
+            if let Some(lag) = site_lag {
+                Ok(max_lag.max(lag))
+            } else {
+                Ok(max_lag)
+            }
+        });
+
+    let longest_lag =
+        res.map_err(|id| CliError::Custom(format!("failed to get lag for station #{id}")))?;
+    let max_utc_date = if let Some(d) = day_data.cdate.iter().max() {
+        d.date_naive()
+    } else {
+        // If no data, then no need to define the all-public date
+        return Ok(None);
+    };
+
+    Ok(Some(max_utc_date + longest_lag))
 }
 
 #[cfg(test)]
