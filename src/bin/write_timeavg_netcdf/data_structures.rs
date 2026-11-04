@@ -675,38 +675,38 @@ impl StationMetaAttrs {
     }
 }
 
-#[derive(Debug, serde::Serialize)]
-pub(crate) struct StationJsonCitation<'m> {
-    tccon_site_id: &'m str,
-    tccon_name: &'m str,
-    mip_id: i8,
-    mip_name: &'m str,
-    doi: &'m str,
-    text_citation: &'m str,
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub(crate) struct StationJsonCitation {
+    pub(crate) tccon_site_id: String,
+    pub(crate) tccon_name: String,
+    pub(crate) mip_id: i8,
+    pub(crate) mip_name: String,
+    pub(crate) doi: String,
+    pub(crate) text_citation: String,
 }
 
-#[derive(Debug, serde::Serialize)]
-pub(crate) struct AllStationJsonCitation<'c, 'm> {
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub(crate) struct AllStationJsonCitation {
     #[serde(rename = "__comment__")]
-    comment: &'c str,
-    citations: Vec<StationJsonCitation<'m>>,
+    pub(crate) comment: String,
+    pub(crate) citations: Vec<StationJsonCitation>,
 }
 
-impl<'c, 'm> AllStationJsonCitation<'c, 'm> {
+impl AllStationJsonCitation {
     pub(crate) fn new(
-        meta: &'m AllSitesMetaAttrs,
-        comment: &'c str,
+        meta: &AllSitesMetaAttrs,
+        comment: String,
     ) -> error_stack::Result<Self, CliError> {
         let mut citations = vec![];
 
         for (tccon_site_id, mip_id, attrs) in meta.iter_site_attrs() {
             citations.push(StationJsonCitation {
-                tccon_site_id,
-                tccon_name: &attrs.tccon_long_name,
+                tccon_site_id: tccon_site_id.to_string(),
+                tccon_name: attrs.tccon_long_name.clone(),
                 mip_id,
-                mip_name: &attrs.station_name,
-                doi: &attrs.source_data_doi,
-                text_citation: &attrs.source_data_reference,
+                mip_name: attrs.station_name.clone(),
+                doi: attrs.source_data_doi.clone(),
+                text_citation: attrs.source_data_reference.clone(),
             });
         }
 

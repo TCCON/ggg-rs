@@ -302,7 +302,7 @@ fn write_citation_json_file(
     let f = std::fs::File::create(&p)
         .change_context_lazy(|| CliError::Context(format!("error creating {}", p.display())))?;
     let comment = create_citation_comment("plain text citations and DOIs", "JSON format", None);
-    let citation_data = AllStationJsonCitation::new(meta, &comment)?;
+    let citation_data = AllStationJsonCitation::new(meta, comment)?;
     log::trace!("Writing JSON citation data: {citation_data:?}");
     serde_json::to_writer_pretty(f, &citation_data).change_context_lazy(|| {
         CliError::Context(format!(

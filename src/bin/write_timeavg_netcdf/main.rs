@@ -12,6 +12,7 @@ mod average_site;
 mod common_test;
 mod daily_files;
 mod data_structures;
+mod release;
 mod station_ids;
 
 fn main() -> ExitCode {
@@ -22,6 +23,7 @@ fn main() -> ExitCode {
     let res = match clargs.command {
         Subcommand::AvgSite(avg_site_cli) => avg_site_cli.driver(),
         Subcommand::Daily(daily_cli) => daily_cli.driver(),
+        Subcommand::Release(release_cli) => release_cli.driver(),
     };
 
     match res {
@@ -46,6 +48,7 @@ struct Cli {
 enum Subcommand {
     AvgSite(AvgSiteCli),
     Daily(DailyFileCli),
+    Release(ReleaseCli),
 }
 
 #[derive(Debug, Clone, clap::Args)]
@@ -156,6 +159,31 @@ impl DailyFileCli {
             self.end_date,
             !self.no_include_bib_file,
         )
+    }
+}
+
+#[derive(Debug, Clone, clap::Args)]
+pub(crate) struct ReleaseCli {
+    /// The directory containing the daily .nc4 files and their citations.json file.
+    source_dir: PathBuf,
+
+    /// The directory where the output tgz and metadata file will be written.
+    dest_dir: PathBuf,
+
+    /// The revision number to use in the DOI, filenames, etc. Must start with "R".
+    /// Usually, this is a date in YYYYMMDD format, e.g. "R20261103". If omitted,
+    /// it is given the current date.
+    #[clap(long, short = 'r')]
+    revision: Option<String>,
+
+    /// The DOI at which this release will be hosted. Must start with "10.".
+    #[clap(long, short = 'd')]
+    doi: Option<String>,
+}
+
+impl ReleaseCli {
+    fn driver(self) -> error_stack::Result<(), CliError> {
+        release::release_driver(&self.source_dir, &self.dest_dir, self.revision, self.doi)
     }
 }
 

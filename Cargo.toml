@@ -60,6 +60,9 @@ mlua = {version = "0.11.0", features = ["lua55", "serde", "vendored"]}
 csv = "1.4.0"
 textwrap = "0.16.4"
 reqwest = {version = "0.13.5", features = ["blocking"] }
+tar = "0.4.46"
+flate2 = "1.1.10"
+tempfile = "3.27.0"
 
 [dev-dependencies]
 nccompare = { path = "./deps/nccompare" }
