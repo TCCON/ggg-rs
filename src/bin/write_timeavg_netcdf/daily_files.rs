@@ -123,6 +123,8 @@ fn add_global_attrs(
             CliError::context("error adding the 'data_public_after' attribute")
         })?;
 
+    ds.add_attribute("Conventions", "CF-1.13")
+        .change_context_lazy(|| CliError::context("error adding the 'Conventions' attribute"))?;
     ds.add_attribute("title", "Time-averaged TCCON data for model comparison")
         .change_context_lazy(|| CliError::context("error adding the 'title' attribute"))?;
     ds.add_attribute("institution", "California Institute of Technology")

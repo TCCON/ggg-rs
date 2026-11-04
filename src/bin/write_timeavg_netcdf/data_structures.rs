@@ -4,7 +4,7 @@ use std::path::Path;
 
 use chrono::{DateTime, Datelike, NaiveDateTime, Timelike, Utc};
 use error_stack::ResultExt;
-use ggg_rs::nc_utils::{get_string_attr, get_var_data, parse_release_lag};
+use ggg_rs::nc_utils::{get_string_attr, get_var_data, map_chrono_i64, parse_release_lag};
 use ggg_rs::units::map_values_to_quantity;
 use ggg_rs::utils::site_id_from_filename;
 use ggg_rs_derive::{Concat, ReadNetcdf, Subset, WriteNetcdf};
@@ -42,22 +42,50 @@ pub(crate) type AllGasAvgData = IndexMap<Gas, TimeAvgData>;
 #[netcdf(describe, context(write = AllSitesMetaAttrs))]
 pub(crate) struct TimeAvgData {
     /// The midpoint of each solar time bin.
-    #[netcdf(dimensions("n_obs_instr", "idate"), map(write = map_datetimes_to_cdate, read = map_cdate_to_naive_datetimes), kind = "array")]
+    #[netcdf(
+        dimensions("n_obs_instr", "idate"),
+        attr(name = "long_name", value = "midpoint_of_solar_time_bin"),
+        map(write = map_datetimes_to_cdate, read = map_cdate_to_naive_datetimes), kind = "array"
+    )]
     pub(crate) solar_time_bin: Array1<NaiveDateTime>,
 
     /// The mean UTC time of the bin, weighted by the uncertainty in the column
     /// averages.
-    #[netcdf(dimensions("n_obs_instr", "idate"), map(write = map_datetimes_to_cdate, read = map_cdate_to_datetimes), kind = "array")]
+    #[netcdf(
+        dimensions("n_obs_instr", "idate"),
+        attr(name = "long_name", value = "date_and_time"),
+        map(write = map_datetimes_to_cdate, read = map_cdate_to_datetimes), kind = "array"
+    )]
+    // Note: this maps to the 2D array with the datetime parts as the second dimension.
     pub(crate) cdate: Array1<DateTime<Utc>>,
+
+    /// The mean UTC time of the bin, weighted by the uncertainty in the column
+    /// averages, in CF-compliant format.
+    #[netcdf(
+        dimensions("n_obs_instr"),
+        rename = "utc_time",
+        kind = "array",
+        attr(name = "standard_name", value = "time"),
+        attr(name = "comment", value = "This contains the same times as cdate, but in CF-compliant format."),
+        map_units(write = Self::map_utc_cf_time, read = Self::noop::<Array1<i64>>)
+    )]
+    #[subset(skip)]
+    #[concat(skip)]
+    // Note: this is written by converting cdate; no code should reference this (obviously).
+    pub(crate) _utc_time: (),
 
     /// A unique identifier for each bin in the format YYYYmmddHHMMSSII, where
     /// II is the station ID and the rest is the time string of the solar mean time.
-    #[netcdf(dimensions("n_obs_instr"))]
+    #[netcdf(
+        dimensions("n_obs_instr"),
+        attr(name = "long_name", value = "observation_identifier")
+    )]
     pub(crate) obs_id: Array1<i64>,
 
     /// The numeric ID of the TCCON station from which each bin was derived.
     #[netcdf(
         dimensions("n_obs_instr"),
+        attr(name = "long_name", value = "tccon_station_identifier"),
         attrs(func = Self::station_id_attrs)
     )]
     pub(crate) station_id: Array1<i8>,
@@ -66,24 +94,34 @@ pub(crate) struct TimeAvgData {
     /// at the time of creation (1) or contained at least one private spectrum (0).
     #[netcdf(
         dimensions("n_obs_instr"),
+        attr(name = "long_name", value = "is_data_public"),
         attr( name = "flag_values", value = vec![0_i8, 1_i8]),
         attr( name = "flag_meanings", value = "bin_contained_private_data bin_contained_only_public_data")
     )]
     pub(crate) public: Array1<i8>,
 
     /// A flag indicating if the bin is safe to use/include in the daily files.
-    #[netcdf(dimensions("n_obs_instr"))]
+    #[netcdf(
+        dimensions("n_obs_instr"),
+        attr(name = "standard_name", value = "quality_flag"),
+        attr(name = "units", value = "1")
+    )]
     // bin flags are to be added separately by the flagging object
     pub(crate) bin_flag: Array1<u64>,
 
     /// How many TCCON observations are included in the bin
-    #[netcdf(dimensions("n_obs_instr"))]
+    #[netcdf(
+        dimensions("n_obs_instr"),
+        attr(name = "standard_name", value = "number_of_observations"),
+        attr(name = "units", value = "1")
+    )]
     pub(crate) num_soundings: Array1<u64>,
 
     /// The TCCON latitudes
     #[netcdf(
         dimensions("n_obs_instr"),
         map(write = ggg_rs::units::angle::map::<degree, _, _, _, _>, read = map_deg_to_q),
+        attr(name = "standard_name", value = "latitude"),
         attr(name = "units", value = "degrees_north"),
         kind = "array",
     )]
@@ -93,6 +131,7 @@ pub(crate) struct TimeAvgData {
     #[netcdf(
         dimensions("n_obs_instr"),
         map(write = ggg_rs::units::angle::map::<degree, _, _, _, _>, read = map_deg_to_q),
+        attr(name = "standard_name", value = "longitude"),
         attr(name = "units", value = "degrees_east"),
         kind = "array",
     )]
@@ -103,6 +142,7 @@ pub(crate) struct TimeAvgData {
     #[netcdf(
         dimensions("n_obs_instr"),
         map(write = ggg_rs::units::angle::map::<degree, _, _, _, _>, read = map_deg_to_q),
+        attr(name = "standard_name", value = "solar_zenith_angle"),
         attr(name = "units", value = "degrees"),
         attr(name = "comment", value = "Calculated as the weighted mean of SZAs in the bin, not the SZA at the bin center time."),
         kind = "array",
@@ -113,6 +153,7 @@ pub(crate) struct TimeAvgData {
     /// averages.
     #[netcdf(
         dimensions("n_obs_instr"),
+        attr(name = "standard_name", value = "surface_air_pressure"),
         attr(name = "long_units", value = "Pascals"),
         map_units(write = ggg_rs::units::pressure::map_units::<pascal, _, _, _, _>, read = map_values_to_quantity::<Pressure, f32, _>),
         kind = "array",
@@ -122,6 +163,7 @@ pub(crate) struct TimeAvgData {
     /// The pressure levels of the priors, with one row per bin.
     #[netcdf(
         dimensions("n_obs_instr", "n_lev"),
+        attr(name = "long_name", value = "prior_profile_pressure_levels"),
         attr(name = "long_units", value = "Pascals"),
         map_units(write = ggg_rs::units::pressure::map_units::<pascal, _, _, _, _>, read = map_values_to_quantity::<Pressure, f32, _>),
         kind = "array",
@@ -134,6 +176,7 @@ pub(crate) struct TimeAvgData {
     /// single vector for all bins.
     #[netcdf(
         dimensions("n_lev"),
+        attr(name = "long_name", value = "averaging_kernel_pressure_levels"),
         attr(name = "long_units", value = "Pascals"),
         attr(name = "comment", value = "First index is the surface layer, last index is TOA"),
         map_units(write = ggg_rs::units::pressure::map_units::<pascal, _, _, _, _>, read = map_values_to_quantity::<Pressure, f32, _>),
@@ -147,6 +190,7 @@ pub(crate) struct TimeAvgData {
     /// in the column averages.
     #[netcdf(
         dimensions("n_obs_instr", "n_lev"),
+        attr(name = "long_name", value = "a_priori_water_profile"),
         attr(name = "long_units", value = "Wet air mole fraction in mole/mole"),
         attr(name = "comment", value = "First index is the surface layer, last index is TOA"),
         map_units(write = ggg_rs::units::ratio::map_units::<ratio, _, _, _, _>, read = map_values_to_quantity::<Ratio, f32, _>),
@@ -159,6 +203,7 @@ pub(crate) struct TimeAvgData {
     #[netcdf(
         dimensions("n_obs_instr", "n_lev"),
         attr(name = "comment", value = "First index is the surface layer, last index is TOA"),
+        attr(name = "long_name", value = "a_priori_profile"),
         attr(name = "long_units", value = "Dry air mole fraction in parts per million"),
         attr(name = "adjustment", value = "This has been dried with the TCCON prior water profile"),
         map_units(write = ggg_rs::units::ratio::map_units::<part_per_million, _, _, _, _>, read = map_values_to_quantity::<Ratio, f32, _>),
@@ -170,6 +215,7 @@ pub(crate) struct TimeAvgData {
     /// weighted by the column average uncertainties.
     #[netcdf(
         dimensions("n_obs_instr", "n_lev"),
+        attr(name = "long_name", value = "a_priori_profile"),
         attr(name = "comment", value = "First index is the surface layer, last index is TOA"),
         attr(name = "long_units", value = "Wet air mole fraction in parts per million"),
         map_units(write = ggg_rs::units::ratio::map_units::<part_per_million, _, _, _, _>, read = map_values_to_quantity::<Ratio, f32, _>),
@@ -180,6 +226,7 @@ pub(crate) struct TimeAvgData {
     /// The averaging kernels, weighted by the column average uncertainties.
     #[netcdf(
         dimensions("n_obs_instr", "n_lev"),
+        attr(name = "long_name", value = "averaging_kernel"),
         attr(name = "units", value = "1"),
         attr(
             name = "comment",
@@ -192,6 +239,7 @@ pub(crate) struct TimeAvgData {
     /// in the individual observations.
     #[netcdf(
         dimensions("n_obs_instr"),
+        attr(name = "long_name", value = "column_average_mole_fraction"),
         attr(name = "long_units", value = "Dry air mole fraction in parts per million"),
         map_units(write = ggg_rs::units::ratio::map_units::<part_per_million, _, _, _, _>, read = map_values_to_quantity::<Ratio, f32, _>),
         kind = "array",
@@ -201,6 +249,7 @@ pub(crate) struct TimeAvgData {
     /// The propagated uncertainty in the bin averaged TCCON column average values.
     #[netcdf(
         dimensions("n_obs_instr"),
+        attr(name = "long_name", value = "column_average_mole_fraction_uncertainty"),
         attr(name = "long_units", value = "Dry air mole fraction in parts per million"),
         map_units(write = ggg_rs::units::ratio::map_units::<part_per_million, _, _, _, _>, read = map_values_to_quantity::<Ratio, f32, _>),
         kind = "array",
@@ -224,6 +273,7 @@ impl TimeAvgData {
         Self {
             solar_time_bin,
             cdate: Array1::from_elem(nbin, chrono::DateTime::from_timestamp_nanos(0)),
+            _utc_time: (),
             obs_id: Array1::from_elem(nbin, i64::MIN),
             station_id: Array1::from_elem(nbin, i8::MIN),
             public: Array1::from_elem(nbin, i8::MIN),
@@ -263,10 +313,6 @@ impl TimeAvgData {
         }
     }
 
-    fn wmo_scale_attr<'a, A>(&'a self, _xgas: &A, _name: &str) -> &'a str {
-        &self.wmo_or_analagous_scale
-    }
-
     fn add_wmo_scale_attr<'a>(
         &'a self,
         scale: &str,
@@ -294,6 +340,19 @@ impl TimeAvgData {
             netcdf::Error::Str(format!("could not retrieve the WMO scale value: {e}"))
         })?;
         Ok(scale)
+    }
+
+    fn map_utc_cf_time(&self, _: &(), name: &str) -> (Array1<i64>, &'static str) {
+        map_chrono_i64(self, &self.cdate, name)
+    }
+
+    fn noop<A>(
+        _data: A,
+        _field: &str,
+        _var: &netcdf::Variable,
+        _units: Option<&str>,
+    ) -> netcdf::Result<()> {
+        Ok(())
     }
 
     fn station_id_attrs<'a>(
@@ -895,6 +954,7 @@ mod tests {
                 utc_dt_ymdhms(2026, 1, 2, 3, 4, 0),
                 utc_dt_ymdhms(2026, 2, 3, 4, 5, 0),
             ],
+            _utc_time: (),
             obs_id: array![2026010203040501, 2026020304050611],
             station_id: array![1, 11],
             public: array![1, 0],
