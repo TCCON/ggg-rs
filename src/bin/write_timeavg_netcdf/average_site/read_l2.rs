@@ -314,12 +314,14 @@ pub(crate) fn read_tccon_metadata(
         (None, None)
     };
 
+    let tccon_long_name = nc_utils::get_string_attr(&ds, "long_name")?;
     let source_data_doi = nc_utils::get_string_attr(&ds, "data_doi")?;
     let source_data_revision = nc_utils::get_string_attr(&ds, "data_revision")?;
     let source_data_reference = nc_utils::get_string_attr(&ds, "data_reference")?;
 
     Ok(StationMetaAttrs {
         station_name: station_name.to_string(),
+        tccon_long_name,
         source_release_lag,
         source_data_doi,
         source_data_revision,

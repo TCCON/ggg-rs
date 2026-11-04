@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::{borrow::Cow, io::Write, path::Path, sync::LazyLock};
 
 use error_stack::ResultExt;
 use ggg_rs::{
@@ -7,13 +7,17 @@ use ggg_rs::{
     utils::{iter_dates, site_id_from_filename},
 };
 use indexmap::IndexMap;
+use regex::Regex;
 
 use crate::{
-    data_structures::{AllGasAvgData, AllSitesMetaAttrs, Gas, TimeAvgData},
+    data_structures::{AllGasAvgData, AllSitesMetaAttrs, AllStationJsonCitation, Gas, TimeAvgData},
     CliError,
 };
 
 mod split_dates;
+
+static BIBTEX_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\{.+/").expect("Bibtex regex should compile"));
 
 pub(super) fn daily_files_driver<F: AsRef<Path>>(
     average_files: &[F],
@@ -21,6 +25,7 @@ pub(super) fn daily_files_driver<F: AsRef<Path>>(
     gases: &[Gas],
     start_date: Option<chrono::NaiveDate>,
     end_date: Option<chrono::NaiveDate>,
+    include_bib_file: bool,
 ) -> error_stack::Result<(), CliError> {
     let all_data = load_site_files(average_files, gases)?;
     let all_metadata = AllSitesMetaAttrs::from_site_files(average_files, gases)?;
@@ -83,6 +88,11 @@ pub(super) fn daily_files_driver<F: AsRef<Path>>(
         })?;
     }
 
+    write_citation_text_file(output_dir, &all_metadata)?;
+    write_citation_json_file(output_dir, &all_metadata)?;
+    if include_bib_file {
+        write_citation_bibtex_file(output_dir, &all_metadata)?;
+    }
     Ok(())
 }
 
@@ -252,22 +262,153 @@ fn load_site_files_history<F: AsRef<Path>>(
     Ok(history)
 }
 
+fn write_citation_text_file(
+    output_dir: &Path,
+    meta: &AllSitesMetaAttrs,
+) -> error_stack::Result<(), CliError> {
+    let p = output_dir.join("citations.txt");
+    log::trace!("Writing citation text file at {}", p.display());
+    let mut f = std::fs::File::create(&p)
+        .change_context_lazy(|| CliError::Context(format!("error creating {}", p.display())))?;
+
+    let comment = create_citation_comment("citations", "plain text", Some("# "));
+    write!(f, "{comment}").change_context_lazy(|| {
+        CliError::Context(format!("error writing header comment in {}", p.display()))
+    })?;
+
+    for (site_id, _, attrs) in meta.iter_site_attrs() {
+        log::trace!("Writing text citation for {site_id}");
+        write!(f, "\n\n{}", attrs.source_data_reference).change_context_lazy(|| {
+            CliError::Context(format!(
+                "error writing citation for '{site_id}' to {}",
+                p.display()
+            ))
+        })?;
+    }
+    // Add a trailing newline so that catting the file leaves a terminal ok -
+    // also makes the test against the python-generated files work.
+    write!(f, "\n").change_context_lazy(|| {
+        CliError::Context(format!("error in final write to {}", p.display()))
+    })?;
+    Ok(())
+}
+
+fn write_citation_json_file(
+    output_dir: &Path,
+    meta: &AllSitesMetaAttrs,
+) -> error_stack::Result<(), CliError> {
+    let p = output_dir.join("citations.json");
+    log::trace!("Writing citation JSON file at {}", p.display());
+    let f = std::fs::File::create(&p)
+        .change_context_lazy(|| CliError::Context(format!("error creating {}", p.display())))?;
+    let comment = create_citation_comment("plain text citations and DOIs", "JSON format", None);
+    let citation_data = AllStationJsonCitation::new(meta, &comment)?;
+    log::trace!("Writing JSON citation data: {citation_data:?}");
+    serde_json::to_writer_pretty(f, &citation_data).change_context_lazy(|| {
+        CliError::Context(format!(
+            "error writing citation information to {}",
+            p.display()
+        ))
+    })?;
+    Ok(())
+}
+
+fn write_citation_bibtex_file(
+    output_dir: &Path,
+    meta: &AllSitesMetaAttrs,
+) -> error_stack::Result<(), CliError> {
+    let p = output_dir.join("citations.bib");
+    log::trace!("Writing citation bib file at {}", p.display());
+    let mut f = std::fs::File::create(&p)
+        .change_context_lazy(|| CliError::Context(format!("error creating {}", p.display())))?;
+
+    let comment = create_citation_comment("citation entries", "bibtex format", Some("% "));
+
+    write!(f, "{comment}\n\n").change_context_lazy(|| {
+        CliError::Context(format!("error writing comment header to {}", p.display()))
+    })?;
+    let client = reqwest::blocking::Client::new();
+    for (site_id, _, attrs) in meta.iter_site_attrs() {
+        log::trace!("Writing bibtex citation for {site_id}");
+        let bibtex = get_bibtex_from_doi(&attrs.source_data_doi, &client)?;
+        // The bibtex string seems to bring one newline already, so only need one extra here.
+        write!(f, "{bibtex}\n").change_context_lazy(|| {
+            CliError::Context(format!(
+                "error writing bibtex entry for site '{site_id}' to {}",
+                p.display()
+            ))
+        })?;
+    }
+    Ok(())
+}
+
+fn create_citation_comment(content: &str, file_fmt: &str, indent_str: Option<&str>) -> String {
+    let s = format!(
+        "This file contains the {content} for the TCCON datasets included in the time-averaged files in {file_fmt}. \
+        Please cite the station-specific datasets for all stations' datasets used as well as the time-averaged collection. \
+        Because each TCCON site is responsible for securing its own funding, it is essential to demonstrate the \
+        value of the data to secure ongoing funding."
+    );
+    if let Some(indent) = indent_str {
+        let opts = textwrap::Options::new(70)
+            .initial_indent(indent)
+            .subsequent_indent(indent)
+            .wrap_algorithm(textwrap::WrapAlgorithm::FirstFit);
+        textwrap::fill(&s, &opts)
+    } else {
+        return s;
+    }
+}
+
+fn get_bibtex_from_doi(
+    doi: &str,
+    client: &reqwest::blocking::Client,
+) -> error_stack::Result<String, CliError> {
+    log::info!("Retrieving bibtex for doi = {doi}");
+    let doi = if doi.starts_with("http") {
+        Cow::Owned(doi.replace("https://doi.org/", ""))
+    } else {
+        Cow::Borrowed(doi)
+    };
+    let url = format!("https://data.crosscite.org/application/x-bibtex/{doi}");
+    match client.get(&url).send().and_then(|resp| resp.text()) {
+        Ok(resp) => {
+            let (first, rest) = resp.split_once("\n")
+                .ok_or_else(|| CliError::Custom(format!("Bibtex returned for DOI = '{doi}' did not have any newlines, which was expected")))?;
+            // in the first line, change the key to remove the leading part of the URL, e.g.
+            // "@misc{https://doi.org/10.14291/tccon.ggg2020.easttroutlake01.r0," to
+            // "@misc{tccon.ggg2020.easttroutlake01.r0,"
+            let first = BIBTEX_RE.replace(first, "{");
+            Ok(format!("{first}\n{rest}"))
+        }
+        Err(e) => {
+            log::error!("Querying crosscite URL '{url}' gave an error: {e}");
+            Ok(format!(
+                "% Bibtex for {doi} was not available as of {}, please update this file or check tccondata.org or data.crosscite.org for the updated citation.",
+                chrono::Local::now().format("%Y-%m-%d %H:%M %Z")
+            ))
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use crate::common_test::{check_timeavg_files, CheckTimeAvgFields};
+    use crate::{
+        common_test::{check_timeavg_files, CheckTimeAvgFields},
+        data_structures::Gas::CO2,
+    };
 
     use super::*;
-    use ggg_rs::test_utils::{init_test_logging, utc_dt_ymd};
+    use ggg_rs::test_utils::{compare_output_text_files, init_test_logging, utc_dt_ymd};
 
     #[test]
     fn test_daily_files_end2end() {
         init_test_logging(None);
         let test_dir = ggg_rs::test_utils::test_data_dir();
 
-        // TODO: update to checked in input files once tests are working
         let site_files = [
-            test_dir.join("inputs/write-timeavg-netcdf/daily/pa.private.qc.avg30min.nc"),
             test_dir.join("inputs/write-timeavg-netcdf/daily/ci.private.qc.avg30min.nc"),
+            test_dir.join("inputs/write-timeavg-netcdf/daily/pa.private.qc.avg30min.nc"),
         ];
         let expected_dir = test_dir.join("expected/write-timeavg-netcdf/daily");
         let output_dir = test_dir.join("outputs/write-timeavg-netcdf/daily");
@@ -281,6 +422,7 @@ mod tests {
             &[Gas::CO2],
             Some(start),
             Some(end),
+            false,
         )
         .unwrap();
 
@@ -318,5 +460,27 @@ mod tests {
                 test_file.display()
             );
         }
+
+        compare_output_text_files(&expected_dir, &output_dir, "citations.txt");
+        compare_output_text_files(&expected_dir, &output_dir, "citations.json");
+    }
+
+    #[test]
+    #[ignore = "requires network call"]
+    fn test_citations_bib() {
+        // This test requires making a call to crosscite.org, so we only run it if we really need to.
+        init_test_logging(None);
+        let test_dir = ggg_rs::test_utils::test_data_dir();
+
+        let site_files = [
+            test_dir.join("inputs/write-timeavg-netcdf/daily/ci.private.qc.avg30min.nc"),
+            test_dir.join("inputs/write-timeavg-netcdf/daily/pa.private.qc.avg30min.nc"),
+        ];
+        let expected_dir = test_dir.join("expected/write-timeavg-netcdf/daily");
+        let output_dir = test_dir.join("outputs/write-timeavg-netcdf/daily");
+
+        let all_metadata = AllSitesMetaAttrs::from_site_files(&site_files, &[CO2]).unwrap();
+        write_citation_bibtex_file(&output_dir, &all_metadata).unwrap();
+        compare_output_text_files(&expected_dir, &output_dir, "citations.bib");
     }
 }

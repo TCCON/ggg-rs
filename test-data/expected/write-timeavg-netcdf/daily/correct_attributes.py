@@ -118,5 +118,7 @@ for f in Path('.').glob('*.nc4'):
             grp['avg_kernel'].units = '1'
             grp['num_soundings'].units = '1'
             grp['station_id'].station_006_all_public_after = '2025-10-08'
+            grp['station_id'].station_006_tccon_long_name = 'pasadena01'
             grp['station_id'].station_029_all_public_after = '2025-10-07'
+            grp['station_id'].station_029_tccon_long_name = 'parkfalls01'
             del grp['obs_id'].comment # now in the description

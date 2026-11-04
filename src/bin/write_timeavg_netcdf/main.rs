@@ -131,11 +131,19 @@ struct DailyFileCli {
 
     /// Date to start processing on or after. If the earliest date in the files
     /// is after this date, processing will start on that date.
+    #[clap(long, short = 's')]
     start_date: Option<chrono::NaiveDate>,
 
     /// Date to stop processing on or before. If the latest date in the files
     /// is before this date, processing will stop on that date.
+    #[clap(long, short = 'e')]
     end_date: Option<chrono::NaiveDate>,
+
+    /// Do not write out the citations.bib file. This file requires making a
+    /// request to crosscite.org, so if you are running in an environment
+    /// where HTTP requests are not allowed, use this to disable writing that file.
+    #[clap(long, short = 'b')]
+    no_include_bib_file: bool,
 }
 
 impl DailyFileCli {
@@ -146,6 +154,7 @@ impl DailyFileCli {
             &self.gases,
             self.start_date,
             self.end_date,
+            !self.no_include_bib_file,
         )
     }
 }

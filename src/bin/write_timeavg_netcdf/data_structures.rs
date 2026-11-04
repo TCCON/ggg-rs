@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::fmt::{Debug, Display};
 use std::path::Path;
 
@@ -16,6 +15,7 @@ use uom::si::f32::{Angle, Pressure, Ratio};
 use uom::si::pressure::pascal;
 use uom::si::ratio::{part_per_million, ratio};
 
+use crate::station_ids::MipIdMap;
 use crate::CliError;
 
 ///
@@ -531,6 +531,11 @@ pub(crate) struct StationMetaAttrs {
     #[netcdf(custom(read = Self::get_from_var))]
     pub(crate) station_name: String,
 
+    /// The long name of the TCCON station as used by the network.
+    /// This is the version with the tailing numbers, e.g. "parkfalls01".
+    #[netcdf(custom(read = Self::get_from_var))]
+    pub(crate) tccon_long_name: String,
+
     /// The number of days from acquisition for which data from this station
     /// is withheld from the public archive. `None` if L2 data came from a public
     /// file.
@@ -572,6 +577,10 @@ impl StationMetaAttrs {
         var.put_attribute(
             &Self::attr_name(station_id, None),
             self.station_name.as_str(),
+        )?;
+        var.put_attribute(
+            &Self::attr_name(station_id, Some("tccon_long_name")),
+            self.tccon_long_name.as_str(),
         )?;
         var.put_attribute(
             &Self::attr_name(station_id, Some("source_release_lag")),
@@ -666,11 +675,50 @@ impl StationMetaAttrs {
     }
 }
 
+#[derive(Debug, serde::Serialize)]
+pub(crate) struct StationJsonCitation<'m> {
+    tccon_site_id: &'m str,
+    tccon_name: &'m str,
+    mip_id: i8,
+    mip_name: &'m str,
+    doi: &'m str,
+    text_citation: &'m str,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub(crate) struct AllStationJsonCitation<'c, 'm> {
+    #[serde(rename = "__comment__")]
+    comment: &'c str,
+    citations: Vec<StationJsonCitation<'m>>,
+}
+
+impl<'c, 'm> AllStationJsonCitation<'c, 'm> {
+    pub(crate) fn new(
+        meta: &'m AllSitesMetaAttrs,
+        comment: &'c str,
+    ) -> error_stack::Result<Self, CliError> {
+        let mut citations = vec![];
+
+        for (tccon_site_id, mip_id, attrs) in meta.iter_site_attrs() {
+            citations.push(StationJsonCitation {
+                tccon_site_id,
+                tccon_name: &attrs.tccon_long_name,
+                mip_id,
+                mip_name: &attrs.station_name,
+                doi: &attrs.source_data_doi,
+                text_citation: &attrs.source_data_reference,
+            });
+        }
+
+        Ok(Self { comment, citations })
+    }
+}
+
 #[derive(Debug, Default)]
 pub(crate) struct AllSitesMetaAttrs {
     meta: Vec<StationMetaAttrs>,
-    site_ids: HashMap<String, usize>,
-    station_ids: HashMap<i8, usize>,
+    site_ids: IndexMap<String, usize>,
+    station_ids: IndexMap<i8, usize>,
 }
 
 impl AllSitesMetaAttrs {
@@ -709,9 +757,15 @@ impl AllSitesMetaAttrs {
     ) -> error_stack::Result<Self, CliError> {
         let mut out = Self::default();
 
+        let mut meta = vec![];
         for file in files {
-            let (this_meta, this_site_id, this_station_id) =
-                Self::load_site_file(file.as_ref(), gases)?;
+            meta.push(Self::load_site_file(file.as_ref(), gases)?);
+        }
+
+        // Sorting isn't strictly necessary, but it's nice to have the
+        // sites in order in the citation files.
+        meta.sort_by_key(|m| m.2);
+        for (this_meta, this_site_id, this_station_id) in meta {
             out.add_meta(this_meta, this_site_id, this_station_id)?;
         }
 
@@ -745,6 +799,26 @@ impl AllSitesMetaAttrs {
         } else {
             Ok(None)
         }
+    }
+    pub(crate) fn iter_site_attrs(&self) -> impl Iterator<Item = (&str, i8, &StationMetaAttrs)> {
+        self.site_ids.iter().map(|(sid, idx)| {
+            let attrs = &self.meta[*idx];
+            let mip_id = self
+                .station_ids
+                .iter()
+                .fold(
+                    None,
+                    |acc, (id, this_idx)| {
+                        if this_idx == idx {
+                            Some(*id)
+                        } else {
+                            acc
+                        }
+                    },
+                )
+                .expect("All indices should be in both the station and site ID maps");
+            (sid.as_str(), mip_id, attrs)
+        })
     }
 
     fn load_site_file(
@@ -983,6 +1057,7 @@ mod tests {
         meta.add_meta(
             StationMetaAttrs {
                 station_name: "first".to_string(),
+                tccon_long_name: "first01".to_string(),
                 source_release_lag: Some("0 days".to_string()),
                 source_data_doi: "10.xxxx".to_string(),
                 source_data_revision: "R0".to_string(),
@@ -996,6 +1071,7 @@ mod tests {
         meta.add_meta(
             StationMetaAttrs {
                 station_name: "second".to_string(),
+                tccon_long_name: "second02".to_string(),
                 source_release_lag: Some("90 days".to_string()),
                 source_data_doi: "10.yyyy".to_string(),
                 source_data_revision: "R1".to_string(),
