@@ -838,59 +838,6 @@ impl AllSitesMetaAttrs {
     }
 }
 
-fn opt_to_attr<A, T>(_: A, opt: &Option<T>, _: &str) -> netcdf::AttributeValue
-where
-    netcdf::AttributeValue: From<T>,
-    T: Clone,
-{
-    match opt {
-        Some(val) => val.clone().into(),
-        None => netcdf::AttributeValue::Str("N/A".to_string()),
-    }
-}
-
-fn opt_from_attr<T: TryFrom<netcdf::AttributeValue, Error = netcdf::Error>>(
-    att_val: netcdf::AttributeValue,
-    _: &str,
-    _: &netcdf::Variable<'_>,
-) -> netcdf::Result<Option<T>> {
-    if let netcdf::AttributeValue::Str(s) = &att_val {
-        if s == "N/A" {
-            return Ok(None);
-        }
-    }
-
-    T::try_from(att_val).map(|v| Some(v))
-}
-
-fn opt_date_to_attr<A>(
-    _: A,
-    opt_date: &Option<chrono::NaiveDate>,
-    _: &str,
-) -> netcdf::AttributeValue {
-    match opt_date {
-        Some(date) => netcdf::AttributeValue::Str(date.format("%Y-%m-%d").to_string()),
-        None => netcdf::AttributeValue::Str("N/A".to_string()),
-    }
-}
-
-fn opt_date_from_attr(
-    att_val: String,
-    _: &str,
-    _: &netcdf::Variable,
-) -> netcdf::Result<Option<chrono::NaiveDate>> {
-    if att_val == "N/A" {
-        Ok(None)
-    } else {
-        let date = chrono::NaiveDate::parse_from_str(&att_val, "%Y-%m-%d").map_err(|e| {
-            netcdf::Error::Str(format!(
-                "could not parse '{att_val}' as a date in YYYY-MM-DD format: {e}"
-            ))
-        })?;
-        Ok(Some(date))
-    }
-}
-
 fn map_datetimes_to_cdate<A, D: Datelike + Timelike>(_: A, dt: &Array1<D>, _: &str) -> Array2<i16> {
     let mut cdate = Array2::from_elem([dt.len(), 6], i16::MIN);
     ndarray::Zip::from(cdate.rows_mut())

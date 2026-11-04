@@ -135,7 +135,7 @@ mod tests {
         common_test::{check_station_meta_attrs, check_timeavg_data, CheckTimeAvgFields},
         data_structures::{Gas, TimeAvgData},
     };
-    use ggg_rs::test_utils::{compare_nc_attrs, init_test_logging, NCDF_F32_DEFAULT_FILL};
+    use ggg_rs::test_utils::{init_test_logging, NCDF_F32_DEFAULT_FILL};
     use read_l2::co2_bin_def;
 
     #[test]

@@ -2,6 +2,7 @@ use std::path::Path;
 
 use error_stack::ResultExt;
 use ggg_rs::{
+    constants::{GGG2020_REFERENCE, TCCON_DATA_USE_POLICY, TCCON_NETWORK_REFERENCE},
     nc_utils::get_string_attr,
     utils::{iter_dates, site_id_from_filename},
 };
@@ -134,19 +135,12 @@ fn add_global_attrs(
     ds.add_attribute("source", "Total Carbon Column Observing Network (TCCON)")
         .change_context_lazy(|| CliError::context("error adding the 'source' attribute"))?;
 
-    let refs = "Laughner, J. L., Toon, G. C., Mendonca, J., Petri, C., Roche, S., Wunch, D., Blavier, J.-F., Griffith, D. W. T., \
-        Heikkinen, P., Keeling, R. F., Kiel, M., Kivi, R., Roehl, C. M., Stephens, B. B., Baier, B. C., Chen, H., Choi, Y., Deutscher, N. M., \
-        DiGangi, J. P., Gross, J., Herkommer, B., Jeseck, P., Laemmel, T., Lan, X., McGee, E., McKain, K., Miller, J., Morino, I., Notholt, J., \
-        Ohyama, H., Pollard, D. F., Rettinger, M., Riris, H., Rousogenous, C., Sha, M. K., Shiomi, K., Strong, K., Sussmann, R., Té, Y., Velazco, V. A., \
-        Wofsy, S. C., Zhou, M., and Wennberg, P. O.: \
-        The Total Carbon Column Observing Network\'s GGG2020 data version, Earth Syst. Sci. Data, 16, 2197-2260, https://doi.org/10.5194/essd-16-2197-2024, 2024.\n\
-        Wunch, D., G. C. Toon, J.-F. L. Blavier, R. A. Washenfelder, J. Notholt, B. J. Connor, D. W. T. Griffith, V. Sherlock, and P. O. Wennberg: \
-        The Total Carbon Column Observing Network, Philos. Trans. R. Soc. A Math. Phys. Eng. Sci., 369 (1943), 2087-2112, doi:10.1098/rsta.2010.0240, 2011.";
+    let refs = format!("{GGG2020_REFERENCE}\n{TCCON_NETWORK_REFERENCE}");
     ds.add_attribute("references", refs)
         .change_context_lazy(|| CliError::context("error adding the 'references' attribute"))?;
     ds.add_attribute(
         "comment",
-        "TCCON data use policy: https://tccon-wiki.caltech.edu/Main/DataUseGuidelines",
+        format!("TCCON data use policy: {TCCON_DATA_USE_POLICY}"),
     )
     .change_context_lazy(|| CliError::context("error adding the 'comment' attribute"))?;
 
@@ -312,6 +306,9 @@ mod tests {
                 &nccomp_def,
                 false,
                 true,
+                &["creation_time", "history"], // these contain the current time, so will never match
+                &["obs_num"], // obs_num is a holdover from the original Python code; it used a time that would change from one revision to another, so we don't include it now
+                &[],
             )
             .unwrap();
             assert!(

@@ -6,6 +6,8 @@ pub mod averaging;
 pub mod cit_spectrum_name;
 /// Common code for `collate-*-results` programs.
 pub mod collation;
+/// Common constants used throughout the programs.
+pub mod constants;
 /// Common error types
 pub mod error;
 /// Utilities for handling I2S configuration
