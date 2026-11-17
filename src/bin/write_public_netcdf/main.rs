@@ -476,8 +476,13 @@ fn add_aux_vars(
     time_subsetter: &Subsetter,
 ) -> error_stack::Result<(), CliError> {
     for var in config.aux.iter() {
-        var.copy(private_ds, public_ds, time_subsetter)
-            .change_context(CliError::WritingAux)?;
+        var.copy(
+            private_ds,
+            public_ds,
+            time_subsetter,
+            &config.var_attrs_to_omit,
+        )
+        .change_context(CliError::WritingAux)?;
     }
 
     Ok(())
@@ -490,8 +495,13 @@ fn add_extra_priors(
     time_subsetter: &Subsetter,
 ) -> error_stack::Result<(), CliError> {
     for var in config.extra_priors.iter() {
-        var.copy(private_ds, public_ds, time_subsetter)
-            .change_context(CliError::WritingExtraPriors)?;
+        var.copy(
+            private_ds,
+            public_ds,
+            time_subsetter,
+            &config.var_attrs_to_omit,
+        )
+        .change_context(CliError::WritingExtraPriors)?;
     }
     Ok(())
 }
@@ -517,8 +527,13 @@ fn add_xgas_vars(
 
     for var in it {
         log::trace!("Xgas variable: {var:?}");
-        var.copy(private_ds, public_ds, time_subsetter)
-            .change_context(CliError::WritingXgas)?;
+        var.copy(
+            private_ds,
+            public_ds,
+            time_subsetter,
+            &config.var_attrs_to_omit,
+        )
+        .change_context(CliError::WritingXgas)?;
     }
 
     Ok(())
@@ -531,8 +546,13 @@ fn add_computed_vars(
     time_subsetter: &Subsetter,
 ) -> error_stack::Result<(), CliError> {
     for var in config.computed.iter() {
-        var.copy(private_ds, public_ds, time_subsetter)
-            .change_context(CliError::WritingComputed)?;
+        var.copy(
+            private_ds,
+            public_ds,
+            time_subsetter,
+            &config.var_attrs_to_omit,
+        )
+        .change_context(CliError::WritingComputed)?;
     }
 
     Ok(())
