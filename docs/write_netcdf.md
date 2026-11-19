@@ -565,9 +565,11 @@ Three things worth knowing:
 * The field's element type must be `f32` or `f64`. Packing an integer field
   has nothing to divide, so it is a compile error, as is a type alias the
   macro cannot see inside (use a concrete `Vec<f64>` or `Array<f64, _>`).
-* Values are rounded with `round_ties_even`, matching `numpy.around` as used
-  by netCDF4-python's packing, and a value that does not fit the packed type
-  is a runtime error rather than a silently clamped one.
+* When `nc_type` is an integer type, values are rounded with `round_ties_even`,
+  matching `numpy.around` as used by netCDF4-python's packing. A value that
+  does not fit the packed type, including NaN and infinities, is a runtime
+  error rather than being silently clamped (or, for NaN, stored as 0).
+  Packing into `f32`/`f64` stores NaN as is.
 * `scale_offset` cannot be combined with `map`/`map_units`: a mapped value's
   type is opaque to the macro, so it cannot check that what gets written is
   floating-point. Pack inside the map function instead.

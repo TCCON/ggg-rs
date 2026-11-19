@@ -236,7 +236,7 @@ struct WriteNetcdfInput {
 
     #[darling(default)]
     #[allow(dead_code)]
-    on_fill: Option<crate::common_netcdf::OnFill>,
+    on_fill: Option<crate::common_netcdf::ContainerOnFill>,
 }
 
 // ---------------------------------------------------------------------------
@@ -635,10 +635,18 @@ fn pack_prelude(
     // netCDF4-python's `_pack` uses, on exact .5 boundaries. The explicit range
     // check is because Rust's float->int cast saturates silently, which would
     // turn an out-of-range value into a plausible-looking extreme.
+    // NaN needs its own check: it fails both range comparisons, and `NaN as i16`
+    // is 0, which would unpack to the offset — a plausible value.
     // Note the extra braces: this is interpolated into `Ok(#finish)`, so it has
     // to be a block *expression*, not a run of statements.
     let finish = if so.nc_type.is_integer() {
         quote! {{
+            if __p.is_nan() {
+                return Err(::netcdf::Error::Str(format!(
+                    "variable '{}' contains NaN, which cannot be packed into {}",
+                    #name, #out_ty_name
+                )));
+            }
             let __p = __p.round_ties_even();
             if __p < #out_ty::MIN as #float || __p > #out_ty::MAX as #float {
                 return Err(::netcdf::Error::Str(format!(

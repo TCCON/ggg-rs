@@ -33,6 +33,7 @@ The following attributes modify the behavior of the macro:
 - [`#[netcdf(unpack(...))]`](#unpack): change how scales and offsets are applied to map
   integer values in the netCDF file back to float values in the Rust code.
 - [`#[netcdf(on_fill = "...")]`](#on_fill): controls how fill values are handled in variables.
+  The `on_fill(float = "...", int = "...")` form sets float and integer fields separately.
 
 **On fields:**
 
@@ -160,21 +161,94 @@ with `unpack`.
 A value matching the variable's fill value or its `missing_value` attribute
 is detected *before* scaling — `_FillValue` is stored in the packed
 representation, so once it has been multiplied by the scale factor it is
-indistinguishable from real data. `#[netcdf(on_fill = "...")]` chooses what
-happens to it, on the container or a single field:
+indistinguishable from real data. `on_fill` chooses what happens to it:
 
-| Value | Behaviour |
+| Value | Float fields | Integer fields |
+|---|---|---|
+| `"nan"` | replace with `NaN`, leaving it unscaled (**float default**) | compile error: an integer cannot hold NaN |
+| `"keep"` | leave the raw stored value in place, unscaled | leave the value as is (**integer default**) |
+| `"ignore"` | do not look for fill values; scale them like any other value | same as `"keep"` |
+| `"error"` | fail, naming the variable and the index | fail, naming the variable and the index |
+
+On the container, it takes one of two forms:
+
+- `#[netcdf(on_fill = "keep" | "ignore" | "error")]` applies to float and
+  integer fields alike. `on_fill = "nan"` is a compile error here, since it
+  cannot apply to integers.
+- `#[netcdf(on_fill(float = "...", int = "..."))]` sets the two separately.
+  Either key may be omitted, leaving that class at its default. This is the
+  only way to write `"nan"` on the container, as `float = "nan"`.
+
+On a field, only `on_fill = "..."` is accepted, and it replaces the
+container's setting for that field.
+
+### Which setting applies
+
+Each field's behavior is resolved independently, taking the first of these
+that exists:
+
+1. the field's own `on_fill = "..."`;
+2. the container's setting *for that field's class*: the single value from
+   `on_fill = "..."`, or the matching `float`/`int` key from
+   `on_fill(float = "...", int = "...")`;
+3. the class default: `"nan"` for floats, `"keep"` for integers.
+
+So the defaults apply when neither the field nor the container says anything
+about that class. In particular, `on_fill(int = "error")` leaves float fields
+at `"nan"`, and `on_fill(float = "error")` leaves integer fields at `"keep"`.
+
+A field's class comes from its declared element type:
+
+| Element type | Class |
 |---|---|
-| `"nan"` (default) | replace with `NaN`, leaving it unscaled |
-| `"keep"` | leave the raw stored value in place, unscaled |
-| `"ignore"` | do not look for fill values; scale them like any other value |
-| `"error"` | fail, naming the variable and the index |
+| `f32`, `f64` | float |
+| `i8`, `u8`, `i16`, `u16`, `i32`, `u32`, `i64`, `u64` | integer |
+| anything else (strings, `bool`, `isize`/`usize`, 128-bit integers, type aliases) | none: fill values are never checked |
+
+The element type is read from a `Vec<T>`, an `ndarray` `Array*<T>`, or a
+scalar `T`. A type alias is opaque to the macro even if it names one of the
+types above, so it falls in the last row. A container setting skips every
+field in that row, but a field-level `on_fill` other than `"ignore"` on one
+is a compile error rather than being silently ignored.
+
+Fields annotated with `map` or `map_units` are an exception. Their declared
+type is the map function's output, which says nothing about the type in the
+file, so by default they are not checked at all: neither the container
+setting nor the class default reaches them. Giving the field its own
+`on_fill` or `unpack` opts it in. It is then treated as a float field, and
+its setting is resolved as above (with `unpack` alone, that means the
+container's `float` setting, or `"nan"`).
+
+For example:
 
 ```no_run
 use ggg_rs_derive::ReadNetcdf;
 
 #[derive(ReadNetcdf)]
-#[netcdf(on_fill = "error")]
+#[netcdf(on_fill(int = "error"))]
+struct Data {
+    // Float, no field setting, container sets no `float` key:
+    // float default, "nan".
+    #[netcdf(dimensions("time"))]
+    xco2: Vec<f64>,
+
+    // Integer, no field setting: container `int`, "error".
+    #[netcdf(dimensions("time"))]
+    flag: Vec<i32>,
+
+    // Integer, field setting wins over the container: "keep".
+    #[netcdf(dimensions("time"), on_fill = "keep")]
+    count: Vec<u16>,
+}
+```
+
+A second, larger example combining the container and field forms:
+
+```no_run
+use ggg_rs_derive::ReadNetcdf;
+
+#[derive(ReadNetcdf)]
+#[netcdf(on_fill(float = "error", int = "error"))]
 struct Data {
     // A gap in this variable means the file is not usable,
     // so we keep the container behavior of "error".
@@ -184,8 +258,15 @@ struct Data {
     // Here gaps are expected, so they become NaN.
     #[netcdf(dimensions("time"), on_fill = "nan")]
     psurf: Vec<f64>,
+
+    // A quality flag that must never be missing.
+    #[netcdf(dimensions("time"))]
+    flag: Vec<i32>,
 }
 ```
+
+Integer values are compared with the fill value exactly, so 64-bit values
+close to the fill value are not mistaken for it.
 
 Two details that will eventually surprise someone:
 
@@ -279,7 +360,9 @@ attributes. See the [container level `unpack`](#unpack) for details.
 ## `on_fill` (field level)
 
 Individual fields can alter how they handle fill values.
-See the [container level `on_fill`](#on_fill) for details.
+See the [container level `on_fill`](#on_fill) for details, and
+[Which setting applies](#which-setting-applies) for how a field's setting
+combines with the container's.
 
 ## `custom`
 

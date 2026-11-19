@@ -1,0 +1,5 @@
+error: a container-level `on_fill = "nan"` would also apply to integer fields, which cannot hold NaN; use `on_fill(float = "nan")` instead
+ --> tests/ui/nc_on_fill_container_nan.rs:6:20
+  |
+6 | #[netcdf(on_fill = "nan")]
+  |                    ^^^^^

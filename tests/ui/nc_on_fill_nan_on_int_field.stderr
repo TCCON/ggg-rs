@@ -1,0 +1,5 @@
+error: `on_fill = "nan"` does not apply to an integer field, which cannot hold NaN; use "keep", "ignore", or "error"
+ --> tests/ui/nc_on_fill_nan_on_int_field.rs:7:5
+  |
+7 |     quality: Vec<i32>,
+  |     ^^^^^^^

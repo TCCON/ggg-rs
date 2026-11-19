@@ -1132,6 +1132,93 @@ impl FromMeta for OnFill {
             }
         })
     }
+
+    /// A field has exactly one element type, so only the container accepts the
+    /// per-class form.
+    fn from_list(_items: &[NestedMeta]) -> darling::Result<Self> {
+        Err(darling::Error::custom(
+            "the `on_fill(float = .., int = ..)` form is only accepted on the container; \
+             on a field, use `on_fill = \"...\"`",
+        ))
+    }
+}
+
+/// The container-level `on_fill`, which can set float and integer fields
+/// separately:
+///
+/// - `on_fill = "keep" | "ignore" | "error"` — the same for both;
+/// - `on_fill(float = "...", int = "...")` — either key optional.
+///
+/// `"nan"` is only accepted as `float = "nan"`: an integer cannot hold NaN, so
+/// the shared string form rejects it rather than quietly applying it to floats
+/// alone.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct ContainerOnFill {
+    pub(crate) float: Option<OnFill>,
+    pub(crate) int: Option<OnFill>,
+}
+
+/// The body of an `on_fill(...)`, parsed by darling.
+#[derive(FromMeta)]
+struct ContainerOnFillFields {
+    #[darling(default)]
+    float: Option<OnFill>,
+    #[darling(default)]
+    int: Option<OnFill>,
+}
+
+impl FromMeta for ContainerOnFill {
+    fn from_string(value: &str) -> darling::Result<Self> {
+        let both = OnFill::from_string(value)?;
+        if both == OnFill::Nan {
+            return Err(darling::Error::custom(
+                "a container-level `on_fill = \"nan\"` would also apply to integer fields, \
+                 which cannot hold NaN; use `on_fill(float = \"nan\")` instead",
+            ));
+        }
+        Ok(Self {
+            float: Some(both),
+            int: Some(both),
+        })
+    }
+
+    fn from_list(items: &[NestedMeta]) -> darling::Result<Self> {
+        let fields = ContainerOnFillFields::from_list(items)?;
+        if fields.int == Some(OnFill::Nan) {
+            return Err(darling::Error::custom(
+                "`on_fill(int = \"nan\")` is not allowed: integer fields cannot hold NaN; \
+                 use \"keep\", \"ignore\", or \"error\"",
+            ));
+        }
+        Ok(Self {
+            float: fields.float,
+            int: fields.int,
+        })
+    }
+}
+
+/// True if a field's element type is one of the integer types whose fill
+/// values `ReadNetcdf` can check. `bool`, `isize`/`usize`, and the 128-bit
+/// types have no netCDF counterpart, and a type alias is opaque.
+pub(crate) fn is_fill_checkable_int(ty: &Type) -> bool {
+    const INTS: [&str; 8] = ["i8", "u8", "i16", "u16", "i32", "u32", "i64", "u64"];
+    primitive_element_name(ty).is_some_and(|name| INTS.contains(&name.as_str()))
+}
+
+/// The message explaining why `on_fill` cannot be checked on a field: its
+/// element type is neither an `f32`/`f64` nor a checkable integer.
+pub(crate) fn not_fill_checkable_message(ty: &Type) -> String {
+    match primitive_element_name(ty) {
+        Some(found) => {
+            format!("`on_fill` requires an f32, f64, or i8–u64 element type, found `{found}`")
+        }
+        None => format!(
+            "`on_fill` requires an f32, f64, or i8–u64 element type, but the element type \
+             of `{}` could not be determined — a type alias is opaque to the macro. Use a \
+             concrete `Vec<T>` or `Array<T, _>`, or drop the annotation.",
+            type_name(ty)
+        ),
+    }
 }
 
 /// `#[netcdf(unpack(...))]` on the read side. Both halves default to on, so the
@@ -1185,14 +1272,22 @@ pub(crate) struct UnpackFlags {
     pub(crate) scale: bool,
     pub(crate) offset: bool,
     pub(crate) on_fill: OnFill,
-    /// True when *this field* asked for unpacking, as opposed to inheriting it
+    /// True when *this field* asked for scaling, as opposed to inheriting it
     /// from the container. Only a field-level request makes a non-float element
     /// type an error: a container-level `unpack` on a struct with a mix of float
     /// and integer fields has to be allowed to pass the integers by.
-    pub(crate) explicit_field_optin: bool,
+    pub(crate) field_unpack_optin: bool,
+    /// Likewise for a field-level `on_fill` other than `"ignore"`. Kept apart
+    /// from `field_unpack_optin` because fill checks also apply to integers.
+    pub(crate) field_on_fill_optin: bool,
 }
 
 impl UnpackFlags {
+    /// True if this field asked for any unpacking or fill handling itself.
+    pub(crate) fn explicit_field_optin(&self) -> bool {
+        self.field_unpack_optin || self.field_on_fill_optin
+    }
+
     /// True if anything at all needs doing: some scaling, or a fill check.
     pub(crate) fn any(&self) -> bool {
         self.scale || self.offset || self.on_fill != OnFill::Ignore
@@ -1219,8 +1314,8 @@ pub(crate) fn resolve_unpack(
         scale: spec.scale,
         offset: spec.offset,
         on_fill: field_on_fill.or(container_on_fill).unwrap_or_default(),
-        explicit_field_optin: field_unpack.is_some_and(|s| s.scale || s.offset)
-            || field_on_fill.is_some_and(|f| f != OnFill::Ignore),
+        field_unpack_optin: field_unpack.is_some_and(|s| s.scale || s.offset),
+        field_on_fill_optin: field_on_fill.is_some_and(|f| f != OnFill::Ignore),
     }
 }
 

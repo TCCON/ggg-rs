@@ -361,6 +361,27 @@ fn test_packing_out_of_range_is_an_error() {
     );
 }
 
+/// NaN has no integer representation, and `NaN as i16` is 0, which would
+/// round-trip as the offset — a plausible value. It must be refused instead.
+#[test]
+fn test_packing_nan_is_an_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("nan.nc");
+    let data = Packed {
+        xco2: vec![400.0, f64::NAN],
+    };
+    let mut file = netcdf::create(&path).unwrap();
+    let mut root = file.root_mut().unwrap();
+    let err = data
+        .write_netcdf(&mut root)
+        .expect_err("NaN cannot be packed into i16");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("xco2") && msg.contains("NaN") && msg.contains("i16"),
+        "unexpected error message: {msg}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Fill and missing values
 // ---------------------------------------------------------------------------
@@ -619,4 +640,260 @@ fn test_field_unpack_replaces_container_setting() {
     // The field override restores the offset too.
     let both = FieldOverridesContainer::read_netcdf(&root).unwrap();
     assert_eq!(both.xco2, vec![412.34, 387.5]);
+}
+
+// ---------------------------------------------------------------------------
+// Fill values in integer fields
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, ReadNetcdf)]
+struct QualityDefault {
+    #[netcdf(dimensions("time"))]
+    quality: Vec<i32>,
+}
+
+#[derive(Debug, ReadNetcdf)]
+#[netcdf(on_fill = "error")]
+struct QualityError {
+    #[allow(unused)]
+    #[netcdf(dimensions("time"))]
+    quality: Vec<i32>,
+}
+
+#[derive(Debug, ReadNetcdf)]
+#[netcdf(on_fill = "error")]
+struct ByteError {
+    #[netcdf(dimensions("time"))]
+    quality: Vec<i8>,
+}
+
+/// With no annotation, an integer field keeps fill values as data: the
+/// default is "keep", matching the behaviour before integers were checked.
+#[test]
+fn test_int_fill_kept_by_default() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("int_fill.nc");
+    write_raw(
+        &path,
+        "quality",
+        &[1i32, -9999, 3],
+        &[("_FillValue", netcdf::AttributeValue::Int(-9999))],
+    );
+    let file = netcdf::open(&path).unwrap();
+    let read = QualityDefault::read_netcdf(&file.root().unwrap()).unwrap();
+    assert_eq!(read.quality, vec![1, -9999, 3]);
+}
+
+/// Asserts that reading `QualityError` fails at `index`, naming the variable.
+fn assert_int_fill_error(path: &std::path::Path, index: usize) {
+    let file = netcdf::open(path).unwrap();
+    let err = QualityError::read_netcdf(&file.root().unwrap())
+        .expect_err("integer fill value should be rejected");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("quality") && msg.contains(&format!("index {index}")),
+        "unexpected error message: {msg}"
+    );
+}
+
+#[test]
+fn test_container_on_fill_error_checks_int_declared_fill() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("int_fill.nc");
+    write_raw(
+        &path,
+        "quality",
+        &[1i32, 2, -9999],
+        &[("_FillValue", netcdf::AttributeValue::Int(-9999))],
+    );
+    assert_int_fill_error(&path, 2);
+}
+
+/// -2147483647 is NC_FILL_INT, reported by netCDF even though nothing declared it.
+#[test]
+fn test_container_on_fill_error_checks_int_default_fill() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("int_default_fill.nc");
+    write_raw(&path, "quality", &[-2147483647i32, 2], &[]);
+    assert_int_fill_error(&path, 0);
+}
+
+#[test]
+fn test_container_on_fill_error_checks_int_missing_value() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("int_missing.nc");
+    write_raw(
+        &path,
+        "quality",
+        &[1i32, -1, 3],
+        &[("missing_value", netcdf::AttributeValue::Ints(vec![-1, -2]))],
+    );
+    assert_int_fill_error(&path, 1);
+}
+
+/// The byte exemption from default fill values applies to integer fields too.
+#[test]
+fn test_container_on_fill_error_exempts_byte_default_fill() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("byte_default_fill.nc");
+    write_raw(&path, "quality", &[1i8, -127, 3], &[]);
+    let file = netcdf::open(&path).unwrap();
+    let read = ByteError::read_netcdf(&file.root().unwrap()).unwrap();
+    assert_eq!(read.quality, vec![1, -127, 3]);
+}
+
+#[derive(Debug, ReadNetcdf)]
+#[netcdf(on_fill(float = "nan", int = "error"))]
+struct PerClass {
+    #[netcdf(dimensions("time"))]
+    xco2: Vec<f64>,
+    #[allow(unused)]
+    #[netcdf(dimensions("time"))]
+    quality: Vec<i32>,
+}
+
+#[derive(Debug, ReadNetcdf)]
+#[netcdf(on_fill(int = "error"))]
+struct IntOnly {
+    #[netcdf(dimensions("time"))]
+    xco2: Vec<f64>,
+    #[netcdf(dimensions("time"))]
+    quality: Vec<i32>,
+}
+
+/// Writes `xco2` (f64, fill at index 1) and `quality` (i32) to one file.
+fn write_xco2_and_quality(path: &std::path::Path, quality: &[i32]) {
+    let mut file = netcdf::create(path).unwrap();
+    file.add_dimension("time", 2).unwrap();
+    let mut x = file.add_variable::<f64>("xco2", &["time"]).unwrap();
+    x.put_attribute("_FillValue", -999.0f64).unwrap();
+    x.put_values(&[400.0, -999.0], ..).unwrap();
+    let mut q = file.add_variable::<i32>("quality", &["time"]).unwrap();
+    q.put_attribute("_FillValue", -9999i32).unwrap();
+    q.put_values(quality, ..).unwrap();
+}
+
+#[test]
+fn test_nested_on_fill_sets_classes_separately() {
+    let dir = tempfile::tempdir().unwrap();
+
+    // The integer fill is rejected, even though floats would be masked.
+    let bad = dir.path().join("bad.nc");
+    write_xco2_and_quality(&bad, &[1, -9999]);
+    let file = netcdf::open(&bad).unwrap();
+    let msg = PerClass::read_netcdf(&file.root().unwrap())
+        .expect_err("integer fill should be rejected")
+        .to_string();
+    assert!(msg.contains("quality") && msg.contains("index 1"), "{msg}");
+
+    // With clean integers, the float fill becomes NaN as requested.
+    let good = dir.path().join("good.nc");
+    write_xco2_and_quality(&good, &[1, 2]);
+    let file = netcdf::open(&good).unwrap();
+    let read = PerClass::read_netcdf(&file.root().unwrap()).unwrap();
+    assert_eq!(read.xco2[0], 400.0);
+    assert!(read.xco2[1].is_nan(), "expected NaN, got {}", read.xco2[1]);
+}
+
+/// Omitting `float` leaves floats at their default of "nan".
+#[test]
+fn test_nested_on_fill_int_only_keeps_float_default() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("good.nc");
+    write_xco2_and_quality(&path, &[1, 2]);
+    let file = netcdf::open(&path).unwrap();
+    let read = IntOnly::read_netcdf(&file.root().unwrap()).unwrap();
+    assert!(read.xco2[1].is_nan(), "expected NaN, got {}", read.xco2[1]);
+    assert_eq!(read.quality, vec![1, 2]);
+
+    let bad = dir.path().join("bad.nc");
+    write_xco2_and_quality(&bad, &[-9999, 2]);
+    let file = netcdf::open(&bad).unwrap();
+    assert!(IntOnly::read_netcdf(&file.root().unwrap()).is_err());
+}
+
+#[derive(Debug, ReadNetcdf)]
+struct FieldIntError {
+    #[allow(unused)]
+    #[netcdf(dimensions("time"), on_fill = "error")]
+    quality: Vec<i32>,
+}
+
+#[test]
+fn test_field_on_fill_error_on_int_field() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("int_fill.nc");
+    write_raw(
+        &path,
+        "quality",
+        &[1i32, -9999],
+        &[("_FillValue", netcdf::AttributeValue::Int(-9999))],
+    );
+    let file = netcdf::open(&path).unwrap();
+    let msg = FieldIntError::read_netcdf(&file.root().unwrap())
+        .expect_err("field-level on_fill = \"error\" should apply")
+        .to_string();
+    assert!(msg.contains("quality") && msg.contains("index 1"), "{msg}");
+}
+
+#[derive(Debug, ReadNetcdf)]
+#[netcdf(on_fill = "error")]
+struct Counts64 {
+    #[netcdf(dimensions("time"))]
+    counts: Vec<i64>,
+}
+
+/// NC_FILL_INT64 is -9223372036854775806. Its neighbours round to the same
+/// f64, so an f64 comparison would flag them; an exact one must not.
+#[test]
+fn test_int64_fill_comparison_is_exact() {
+    const NC_FILL_INT64: i64 = -9223372036854775806;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("i64.nc");
+    let neighbours = [NC_FILL_INT64 - 1, NC_FILL_INT64 + 1, NC_FILL_INT64 + 2];
+    // Precondition: these really are indistinguishable from the fill in f64.
+    assert!(neighbours.iter().all(|&v| v as f64 == NC_FILL_INT64 as f64));
+    write_raw(&path, "counts", &neighbours, &[]);
+    let file = netcdf::open(&path).unwrap();
+    let read = Counts64::read_netcdf(&file.root().unwrap()).unwrap();
+    assert_eq!(read.counts, neighbours);
+
+    // ...while the fill value itself is still caught.
+    let fill = dir.path().join("i64_fill.nc");
+    write_raw(&fill, "counts", &[1i64, NC_FILL_INT64], &[]);
+    let file = netcdf::open(&fill).unwrap();
+    assert!(Counts64::read_netcdf(&file.root().unwrap()).is_err());
+}
+
+#[derive(Debug, ReadNetcdf)]
+#[netcdf(on_fill = "error")]
+struct ScalarInt {
+    count: i32,
+}
+
+#[test]
+fn test_scalar_int_fill_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("scalar.nc");
+    let write = |value: i32| {
+        let mut file = netcdf::create(&path).unwrap();
+        let mut var = file.add_variable::<i32>("count", &[]).unwrap();
+        var.put_attribute("_FillValue", -1i32).unwrap();
+        var.put_value(value, ()).unwrap();
+    };
+
+    write(5);
+    let file = netcdf::open(&path).unwrap();
+    assert_eq!(
+        ScalarInt::read_netcdf(&file.root().unwrap()).unwrap().count,
+        5
+    );
+    drop(file);
+
+    write(-1);
+    let file = netcdf::open(&path).unwrap();
+    let msg = ScalarInt::read_netcdf(&file.root().unwrap())
+        .expect_err("scalar fill should be rejected")
+        .to_string();
+    assert!(msg.contains("count") && msg.contains("index 0"), "{msg}");
 }

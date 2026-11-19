@@ -4,9 +4,10 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 
 use crate::common_netcdf::{
-    ArityChecks, AttrsSpec, CheckedFn, ContextSpec, CustomSpec, DimList, Direction, FloatTy,
-    MapFns, MapSpec, NcKind, OnFill, UnpackSpec, apply_rename_all, float_element_type, infer_kind,
-    kind_from_str, nc_name, not_float_message, resolve_unpack, validate_dims,
+    ArityChecks, AttrsSpec, CheckedFn, ContainerOnFill, ContextSpec, CustomSpec, DimList,
+    Direction, FloatTy, MapFns, MapSpec, NcKind, OnFill, UnpackSpec, apply_rename_all,
+    float_element_type, infer_kind, is_fill_checkable_int, kind_from_str, nc_name,
+    not_fill_checkable_message, not_float_message, resolve_unpack, validate_dims,
 };
 
 /// What unpacking a single field needs, once the container default, the field
@@ -18,6 +19,18 @@ struct UnpackPlan {
     scale: bool,
     offset: bool,
     on_fill: OnFill,
+}
+
+/// What a field needs done to its values after they are read, beyond the read
+/// itself. `None` rather than this enum means "emit nothing".
+#[derive(Debug, Clone, Copy)]
+enum ValuePlan {
+    /// A float field: scale, offset, and/or mask fill values.
+    Float(UnpackPlan),
+    /// An integer field declared `on_fill = "error"`: fail on a fill or
+    /// missing value. Integers have no other fill handling, since they cannot
+    /// hold NaN and "keep"/"ignore" both leave the value alone.
+    IntFillCheck,
 }
 
 pub(crate) fn expand(input: TokenStream) -> TokenStream {
@@ -80,7 +93,7 @@ pub(crate) fn expand(input: TokenStream) -> TokenStream {
 
         // Resolve the read strategy and the netCDF name, collecting errors so
         // every problem is reported in one compile.
-        let Some((read_kind, map_fns, unpack)) =
+        let Some((read_kind, map_fns, value_plan)) =
             errors.handle(resolve_field(f, parsed.unpack.as_ref(), parsed.on_fill))
         else {
             continue;
@@ -108,10 +121,12 @@ pub(crate) fn expand(input: TokenStream) -> TokenStream {
         if f.dimensions.is_some() {
             helpers.check_dims = true;
         }
-        if let Some(plan) = unpack {
-            helpers.set_needed_unpack(plan.float_ty);
+        match value_plan {
+            Some(ValuePlan::Float(plan)) => helpers.set_needed_unpack(plan.float_ty),
+            Some(ValuePlan::IntFillCheck) => helpers.int_fill = true,
+            None => {}
         }
-        field_blocks.push(field_block(f, read_kind, &name, map_fns, unpack));
+        field_blocks.push(field_block(f, read_kind, &name, map_fns, value_plan));
         field_names.push(fieldname);
     }
 
@@ -191,10 +206,12 @@ struct ReadNetcdfInput {
     #[darling(default)]
     unpack: Option<UnpackSpec>,
 
-    /// Default handling of fill and missing values: `"nan"` (default), `"keep"`,
-    /// `"ignore"`, or `"error"`.
+    /// Default handling of fill and missing values: `on_fill = "keep"` /
+    /// `"ignore"` / `"error"` for every field, or
+    /// `on_fill(float = "...", int = "...")` to set float and integer fields
+    /// separately. Floats default to `"nan"`, integers to `"keep"`.
     #[darling(default)]
-    on_fill: Option<OnFill>,
+    on_fill: Option<ContainerOnFill>,
 
     /// A run-time value passed to every `custom` read function as its last
     /// argument; see [`ContextSpec`] for the forms. Only the read half is used.
@@ -346,6 +363,9 @@ struct HelpersNeeded {
 
     /// true if some `f64` field does the same
     unpack_f64: bool,
+
+    /// true if some integer field is declared `on_fill = "error"`
+    int_fill: bool,
 }
 
 impl HelpersNeeded {
@@ -619,6 +639,95 @@ impl HelpersNeeded {
             });
         }
 
+        if self.int_fill {
+            out.extend(quote! {
+                // The integer counterparts of `__fill_value_as_f64` and
+                // `__missing_values_as_f64`, with the same byte exemption.
+                // Compared in i128 rather than f64 because the default fill
+                // values of the 64-bit types sit near the type extremes, where
+                // f64 cannot tell neighbouring integers apart.
+                fn __fill_value_as_i128(var: &::netcdf::Variable<'_>) -> ::netcdf::Result<Option<i128>> {
+                    use ::netcdf::types::{IntType, NcVariableType};
+                    let declared = var.attribute("_FillValue").is_some();
+                    Ok(match var.vartype() {
+                        NcVariableType::Int(IntType::I8 | IntType::U8) if !declared => None,
+                        NcVariableType::Int(IntType::I8) => var.fill_value::<i8>()?.map(i128::from),
+                        NcVariableType::Int(IntType::U8) => var.fill_value::<u8>()?.map(i128::from),
+                        NcVariableType::Int(IntType::I16) => var.fill_value::<i16>()?.map(i128::from),
+                        NcVariableType::Int(IntType::U16) => var.fill_value::<u16>()?.map(i128::from),
+                        NcVariableType::Int(IntType::I32) => var.fill_value::<i32>()?.map(i128::from),
+                        NcVariableType::Int(IntType::U32) => var.fill_value::<u32>()?.map(i128::from),
+                        NcVariableType::Int(IntType::I64) => var.fill_value::<i64>()?.map(i128::from),
+                        NcVariableType::Int(IntType::U64) => var.fill_value::<u64>()?.map(i128::from),
+                        // A float variable read into an integer field: its fill
+                        // value only matters if it is a whole number.
+                        _ => None,
+                    })
+                }
+
+                // A float sentinel can only match integer data if it is whole.
+                fn __missing_values_as_i128(var: &::netcdf::Variable<'_>) -> ::netcdf::Result<Vec<i128>> {
+                    use ::netcdf::AttributeValue as __Av;
+                    let Some(val) = var.attribute_value("missing_value") else {
+                        return Ok(Vec::new());
+                    };
+                    let whole = |v: f64| (v.is_finite() && v.fract() == 0.0).then_some(v as i128);
+                    Ok(match val? {
+                        __Av::Uchar(v) => vec![v.into()],
+                        __Av::Uchars(vs) => vs.into_iter().map(i128::from).collect(),
+                        __Av::Schar(v) => vec![v.into()],
+                        __Av::Schars(vs) => vs.into_iter().map(i128::from).collect(),
+                        __Av::Ushort(v) => vec![v.into()],
+                        __Av::Ushorts(vs) => vs.into_iter().map(i128::from).collect(),
+                        __Av::Short(v) => vec![v.into()],
+                        __Av::Shorts(vs) => vs.into_iter().map(i128::from).collect(),
+                        __Av::Uint(v) => vec![v.into()],
+                        __Av::Uints(vs) => vs.into_iter().map(i128::from).collect(),
+                        __Av::Int(v) => vec![v.into()],
+                        __Av::Ints(vs) => vs.into_iter().map(i128::from).collect(),
+                        __Av::Ulonglong(v) => vec![v.into()],
+                        __Av::Ulonglongs(vs) => vs.into_iter().map(i128::from).collect(),
+                        __Av::Longlong(v) => vec![v.into()],
+                        __Av::Longlongs(vs) => vs.into_iter().map(i128::from).collect(),
+                        __Av::Float(v) => whole(v as f64).into_iter().collect(),
+                        __Av::Floats(vs) => vs.into_iter().filter_map(|v| whole(v as f64)).collect(),
+                        __Av::Double(v) => whole(v).into_iter().collect(),
+                        __Av::Doubles(vs) => vs.into_iter().filter_map(whole).collect(),
+                        __Av::Str(_) | __Av::Strs(_) => return Err(::netcdf::Error::Str(format!(
+                            "the 'missing_value' attribute of variable '{}' is a string, \
+                             which cannot be compared against numeric data",
+                            var.name()
+                        ))),
+                    })
+                }
+
+                // Only emitted for `on_fill = "error"`: the other settings leave
+                // integer values untouched.
+                fn __check_int_fill<'a, T: Copy + Into<i128> + 'a>(
+                    g: &::netcdf::Group<'_>,
+                    name: &str,
+                    vals: impl IntoIterator<Item = &'a T>,
+                ) -> ::netcdf::Result<()> {
+                    let var = g
+                        .variable(name)
+                        .ok_or_else(|| ::netcdf::Error::NotFound(format!("variable: '{name}'")))?;
+                    let fill = __fill_value_as_i128(&var)?;
+                    let missing = __missing_values_as_i128(&var)?;
+                    for (idx, val) in vals.into_iter().enumerate() {
+                        let raw: i128 = (*val).into();
+                        if fill == Some(raw) || missing.contains(&raw) {
+                            return Err(::netcdf::Error::Str(format!(
+                                "variable '{name}' contains a fill or missing value \
+                                 at index {idx}, and this field is declared \
+                                 on_fill = \"error\""
+                            )));
+                        }
+                    }
+                    Ok(())
+                }
+            });
+        }
+
         // Two concrete functions rather than one generic: `NaN` cannot be produced
         // from a generic `T` without a numeric trait, and the only crate that
         // provides one (`num-traits`) would have to be a dependency of the *caller*,
@@ -748,8 +857,8 @@ fn resolve_custom(field: &ReadNetcdfField) -> Result<Option<&syn::Path>, darling
 fn resolve_field<'f>(
     field: &'f ReadNetcdfField,
     container_unpack: Option<&UnpackSpec>,
-    container_on_fill: Option<OnFill>,
-) -> Result<(NcKind, MapFns<'f>, Option<UnpackPlan>), darling::Error> {
+    container_on_fill: Option<ContainerOnFill>,
+) -> Result<(NcKind, MapFns<'f>, Option<ValuePlan>), darling::Error> {
     let ident = field.ident.as_ref().unwrap();
     let err = |msg: &str| darling::Error::custom(msg).with_span(ident);
 
@@ -818,39 +927,40 @@ fn resolve_field<'f>(
     };
     validate_dims(rk, has_dims, &field.dimensions, ident)?;
 
-    let unpack = resolve_unpack_plan(field, rk, container_unpack, container_on_fill)?;
-    Ok((rk, map_fns, unpack))
+    let plan = resolve_value_plan(field, rk, container_unpack, container_on_fill)?;
+    Ok((rk, map_fns, plan))
 }
 
-/// Work out whether and how this field unpacks.
+/// Work out whether and how this field unpacks or checks fill values.
 ///
 /// Returns `None` — meaning "emit nothing" — when the field holds strings, when
-/// its elements are not a recognizable `f32`/`f64`, or when every part of
-/// unpacking is switched off. A *field-level* opt-in on a non-float type is an
-/// error; a container-level one is not, because a struct that mixes float and
-/// integer fields has to be able to set a container default without every
-/// integer field failing to compile.
-fn resolve_unpack_plan(
+/// its elements are neither a recognizable float nor a checkable integer, or
+/// when the resolved settings leave nothing to do. A *field-level* opt-in on a
+/// type that cannot honour it is an error; a container-level one is not,
+/// because a struct that mixes field types has to be able to set a container
+/// default without every other field failing to compile.
+fn resolve_value_plan(
     field: &ReadNetcdfField,
     read_kind: NcKind,
     container_unpack: Option<&UnpackSpec>,
-    container_on_fill: Option<OnFill>,
-) -> Result<Option<UnpackPlan>, darling::Error> {
+    container_on_fill: Option<ContainerOnFill>,
+) -> Result<Option<ValuePlan>, darling::Error> {
     let ident = field.ident.as_ref().unwrap();
+    let err = |msg: String| darling::Error::custom(msg).with_span(ident);
+    let container = container_on_fill.unwrap_or_default();
     let flags = resolve_unpack(
         container_unpack,
         field.unpack.as_ref(),
-        container_on_fill,
+        container.float,
         field.on_fill,
     );
 
     // Strings have no numeric packing; `Attribute` and `Skip` returned earlier.
     if matches!(read_kind, NcKind::StringScalar | NcKind::StringVec) {
-        if flags.explicit_field_optin {
-            return Err(darling::Error::custom(
-                "`unpack`/`on_fill` do not apply to a string field",
-            )
-            .with_span(ident));
+        if flags.explicit_field_optin() {
+            return Err(err(
+                "`unpack`/`on_fill` do not apply to a string field".to_string()
+            ));
         }
         return Ok(None);
     }
@@ -862,33 +972,43 @@ fn resolve_unpack_plan(
     let mapped = field.map.is_some() || field.map_units.is_some();
 
     let float_ty = if mapped {
-        if !flags.explicit_field_optin {
+        if !flags.explicit_field_optin() {
             return Ok(None);
         }
         FloatTy::F64
+    } else if let Some(ft) = float_element_type(&field.ty) {
+        ft
+    } else if flags.field_unpack_optin {
+        // Scaling an integer would truncate the scale factor.
+        return Err(err(not_float_message("unpack", &field.ty)));
+    } else if is_fill_checkable_int(&field.ty) {
+        return match field.on_fill.or(container.int).unwrap_or(OnFill::Keep) {
+            OnFill::Nan => Err(err(
+                "`on_fill = \"nan\"` does not apply to an integer field, which cannot \
+                 hold NaN; use \"keep\", \"ignore\", or \"error\""
+                    .to_string(),
+            )),
+            OnFill::Error => Ok(Some(ValuePlan::IntFillCheck)),
+            // Both leave the stored value as it is, so there is nothing to emit.
+            OnFill::Keep | OnFill::Ignore => Ok(None),
+        };
+    } else if flags.field_on_fill_optin {
+        return Err(err(not_fill_checkable_message(&field.ty)));
     } else {
-        match float_element_type(&field.ty) {
-            Some(ft) => ft,
-            None if flags.explicit_field_optin => {
-                return Err(
-                    darling::Error::custom(not_float_message("unpack", &field.ty)).with_span(ident),
-                );
-            }
-            // Integer (or opaque) field inheriting a container default: skip.
-            None => return Ok(None),
-        }
+        // Opaque (or non-numeric) field inheriting a container default: skip.
+        return Ok(None);
     };
 
     if !flags.any() {
         return Ok(None);
     }
 
-    Ok(Some(UnpackPlan {
+    Ok(Some(ValuePlan::Float(UnpackPlan {
         float_ty,
         scale: flags.scale,
         offset: flags.offset,
         on_fill: flags.on_fill,
-    }))
+    })))
 }
 
 /// Return code that assigns a variable named with the field's name to the result
@@ -898,7 +1018,7 @@ fn field_block(
     read_kind: NcKind,
     varname: &str,
     map_fns: MapFns<'_>,
-    unpack: Option<UnpackPlan>,
+    value_plan: Option<ValuePlan>,
 ) -> TokenStream2 {
     let fieldname = field.ident.as_ref().unwrap();
     // `map`/`map_units` receive the *struct field* name, not the netCDF variable
@@ -955,9 +1075,19 @@ fn field_block(
 
     // Unpacking mutates the values read from the file, so it happens between the
     // read and the `map` call — the map function receives physical values.
-    let (binding, unpack_stmt) = match unpack {
+    let (binding, unpack_stmt) = match value_plan {
         None => (quote!(let __val), TokenStream2::new()),
-        Some(plan) => {
+        Some(ValuePlan::IntFillCheck) => {
+            let vals = match read_kind {
+                NcKind::Scalar => quote!(::core::slice::from_ref(&__val)),
+                _ => quote!(__val.iter()),
+            };
+            (
+                quote!(let __val),
+                quote! { __check_int_fill(grp, #varname, #vals)?; },
+            )
+        }
+        Some(ValuePlan::Float(plan)) => {
             let unpack_fn = plan.float_ty.unpack_fn();
             let scale = plan.scale;
             let offset = plan.offset;
