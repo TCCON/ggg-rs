@@ -1,3 +1,5 @@
+// Generated from quantity_template.rs.in and quantities.toml by tests/units_sourcegen.rs.
+// Do not edit directly; edit the template or table, then run `make sourcegen`.
 use serde::Serialize;
 use uom::{
     num_traits::Num,
@@ -19,7 +21,7 @@ use uom::{
 /// let q = Pressure::new::<pascal>(101325.0);
 /// // Notice only the first generic is specified to indicate the unit.
 /// let (v, abbr) = scalar_to_value_and_abbr::<pascal, _, _>(q);
-/// assert_eq!(v, 101325.0);
+/// assert!((v - 101325.0).abs() < 1e-5);
 /// assert_eq!(abbr, "Pa")
 /// ```
 ///
@@ -28,9 +30,9 @@ use uom::{
 /// [`array_to_value_and_abbr`] to convert an array.
 pub fn scalar_to_value_and_abbr<N, U, V>(pressure: Pressure<U, V>) -> (V, &'static str)
 where
+    N: Unit + Conversion<V, T = V::T>,
     U: Units<V> + ?Sized,
     V: Num + Conversion<V>,
-    N: Unit + Conversion<V, T = V::T>,
 {
     (pressure.get::<N>(), N::abbreviation())
 }
@@ -43,9 +45,9 @@ pub fn array_to_value_and_abbr<N, U, V, D>(
     pressures: ndarray::ArrayView<Pressure<U, V>, D>,
 ) -> (ndarray::Array<V, D>, &'static str)
 where
+    N: Unit + Conversion<V, T = V::T>,
     U: Units<V> + ?Sized,
     V: Num + Conversion<V>,
-    N: Unit + Conversion<V, T = V::T>,
     D: ndarray::Dimension,
 {
     let out = pressures.map(|q| q.get::<N>());
@@ -63,7 +65,7 @@ where
 /// #[derive(serde::Serialize)]
 /// struct Data {
 ///     #[serde(serialize_with = "serialize_in::<pascal, _, _, _>")]
-///     psurf: Pressure
+///     p_surf: Pressure
 /// }
 /// ```
 ///
@@ -127,9 +129,9 @@ pub fn map_units<N, U, V, D, A>(
     _name: &str,
 ) -> (ndarray::Array<V, D>, &'static str)
 where
+    N: Unit + Conversion<V, T = V::T>,
     U: Units<V> + ?Sized,
     V: Num + Conversion<V>,
-    N: Unit + Conversion<V, T = V::T>,
     D: ndarray::Dimension,
 {
     array_to_value_and_abbr::<N, U, V, D>(pressures.view())
@@ -159,7 +161,7 @@ where
 ///         kind = "array",
 ///         attr( name = "units", value = "Pascals" )
 ///     )]
-///     solzen: Array1<Pressure>
+///     p_surf: Array1<Pressure>
 /// }
 /// ```
 pub fn map<N, U, V, D, A>(
@@ -168,9 +170,9 @@ pub fn map<N, U, V, D, A>(
     _name: &str,
 ) -> ndarray::Array<V, D>
 where
+    N: Unit + Conversion<V, T = V::T>,
     U: Units<V> + ?Sized,
     V: Num + Conversion<V>,
-    N: Unit + Conversion<V, T = V::T>,
     D: ndarray::Dimension,
 {
     array_to_value_and_abbr::<N, U, V, D>(pressures.view()).0

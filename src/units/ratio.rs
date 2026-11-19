@@ -1,3 +1,5 @@
+// Generated from quantity_template.rs.in and quantities.toml by tests/units_sourcegen.rs.
+// Do not edit directly; edit the template or table, then run `make sourcegen`.
 use serde::Serialize;
 use uom::{
     num_traits::Num,
@@ -26,13 +28,13 @@ use uom::{
 /// # See also
 ///
 /// [`array_to_value_and_abbr`] to convert an array.
-pub fn scalar_to_value_and_abbr<N, U, V>(angle: Ratio<U, V>) -> (V, &'static str)
+pub fn scalar_to_value_and_abbr<N, U, V>(ratio: Ratio<U, V>) -> (V, &'static str)
 where
     N: Unit + Conversion<V, T = V::T>,
     U: Units<V> + ?Sized,
     V: Num + Conversion<V>,
 {
-    (angle.get::<N>(), N::abbreviation())
+    (ratio.get::<N>(), N::abbreviation())
 }
 
 /// Convert an array of [`Ratio`] instances to plain floats and return the UOM unit abbreviation.
@@ -40,7 +42,7 @@ where
 /// As with [`scalar_to_value_and_abbr`], `N` is the actual unit type, and is the only generic that
 /// usually needs specified.
 pub fn array_to_value_and_abbr<N, U, V, D>(
-    angles: ndarray::ArrayView<Ratio<U, V>, D>,
+    ratios: ndarray::ArrayView<Ratio<U, V>, D>,
 ) -> (ndarray::Array<V, D>, &'static str)
 where
     N: Unit + Conversion<V, T = V::T>,
@@ -48,7 +50,7 @@ where
     V: Num + Conversion<V>,
     D: ndarray::Dimension,
 {
-    let out = angles.map(|q| q.get::<N>());
+    let out = ratios.map(|q| q.get::<N>());
     (out, N::abbreviation())
 }
 
@@ -123,16 +125,16 @@ where
 /// ```
 pub fn map_units<N, U, V, D, A>(
     _data: &A,
-    angles: &ndarray::Array<Ratio<U, V>, D>,
+    ratios: &ndarray::Array<Ratio<U, V>, D>,
     _name: &str,
 ) -> (ndarray::Array<V, D>, &'static str)
 where
+    N: Unit + Conversion<V, T = V::T>,
     U: Units<V> + ?Sized,
     V: Num + Conversion<V>,
-    N: Unit + Conversion<V, T = V::T>,
     D: ndarray::Dimension,
 {
-    array_to_value_and_abbr::<N, U, V, D>(angles.view())
+    array_to_value_and_abbr::<N, U, V, D>(ratios.view())
 }
 
 /// Function to interface with [`ggg_rs_derive::WriteNetcdf`], specifically
@@ -164,14 +166,14 @@ where
 /// ```
 pub fn map<N, U, V, D, A>(
     _data: &A,
-    angles: &ndarray::Array<Ratio<U, V>, D>,
+    ratios: &ndarray::Array<Ratio<U, V>, D>,
     _name: &str,
 ) -> ndarray::Array<V, D>
 where
+    N: Unit + Conversion<V, T = V::T>,
     U: Units<V> + ?Sized,
     V: Num + Conversion<V>,
-    N: Unit + Conversion<V, T = V::T>,
     D: ndarray::Dimension,
 {
-    array_to_value_and_abbr::<N, U, V, D>(angles.view()).0
+    array_to_value_and_abbr::<N, U, V, D>(ratios.view()).0
 }
