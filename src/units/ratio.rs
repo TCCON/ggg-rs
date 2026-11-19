@@ -1,3 +1,4 @@
+use serde::Serialize;
 use uom::{
     num_traits::Num,
     si::ratio::{Ratio, Unit},
@@ -27,9 +28,9 @@ use uom::{
 /// [`array_to_value_and_abbr`] to convert an array.
 pub fn scalar_to_value_and_abbr<N, U, V>(angle: Ratio<U, V>) -> (V, &'static str)
 where
+    N: Unit + Conversion<V, T = V::T>,
     U: Units<V> + ?Sized,
     V: Num + Conversion<V>,
-    N: Unit + Conversion<V, T = V::T>,
 {
     (angle.get::<N>(), N::abbreviation())
 }
@@ -42,13 +43,55 @@ pub fn array_to_value_and_abbr<N, U, V, D>(
     angles: ndarray::ArrayView<Ratio<U, V>, D>,
 ) -> (ndarray::Array<V, D>, &'static str)
 where
+    N: Unit + Conversion<V, T = V::T>,
     U: Units<V> + ?Sized,
     V: Num + Conversion<V>,
-    N: Unit + Conversion<V, T = V::T>,
     D: ndarray::Dimension,
 {
     let out = angles.map(|q| q.get::<N>());
     (out, N::abbreviation())
+}
+
+/// Serialize a [`Ratio`] in particular units given by the `N` type parameter.
+/// In most cases, you will only need to specify `N` and can leave the others
+/// as `_` placeholders.
+///
+/// ```
+/// use ggg_rs::units::ratio::serialize_in;
+/// use uom::si::{ratio::part_per_million, f64::Ratio};
+///
+/// #[derive(serde::Serialize)]
+/// struct Data {
+///     #[serde(serialize_with = "serialize_in::<part_per_million, _, _, _>")]
+///     xco2: Ratio
+/// }
+/// ```
+///
+/// See [`serialize_opt_in`] if this is an `Option<Ratio>`.
+pub fn serialize_in<N, U, V, S>(q: &Ratio<U, V>, s: S) -> Result<S::Ok, S::Error>
+where
+    N: Unit + Conversion<V, T = V::T>,
+    U: Units<V> + ?Sized,
+    V: Num + Conversion<V> + serde::Serialize,
+    S: serde::Serializer,
+{
+    let v = q.get::<N>();
+    v.serialize(s)
+}
+
+/// A version of [`serialize_in`] that works for `Option<Ratio>` types.
+pub fn serialize_opt_in<N, U, V, S>(opt_q: &Option<Ratio<U, V>>, s: S) -> Result<S::Ok, S::Error>
+where
+    N: Unit + Conversion<V, T = V::T>,
+    U: Units<V> + ?Sized,
+    V: Num + Conversion<V> + serde::Serialize,
+    S: serde::Serializer,
+{
+    if let Some(q) = opt_q {
+        serialize_in::<N, U, V, S>(q, s)
+    } else {
+        None::<V>.serialize(s)
+    }
 }
 
 /// Function to interface with [`ggg_rs_derive::WriteNetcdf`], specifically

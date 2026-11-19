@@ -1,10 +1,10 @@
+use std::io::Read;
 // #[cfg(feature = "netcdf")]
 use std::{fmt::Debug, ops::Mul, str::FromStr};
 use std::{
     fmt::Display,
     io::{BufRead, BufReader, Lines},
     path::{Path, PathBuf},
-    process::{Command, Stdio},
 };
 
 use approx::AbsDiffEq;
@@ -97,19 +97,39 @@ pub fn remove_file_if_exists(file: &Path) -> std::io::Result<()> {
 }
 
 pub fn compare_output_text_files(expected_dir: &Path, output_dir: &Path, out_file_name: &str) {
-    let mut child = Command::new("diff")
-        .arg("-q")
-        .arg(expected_dir.join(out_file_name))
-        .arg(output_dir.join(out_file_name))
-        .stdout(Stdio::null())
-        .spawn()
-        .expect("Spawning diff process should not fail");
+    let expected_file = expected_dir.join(out_file_name);
+    let output_file = output_dir.join(out_file_name);
 
-    let is_same = child
-        .wait()
-        .expect("Waiting for diff process should not fail")
-        .success();
-    assert!(is_same, "{out_file_name} did not match expected.");
+    // Could do this with block reads, but going to assume that test text
+    // files are not big enough for that to be worth it.
+    let mut expected_bytes = vec![];
+    std::fs::File::open(&expected_file)
+        .expect(&format!(
+            "should be able to open the expected file {}",
+            expected_file.display()
+        ))
+        .read_to_end(&mut expected_bytes)
+        .expect(&format!(
+            "should be able to read the expected file {}",
+            expected_file.display()
+        ));
+
+    let mut output_bytes = vec![];
+    std::fs::File::open(&output_file)
+        .expect(&format!(
+            "should be able to open the output file {}",
+            output_file.display()
+        ))
+        .read_to_end(&mut output_bytes)
+        .expect(&format!(
+            "should be able to read the output file {}",
+            output_file.display()
+        ));
+
+    assert!(
+        expected_bytes == output_bytes,
+        "{out_file_name} did not match expected"
+    );
 }
 
 /// Extension trait for `Result` types to aid test debugging.
