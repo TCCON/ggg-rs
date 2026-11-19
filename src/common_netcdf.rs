@@ -802,7 +802,7 @@ pub(crate) fn is_scalar_string(ty: &Type) -> bool {
     }
 }
 
-/// Map an explicit `kind = "..."` string to a [`WriteKind`], using the field's
+/// Map an explicit `kind = "..."` string to a [`NcKind`], using the field's
 /// declared type only to decide scalar-vs-vec for `"string"`.
 pub(crate) fn kind_from_str(kind: &str, ty: &Type) -> Result<NcKind, darling::Error> {
     match kind {
@@ -821,7 +821,7 @@ pub(crate) fn kind_from_str(kind: &str, ty: &Type) -> Result<NcKind, darling::Er
     }
 }
 
-/// Infer a [`WriteKind`] from the field's declared type.
+/// Infer a [`NcKind`] from the field's declared type.
 pub(crate) fn infer_kind(ty: &Type) -> Result<NcKind, darling::Error> {
     if is_scalar_string(ty) {
         return Ok(NcKind::StringScalar);

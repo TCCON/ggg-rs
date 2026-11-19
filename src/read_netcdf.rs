@@ -224,7 +224,7 @@ struct ReadNetcdfField {
     ident: Option<syn::Ident>,
     ty: syn::Type,
 
-    /// Do not write this field at all.
+    /// Do not read this field at all.
     #[darling(default)]
     skip: bool,
 
@@ -242,13 +242,13 @@ struct ReadNetcdfField {
     #[darling(default)]
     dimensions: Option<DimList>,
 
-    /// Write the field as a *group attribute* instead of a variable.
+    /// Read the field from a *group attribute* instead of a variable.
     #[darling(default)]
     attribute: bool,
 
     /// Map the field value after reading. The direction is mandatory, since
     /// writing needs a different function: `map(read = path::to::fn)`, where the
-    /// function is `fn(NcTy, &str) -> netcdf::Result<Out>`. Its arguments are
+    /// function is `fn(NcTy, &str, &netcdf::Variable<'_>) -> netcdf::Result<Out>`. Its arguments are
     /// the value read from the netCDF file (by value) and the struct field name.
     /// Reading is fallible — the data comes from a file this program did not
     /// necessarily write — so the function returns a `netcdf::Result`. A
@@ -258,7 +258,7 @@ struct ReadNetcdfField {
 
     /// Like `map`, but the read function also accepts the value of the `units`
     /// attribute as a third argument:
-    /// `fn(NcTy, &str, Option<&str>) -> netcdf::Result<Out>`.
+    /// `fn(NcTy, &str, &netcdf::Variable<'_>, Option<&str>) -> netcdf::Result<Out>`.
     /// If the variable has no `units`, the third argument is `None`.
     #[darling(default)]
     map_units: Option<MapSpec>,
