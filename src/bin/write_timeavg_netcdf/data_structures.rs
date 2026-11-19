@@ -15,7 +15,6 @@ use uom::si::f32::{Angle, Pressure, Ratio};
 use uom::si::pressure::pascal;
 use uom::si::ratio::{part_per_million, ratio};
 
-use crate::station_ids::MipIdMap;
 use crate::CliError;
 
 ///
@@ -375,6 +374,39 @@ impl TimeAvgData {
         }
 
         Ok(())
+    }
+
+    pub(crate) fn read_gas_from_file(
+        nc_file: &Path,
+        gas: &Gas,
+    ) -> error_stack::Result<Self, CliError> {
+        let nc = netcdf::open(&nc_file).change_context_lazy(|| {
+            CliError::Context(format!("error opening netCDF file {}", nc_file.display()))
+        })?;
+        let nc = nc
+            .group(gas.output_group())
+            .change_context_lazy(|| {
+                CliError::Context(format!(
+                    "error getting group '{}' from {}",
+                    gas.output_group(),
+                    nc_file.display()
+                ))
+            })?
+            .ok_or_else(|| {
+                CliError::Context(format!(
+                    "group '{}' not present in {}",
+                    gas.output_group(),
+                    nc_file.display()
+                ))
+            })?;
+        let data = TimeAvgData::read_netcdf(&nc).change_context_lazy(|| {
+            CliError::Context(format!(
+                "error reading from group '{}' of {}",
+                gas.output_group(),
+                nc_file.display()
+            ))
+        })?;
+        Ok(data)
     }
 }
 

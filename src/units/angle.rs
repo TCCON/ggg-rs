@@ -1,3 +1,6 @@
+// Generated from quantity_template.rs.in and quantities.toml by tests/units_sourcegen.rs.
+// Do not edit directly; edit the template or table, then run `make sourcegen`.
+use serde::Serialize;
 use uom::{
     num_traits::Num,
     si::angle::{Angle, Unit},
@@ -18,18 +21,18 @@ use uom::{
 /// let q = Angle::new::<degree>(90.0);
 /// // Notice only the first generic is specified to indicate the unit.
 /// let (v, abbr) = scalar_to_value_and_abbr::<degree, _, _>(q);
-/// assert_eq!(v, 90.0);
+/// assert!((v - 90.0).abs() < 1e-5);
 /// assert_eq!(abbr, "°")
 /// ```
 ///
 /// # See also
 ///
 /// [`array_to_value_and_abbr`] to convert an array.
-pub fn scalar_to_value_and_abbr<N, V, U>(angle: Angle<U, V>) -> (V, &'static str)
+pub fn scalar_to_value_and_abbr<N, U, V>(angle: Angle<U, V>) -> (V, &'static str)
 where
+    N: Unit + Conversion<V, T = V::T>,
     U: Units<V> + ?Sized,
     V: Num + Conversion<V>,
-    N: Unit + Conversion<V, T = V::T>,
 {
     (angle.get::<N>(), N::abbreviation())
 }
@@ -38,17 +41,59 @@ where
 ///
 /// As with [`scalar_to_value_and_abbr`], `N` is the actual unit type, and is the only generic that
 /// usually needs specified.
-pub fn array_to_value_and_abbr<N, V, U, D>(
+pub fn array_to_value_and_abbr<N, U, V, D>(
     angles: ndarray::ArrayView<Angle<U, V>, D>,
 ) -> (ndarray::Array<V, D>, &'static str)
 where
+    N: Unit + Conversion<V, T = V::T>,
     U: Units<V> + ?Sized,
     V: Num + Conversion<V>,
-    N: Unit + Conversion<V, T = V::T>,
     D: ndarray::Dimension,
 {
     let out = angles.map(|q| q.get::<N>());
     (out, N::abbreviation())
+}
+
+/// Serialize a [`Angle`] in particular units given by the `N` type parameter.
+/// In most cases, you will only need to specify `N` and can leave the others
+/// as `_` placeholders.
+///
+/// ```
+/// use ggg_rs::units::angle::serialize_in;
+/// use uom::si::{angle::degree, f64::Angle};
+///
+/// #[derive(serde::Serialize)]
+/// struct Data {
+///     #[serde(serialize_with = "serialize_in::<degree, _, _, _>")]
+///     solzen: Angle
+/// }
+/// ```
+///
+/// See [`serialize_opt_in`] if this is an `Option<Angle>`.
+pub fn serialize_in<N, U, V, S>(q: &Angle<U, V>, s: S) -> Result<S::Ok, S::Error>
+where
+    N: Unit + Conversion<V, T = V::T>,
+    U: Units<V> + ?Sized,
+    V: Num + Conversion<V> + serde::Serialize,
+    S: serde::Serializer,
+{
+    let v = q.get::<N>();
+    v.serialize(s)
+}
+
+/// A version of [`serialize_in`] that works for `Option<Angle>` types.
+pub fn serialize_opt_in<N, U, V, S>(opt_q: &Option<Angle<U, V>>, s: S) -> Result<S::Ok, S::Error>
+where
+    N: Unit + Conversion<V, T = V::T>,
+    U: Units<V> + ?Sized,
+    V: Num + Conversion<V> + serde::Serialize,
+    S: serde::Serializer,
+{
+    if let Some(q) = opt_q {
+        serialize_in::<N, U, V, S>(q, s)
+    } else {
+        None::<V>.serialize(s)
+    }
 }
 
 /// Function to interface with [`ggg_rs_derive::WriteNetcdf`], specifically
@@ -78,18 +123,18 @@ where
 ///     solzen: Array1<Angle>
 /// }
 /// ```
-pub fn map_units<N, V, U, D, A>(
+pub fn map_units<N, U, V, D, A>(
     _data: &A,
     angles: &ndarray::Array<Angle<U, V>, D>,
     _name: &str,
 ) -> (ndarray::Array<V, D>, &'static str)
 where
+    N: Unit + Conversion<V, T = V::T>,
     U: Units<V> + ?Sized,
     V: Num + Conversion<V>,
-    N: Unit + Conversion<V, T = V::T>,
     D: ndarray::Dimension,
 {
-    array_to_value_and_abbr::<N, V, U, D>(angles.view())
+    array_to_value_and_abbr::<N, U, V, D>(angles.view())
 }
 
 /// Function to interface with [`ggg_rs_derive::WriteNetcdf`], specifically
@@ -119,16 +164,16 @@ where
 ///     solzen: Array1<Angle>
 /// }
 /// ```
-pub fn map<N, V, U, D, A>(
+pub fn map<N, U, V, D, A>(
     _data: &A,
     angles: &ndarray::Array<Angle<U, V>, D>,
     _name: &str,
 ) -> ndarray::Array<V, D>
 where
+    N: Unit + Conversion<V, T = V::T>,
     U: Units<V> + ?Sized,
     V: Num + Conversion<V>,
-    N: Unit + Conversion<V, T = V::T>,
     D: ndarray::Dimension,
 {
-    array_to_value_and_abbr::<N, V, U, D>(angles.view()).0
+    array_to_value_and_abbr::<N, U, V, D>(angles.view()).0
 }

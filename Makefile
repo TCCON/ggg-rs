@@ -100,6 +100,11 @@ testlib: $(NC_LIB)
 testdoc: $(NC_LIB)
 	$(CARGOCMD) test $(CARGOARGS) --doc -- $(TEST_PATTERN)
 
+# Regenerate the src/units quantity modules from src/units/quantity_template.rs.in
+# and src/units/quantities.toml.
+sourcegen: $(NC_LIB)
+	UPDATE_UNITS=1 $(CARGOCMD) test $(CARGOARGS) --test units_sourcegen
+
 check: $(NC_LIB)
 	$(CARGOCMD) check $(CARGOARGS)
 

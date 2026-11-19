@@ -1,0 +1,11 @@
+
+==== PREVIOUS ONLY ====
+
+
+==== NEW ONLY ====
+
+
+==== IN BOTH ====
+
+o tccon_timeavg_20250604.nc4
+o tccon_timeavg_20250605.nc4
