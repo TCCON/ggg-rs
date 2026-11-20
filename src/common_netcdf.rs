@@ -397,6 +397,9 @@ pub(crate) enum CheckedFn {
     FieldAttrs,
     GroupAttrs,
     MapRead,
+    /// `map(read = ...)` on an `attribute` field, which receives the attribute
+    /// in place of a variable.
+    MapReadAttribute,
     MapWrite,
     MapUnitsRead,
     MapUnitsWrite,
@@ -404,12 +407,13 @@ pub(crate) enum CheckedFn {
 }
 
 impl CheckedFn {
-    const ALL: [Self; 9] = [
+    const ALL: [Self; 10] = [
         Self::CustomRead,
         Self::CustomWrite,
         Self::FieldAttrs,
         Self::GroupAttrs,
         Self::MapRead,
+        Self::MapReadAttribute,
         Self::MapWrite,
         Self::MapUnitsRead,
         Self::MapUnitsWrite,
@@ -418,7 +422,9 @@ impl CheckedFn {
 
     fn direction(self) -> Direction {
         match self {
-            Self::CustomRead | Self::MapRead | Self::MapUnitsRead => Direction::Read,
+            Self::CustomRead | Self::MapRead | Self::MapReadAttribute | Self::MapUnitsRead => {
+                Direction::Read
+            }
             _ => Direction::Write,
         }
     }
@@ -429,7 +435,11 @@ impl CheckedFn {
             Self::CustomRead => 3,
             Self::CustomWrite | Self::FieldAttrs | Self::MapUnitsRead => 5,
             Self::GroupAttrs => 2,
-            Self::MapRead | Self::MapWrite | Self::MapUnitsWrite | Self::AttrFunc => 4,
+            Self::MapRead
+            | Self::MapReadAttribute
+            | Self::MapWrite
+            | Self::MapUnitsWrite
+            | Self::AttrFunc => 4,
         }
     }
 
@@ -441,6 +451,7 @@ impl CheckedFn {
             Self::FieldAttrs => "field-level `attrs(func = ...)`",
             Self::GroupAttrs => "container-level `attrs(func = ...)`",
             Self::MapRead => "`map(read = ...)`",
+            Self::MapReadAttribute => "`map(read = ...)` on an `attribute` field",
             Self::MapWrite => "`map(write = ...)`",
             Self::MapUnitsRead => "`map_units(read = ...)`",
             Self::MapUnitsWrite => "`map_units(write = ...)`",
@@ -462,6 +473,9 @@ impl CheckedFn {
             Self::MapRead => {
                 "fn(NcTy, &str, &str, &netcdf::Variable<'_>) -> netcdf::Result<FieldTy>"
             }
+            Self::MapReadAttribute => {
+                "fn(NcTy, &str, &str, &netcdf::Attribute<'_>) -> netcdf::Result<FieldTy>"
+            }
             Self::MapWrite => "fn(&Self, &FieldTy, &str, &str) -> Out",
             Self::MapUnitsRead => {
                 "fn(NcTy, &str, &str, &netcdf::Variable<'_>, Option<&str>) -> netcdf::Result<FieldTy>"
@@ -478,6 +492,7 @@ impl CheckedFn {
             Self::FieldAttrs => "FieldAttrs",
             Self::GroupAttrs => "GroupAttrs",
             Self::MapRead => "MapRead",
+            Self::MapReadAttribute => "MapReadAttribute",
             Self::MapWrite => "MapWrite",
             Self::MapUnitsRead => "MapUnitsRead",
             Self::MapUnitsWrite => "MapUnitsWrite",

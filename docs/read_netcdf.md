@@ -312,6 +312,31 @@ is that from the netcdf crate. The variable instance is provided so that
 you can access other information about the data (e.g., attributes, dimensions)
 if needed.
 
+On a field read from a group [`attribute`](WriteNetcdf#attribute), there is no
+variable, so the function receives the [`netcdf::Attribute`] the value came
+from in its place:
+
+`fn(NcTy, &str, &str, &netcdf::Attribute<'_>) -> netcdf::Result<Out>`
+
+```no_run
+use ggg_rs_derive::ReadNetcdf;
+
+// The file stores the version as e.g. "v7".
+fn parse_version(
+    v: String, _field: &str, _nc: &str, _attr: &netcdf::Attribute<'_>,
+) -> netcdf::Result<u32> {
+    v.strip_prefix('v')
+        .and_then(|n| n.parse().ok())
+        .ok_or_else(|| netcdf::Error::Str(format!("bad version string '{v}'")))
+}
+
+#[derive(ReadNetcdf)]
+struct Data {
+    #[netcdf(attribute, map(read = parse_version))]
+    version: u32,
+}
+```
+
 ## `map_units`
 
 `#[netcdf(map_units(read = path::to::fn))]`: the given function will also
@@ -435,3 +460,4 @@ or tuple. A borrowing context type is written with `'_`, e.g.
 
 [`netcdf::Result`]: https://docs.rs/netcdf/0.12.1/netcdf/type.Result.html
 [`netcdf::AttributeValue`]: https://docs.rs/netcdf/0.12.1/netcdf/enum.AttributeValue.html
+[`netcdf::Attribute`]: https://docs.rs/netcdf/0.12.1/netcdf/struct.Attribute.html

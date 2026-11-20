@@ -320,3 +320,72 @@ fn test_write_only_context_and_default() {
     let read = WriteOnly::read_netcdf(&file.root().unwrap()).unwrap();
     assert_eq!(read.a, vec![0.0, 0.0]);
 }
+
+// ---------------------------------------------------------------------------
+// `map` on an `attribute` field
+// ---------------------------------------------------------------------------
+
+/// An attribute has no variable, so the read function receives the attribute
+/// the value came from in its place.
+fn version_from_nc(
+    v: String,
+    field: &str,
+    nc: &str,
+    attr: &netcdf::Attribute<'_>,
+) -> netcdf::Result<u32> {
+    assert_eq!(
+        (field, nc, attr.name()),
+        ("version", "file_version", "file_version")
+    );
+    v.strip_prefix('v')
+        .and_then(|n| n.parse().ok())
+        .ok_or_else(|| netcdf::Error::Str(format!("bad version string '{v}'")))
+}
+
+fn version_to_nc(_d: &Versioned, v: &u32, _field: &str, _nc: &str) -> String {
+    format!("v{v}")
+}
+
+#[derive(Debug, PartialEq, ReadNetcdf, WriteNetcdf)]
+struct Versioned {
+    #[netcdf(
+        attribute,
+        rename = "file_version",
+        map(write = version_to_nc, read = version_from_nc)
+    )]
+    version: u32,
+}
+
+#[test]
+fn test_map_on_attribute_field_round_trips() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("versioned.nc");
+    let data = Versioned { version: 7 };
+    {
+        let mut file = netcdf::create(&path).unwrap();
+        data.write_netcdf(&mut file.root_mut().unwrap()).unwrap();
+    }
+
+    let file = netcdf::open(&path).unwrap();
+    assert_eq!(
+        file.attribute("file_version").unwrap().value().unwrap(),
+        netcdf::AttributeValue::Str("v7".to_string())
+    );
+    assert_eq!(Versioned::read_netcdf(&file.root().unwrap()).unwrap(), data);
+}
+
+/// A missing attribute is reported as such, not as a missing variable.
+#[test]
+fn test_map_on_missing_attribute_names_the_attribute() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("empty.nc");
+    drop(netcdf::create(&path).unwrap());
+    let file = netcdf::open(&path).unwrap();
+    let msg = Versioned::read_netcdf(&file.root().unwrap())
+        .expect_err("attribute is missing")
+        .to_string();
+    assert!(
+        msg.contains("attribute") && msg.contains("file_version"),
+        "unexpected error message: {msg}"
+    );
+}

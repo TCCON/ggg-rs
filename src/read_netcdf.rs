@@ -1066,7 +1066,18 @@ fn field_block(
     // take (value, field_name, nc_name, var) and read map_units functions add the
     // units string after `var`; both gain a final `&Ctx` with a read context.
     // Both are fallible, so their calls take a `?`.
-    let remap = if let Some(map_fxn) = map_fns.map {
+    let remap = if let (Some(map_fxn), NcKind::Attribute) = (map_fns.map, read_kind) {
+        // A group attribute has no variable; hand over the attribute itself.
+        // `__get_attribute` has already reported a missing one, so this lookup
+        // only fails if the file changes underneath us.
+        let map_fxn = arity.checked(CheckedFn::MapReadAttribute, map_fxn);
+        quote! {
+            let __attr = grp.attribute(#varname).ok_or_else(|| {
+                ::netcdf::Error::NotFound(format!("group attribute: '{}'", #varname))
+            })?;
+            #map_fxn(__val, #fieldname_str, #varname, &__attr #ctx_arg)?
+        }
+    } else if let Some(map_fxn) = map_fns.map {
         let map_fxn = arity.checked(CheckedFn::MapRead, map_fxn);
         quote! {
             let __var = grp
