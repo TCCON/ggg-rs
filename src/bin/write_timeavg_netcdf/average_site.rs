@@ -125,6 +125,7 @@ pub(super) fn average_site_driver(
                 output_file.display()
             ))
         })?;
+    log::info!("Finished writing {}", output_file.display());
     Ok(())
 }
 

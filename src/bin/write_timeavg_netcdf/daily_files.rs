@@ -25,6 +25,7 @@ pub(super) fn daily_files_driver<F: AsRef<Path>>(
     gases: &[Gas],
     start_date: Option<chrono::NaiveDate>,
     end_date: Option<chrono::NaiveDate>,
+    write_empty: bool,
     include_bib_file: bool,
 ) -> error_stack::Result<(), CliError> {
     let all_data = load_site_files(average_files, gases)?;
@@ -41,12 +42,8 @@ pub(super) fn daily_files_driver<F: AsRef<Path>>(
         log::info!("Processing date {date}");
         let filename = date.format("tccon_timeavg_%Y%m%d.nc4").to_string();
         let file = output_dir.join(filename);
-        let mut ds = netcdf::create(&file).change_context_lazy(|| {
-            CliError::Context(format!("error creating daily file {}", file.display()))
-        })?;
-
-        add_global_dims(&mut ds)?;
         let mut pub_after: Option<chrono::NaiveDate> = None;
+        let mut gas_data = vec![];
 
         for gas in gases {
             if !gas_date_ranges.gas_has_date(gas, date) {
@@ -68,24 +65,20 @@ pub(super) fn daily_files_driver<F: AsRef<Path>>(
                 (Some(d), None) => pub_after = Some(d),
                 (Some(d1), Some(d2)) => pub_after = Some(d1.max(d2)),
             }
-
-            let mut grp = ds.add_group(gas.output_group()).change_context_lazy(|| {
-                CliError::Context(format!(
-                    "error creating group '{}' in daily file {}",
-                    gas.output_group(),
-                    file.display()
-                ))
-            })?;
-            day_data
-                .write_netcdf_context(&mut grp, &all_metadata)
-                .change_context_lazy(|| {
-                    CliError::Context(format!("error writing data for gas {gas} on {date}"))
-                })?;
+            gas_data.push((gas, day_data));
         }
 
-        add_global_attrs(&mut ds, pub_after, &all_history).change_context_lazy(|| {
-            CliError::context("error occurred while adding the global attributes")
-        })?;
+        if write_empty || gas_data.iter().any(|(_, dat)| !dat.is_empty()) {
+            write_daily_file(&file, &gas_data, pub_after, &all_metadata, &all_history)
+                .change_context_lazy(|| {
+                    CliError::Context(format!("error writing daily file {}", file.display()))
+                })?;
+        } else {
+            log::info!(
+                "Not writing {} - no data and write_empty = {write_empty}",
+                file.display()
+            );
+        }
     }
 
     write_citation_text_file(output_dir, &all_metadata)?;
@@ -93,6 +86,41 @@ pub(super) fn daily_files_driver<F: AsRef<Path>>(
     if include_bib_file {
         write_citation_bibtex_file(output_dir, &all_metadata)?;
     }
+    Ok(())
+}
+
+fn write_daily_file(
+    file: &Path,
+    data: &[(&Gas, TimeAvgData)],
+    pub_after: Option<chrono::NaiveDate>,
+    all_metadata: &AllSitesMetaAttrs,
+    all_history: &[String],
+) -> error_stack::Result<(), CliError> {
+    let mut ds = netcdf::create(&file).change_context_lazy(|| {
+        CliError::Context(format!("error creating daily file {}", file.display()))
+    })?;
+    add_global_dims(&mut ds)?;
+
+    for (gas, day_data) in data.iter() {
+        let mut grp = ds.add_group(gas.output_group()).change_context_lazy(|| {
+            CliError::Context(format!(
+                "error creating group '{}' in daily file {}",
+                gas.output_group(),
+                file.display()
+            ))
+        })?;
+        day_data
+            .write_netcdf_context(&mut grp, &all_metadata)
+            .change_context_lazy(|| {
+                CliError::Context(format!("error writing data for gas {gas}"))
+            })?;
+        log::debug!("Wrote {} group in {}", gas.output_group(), file.display());
+    }
+
+    add_global_attrs(&mut ds, pub_after, &all_history).change_context_lazy(|| {
+        CliError::context("error occurred while adding the global attributes")
+    })?;
+    log::info!("Finished writing {}", file.display());
     Ok(())
 }
 
@@ -422,6 +450,7 @@ mod tests {
             &[Gas::CO2],
             Some(start),
             Some(end),
+            false,
             false,
         )
         .unwrap();

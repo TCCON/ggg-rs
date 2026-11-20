@@ -147,6 +147,11 @@ struct DailyFileCli {
     #[clap(long, short = 'e')]
     end_date: Option<chrono::NaiveDate>,
 
+    /// By default, files with no data are not written. Pass this flag to
+    /// include them in the output.
+    #[clap(long)]
+    write_empty: bool,
+
     /// Do not write out the citations.bib file. This file requires making a
     /// request to crosscite.org, so if you are running in an environment
     /// where HTTP requests are not allowed, use this to disable writing that file.
@@ -162,6 +167,7 @@ impl DailyFileCli {
             &self.gases,
             self.start_date,
             self.end_date,
+            self.write_empty,
             !self.no_include_bib_file,
         )
     }

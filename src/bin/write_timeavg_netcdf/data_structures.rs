@@ -313,6 +313,11 @@ impl TimeAvgData {
         }
     }
 
+    pub(crate) fn is_empty(&self) -> bool {
+        // Really should check all fields, but we should never add bins to one field and not all
+        self.solar_time_bin.is_empty()
+    }
+
     fn add_wmo_scale_attr<'a>(
         &'a self,
         scale: &str,

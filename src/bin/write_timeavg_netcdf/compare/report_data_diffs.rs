@@ -237,8 +237,16 @@ impl TimeavgDiffStats {
     }
 
     fn write_summary<W: std::io::Write>(&self, mut f: W) -> std::io::Result<()> {
-        writeln!(f, "# soundings only in previous = {}", self.num_prev_only)?;
-        writeln!(f, "# soundings only in new = {}", self.num_new_only)?;
+        writeln!(
+            f,
+            "# soundings only in previous across common files = {}",
+            self.num_prev_only
+        )?;
+        writeln!(
+            f,
+            "# soundings only in new across common files = {}",
+            self.num_new_only
+        )?;
         writeln!(
             f,
             "# soundings mean bias = {:.2}",
@@ -343,6 +351,10 @@ fn make_comparison_one_gas(
             obs_report_file.display()
         ))
     })?;
+
+    // Reset the string alignment so that "NA" values are right aligned
+    // like numbers
+    let settings = settings.align_left_str(false);
     for file in files {
         debug!("Checking data in {}", file.as_str());
         extend_report(
