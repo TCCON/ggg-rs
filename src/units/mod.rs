@@ -198,7 +198,8 @@ where
 /// ```
 pub fn map_values_to_quantity<Q, T, D>(
     arr: ndarray::Array<T, D>,
-    _name: &str,
+    _rs_name: &str,
+    _nc_name: &str,
     _var: &netcdf::Variable,
     units: Option<&str>,
 ) -> netcdf::Result<ndarray::Array<Q, D>>

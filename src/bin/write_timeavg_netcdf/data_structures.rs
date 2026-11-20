@@ -119,7 +119,7 @@ pub(crate) struct TimeAvgData {
     /// The TCCON latitudes
     #[netcdf(
         dimensions("n_obs_instr"),
-        map(write = ggg_rs::units::angle::map::<degree, _, _, _, _>, read = map_deg_to_q),
+        map(write = ggg_rs::units::angle::map_ctx::<degree, _, _, _, _, _>, read = map_deg_to_q),
         attr(name = "standard_name", value = "latitude"),
         attr(name = "units", value = "degrees_north"),
         kind = "array",
@@ -129,7 +129,7 @@ pub(crate) struct TimeAvgData {
     /// The TCCON longitudes
     #[netcdf(
         dimensions("n_obs_instr"),
-        map(write = ggg_rs::units::angle::map::<degree, _, _, _, _>, read = map_deg_to_q),
+        map(write = ggg_rs::units::angle::map_ctx::<degree, _, _, _, _, _>, read = map_deg_to_q),
         attr(name = "standard_name", value = "longitude"),
         attr(name = "units", value = "degrees_east"),
         kind = "array",
@@ -140,7 +140,7 @@ pub(crate) struct TimeAvgData {
     /// the column averages.
     #[netcdf(
         dimensions("n_obs_instr"),
-        map(write = ggg_rs::units::angle::map::<degree, _, _, _, _>, read = map_deg_to_q),
+        map(write = ggg_rs::units::angle::map_ctx::<degree, _, _, _, _, _>, read = map_deg_to_q),
         attr(name = "standard_name", value = "solar_zenith_angle"),
         attr(name = "units", value = "degrees"),
         attr(name = "comment", value = "Calculated as the weighted mean of SZAs in the bin, not the SZA at the bin center time."),
@@ -154,7 +154,7 @@ pub(crate) struct TimeAvgData {
         dimensions("n_obs_instr"),
         attr(name = "standard_name", value = "surface_air_pressure"),
         attr(name = "long_units", value = "Pascals"),
-        map_units(write = ggg_rs::units::pressure::map_units::<pascal, _, _, _, _>, read = map_values_to_quantity::<Pressure, f32, _>),
+        map_units(write = ggg_rs::units::pressure::map_units_ctx::<pascal, _, _, _, _, _>, read = map_values_to_quantity::<Pressure, f32, _>),
         kind = "array",
     )]
     pub(crate) p_surf: Array1<Pressure>,
@@ -164,7 +164,7 @@ pub(crate) struct TimeAvgData {
         dimensions("n_obs_instr", "n_lev"),
         attr(name = "long_name", value = "prior_profile_pressure_levels"),
         attr(name = "long_units", value = "Pascals"),
-        map_units(write = ggg_rs::units::pressure::map_units::<pascal, _, _, _, _>, read = map_values_to_quantity::<Pressure, f32, _>),
+        map_units(write = ggg_rs::units::pressure::map_units_ctx::<pascal, _, _, _, _, _>, read = map_values_to_quantity::<Pressure, f32, _>),
         kind = "array",
     )]
     pub(crate) p_levels_prior: Array2<Pressure>,
@@ -178,7 +178,7 @@ pub(crate) struct TimeAvgData {
         attr(name = "long_name", value = "averaging_kernel_pressure_levels"),
         attr(name = "long_units", value = "Pascals"),
         attr(name = "comment", value = "First index is the surface layer, last index is TOA"),
-        map_units(write = ggg_rs::units::pressure::map_units::<pascal, _, _, _, _>, read = map_values_to_quantity::<Pressure, f32, _>),
+        map_units(write = ggg_rs::units::pressure::map_units_ctx::<pascal, _, _, _, _, _>, read = map_values_to_quantity::<Pressure, f32, _>),
         kind = "array",
     )]
     #[subset(skip)]
@@ -192,7 +192,7 @@ pub(crate) struct TimeAvgData {
         attr(name = "long_name", value = "a_priori_water_profile"),
         attr(name = "long_units", value = "Wet air mole fraction in mole/mole"),
         attr(name = "comment", value = "First index is the surface layer, last index is TOA"),
-        map_units(write = ggg_rs::units::ratio::map_units::<ratio, _, _, _, _>, read = map_values_to_quantity::<Ratio, f32, _>),
+        map_units(write = ggg_rs::units::ratio::map_units_ctx::<ratio, _, _, _, _, _>, read = map_values_to_quantity::<Ratio, f32, _>),
         kind = "array",
     )]
     pub(crate) prior_h2o: Array2<Ratio>,
@@ -205,7 +205,7 @@ pub(crate) struct TimeAvgData {
         attr(name = "long_name", value = "a_priori_profile"),
         attr(name = "long_units", value = "Dry air mole fraction in parts per million"),
         attr(name = "adjustment", value = "This has been dried with the TCCON prior water profile"),
-        map_units(write = ggg_rs::units::ratio::map_units::<part_per_million, _, _, _, _>, read = map_values_to_quantity::<Ratio, f32, _>),
+        map_units(write = ggg_rs::units::ratio::map_units_ctx::<part_per_million, _, _, _, _, _>, read = map_values_to_quantity::<Ratio, f32, _>),
         kind = "array",
     )]
     pub(crate) prior_mixing: Array2<Ratio>,
@@ -217,7 +217,7 @@ pub(crate) struct TimeAvgData {
         attr(name = "long_name", value = "a_priori_profile"),
         attr(name = "comment", value = "First index is the surface layer, last index is TOA"),
         attr(name = "long_units", value = "Wet air mole fraction in parts per million"),
-        map_units(write = ggg_rs::units::ratio::map_units::<part_per_million, _, _, _, _>, read = map_values_to_quantity::<Ratio, f32, _>),
+        map_units(write = ggg_rs::units::ratio::map_units_ctx::<part_per_million, _, _, _, _, _>, read = map_values_to_quantity::<Ratio, f32, _>),
         kind = "array",
     )]
     pub(crate) prior_mixing_tccon: Array2<Ratio>,
@@ -240,7 +240,7 @@ pub(crate) struct TimeAvgData {
         dimensions("n_obs_instr"),
         attr(name = "long_name", value = "column_average_mole_fraction"),
         attr(name = "long_units", value = "Dry air mole fraction in parts per million"),
-        map_units(write = ggg_rs::units::ratio::map_units::<part_per_million, _, _, _, _>, read = map_values_to_quantity::<Ratio, f32, _>),
+        map_units(write = ggg_rs::units::ratio::map_units_ctx::<part_per_million, _, _, _, _, _>, read = map_values_to_quantity::<Ratio, f32, _>),
         kind = "array",
     )] // NB: the WMO scale is written through its field on this struct.
     pub(crate) column_mixing: Array1<Ratio>,
@@ -250,7 +250,7 @@ pub(crate) struct TimeAvgData {
         dimensions("n_obs_instr"),
         attr(name = "long_name", value = "column_average_mole_fraction_uncertainty"),
         attr(name = "long_units", value = "Dry air mole fraction in parts per million"),
-        map_units(write = ggg_rs::units::ratio::map_units::<part_per_million, _, _, _, _>, read = map_values_to_quantity::<Ratio, f32, _>),
+        map_units(write = ggg_rs::units::ratio::map_units_ctx::<part_per_million, _, _, _, _, _>, read = map_values_to_quantity::<Ratio, f32, _>),
         kind = "array",
     )]
     pub(crate) sigma_column_mixing: Array1<Ratio>,
@@ -341,13 +341,20 @@ impl TimeAvgData {
         Ok(scale)
     }
 
-    fn map_utc_cf_time(&self, _: &(), name: &str) -> (Array1<i64>, &'static str) {
-        map_chrono_i64(self, &self.cdate, name)
+    fn map_utc_cf_time(
+        &self,
+        _: &(),
+        _rs_name: &str,
+        _nc_name: &str,
+        _: &AllSitesMetaAttrs,
+    ) -> (Array1<i64>, &'static str) {
+        map_chrono_i64(self, &self.cdate, _rs_name, _nc_name)
     }
 
     fn noop<A>(
         _data: A,
-        _field: &str,
+        _rs_field: &str,
+        _nc_name: &str,
         _var: &netcdf::Variable,
         _units: Option<&str>,
     ) -> netcdf::Result<()> {
@@ -415,7 +422,8 @@ impl TimeAvgData {
 /// variable directly.
 fn map_deg_to_q(
     arr: Array1<f32>,
-    name: &str,
+    rs_name: &str,
+    nc_name: &str,
     var: &netcdf::Variable<'_>,
 ) -> netcdf::Result<Array1<Angle>> {
     let units: String = var
@@ -423,7 +431,7 @@ fn map_deg_to_q(
         .ok_or_else(|| netcdf::Error::NotFound("attribute: 'units'".to_string()))??
         .try_into()
         .map_err(|e| netcdf::Error::Str(format!("cannot convert units to string: {e}")))?;
-    map_values_to_quantity(arr, name, var, Some(units.as_str()))
+    map_values_to_quantity(arr, rs_name, nc_name, var, Some(units.as_str()))
 }
 
 /// A structure representing level 2 data from a single TCCON site.
@@ -944,7 +952,13 @@ impl AllSitesMetaAttrs {
     }
 }
 
-fn map_datetimes_to_cdate<A, D: Datelike + Timelike>(_: A, dt: &Array1<D>, _: &str) -> Array2<i16> {
+fn map_datetimes_to_cdate<A, D: Datelike + Timelike>(
+    _: A,
+    dt: &Array1<D>,
+    _: &str,
+    _: &str,
+    _: &AllSitesMetaAttrs,
+) -> Array2<i16> {
     let mut cdate = Array2::from_elem([dt.len(), 6], i16::MIN);
     ndarray::Zip::from(cdate.rows_mut())
         .and(dt)
@@ -962,6 +976,7 @@ fn map_datetimes_to_cdate<A, D: Datelike + Timelike>(_: A, dt: &Array1<D>, _: &s
 fn map_cdate_to_datetimes(
     cdates: Array2<i16>,
     _: &str,
+    _: &str,
     _: &netcdf::Variable<'_>,
 ) -> netcdf::Result<Array1<DateTime<Utc>>> {
     cdate_to_datetimes(cdates).map(|arr| arr.mapv(|d| d.and_utc()))
@@ -969,6 +984,7 @@ fn map_cdate_to_datetimes(
 
 fn map_cdate_to_naive_datetimes(
     cdates: Array2<i16>,
+    _: &str,
     _: &str,
     _: &netcdf::Variable<'_>,
 ) -> netcdf::Result<Array1<NaiveDateTime>> {
@@ -1136,7 +1152,8 @@ mod tests {
             utc_dt_ymdhms(2026, 2, 3, 20, 30, 40)
         ];
         let expected_cdates = array![[2026, 1, 2, 10, 20, 30], [2026, 2, 3, 20, 30, 40]];
-        let test_cdates = map_datetimes_to_cdate(0, &dates, "");
+        let ctx = AllSitesMetaAttrs::default();
+        let test_cdates = map_datetimes_to_cdate(0, &dates, "", "", &ctx);
         assert_eq!(expected_cdates, test_cdates, "conversion to cdate failed");
         let test_dates = cdate_to_datetimes(test_cdates)
             .unwrap()

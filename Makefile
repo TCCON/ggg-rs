@@ -101,9 +101,13 @@ testdoc: $(NC_LIB)
 	$(CARGOCMD) test $(CARGOARGS) --doc -- $(TEST_PATTERN)
 
 # Regenerate the src/units quantity modules from src/units/quantity_template.rs.in
-# and src/units/quantities.toml.
-sourcegen: $(NC_LIB)
-	UPDATE_UNITS=1 $(CARGOCMD) test $(CARGOARGS) --test units_sourcegen
+# and src/units/quantities.toml. The xtask package does not depend on ggg-rs, so
+# these work even when ggg-rs does not compile.
+sourcegen:
+	cargo run --quiet --manifest-path xtask/Cargo.toml -- sourcegen
+
+sourcegen-check:
+	cargo run --quiet --manifest-path xtask/Cargo.toml -- sourcegen --check
 
 check: $(NC_LIB)
 	$(CARGOCMD) check $(CARGOARGS)
