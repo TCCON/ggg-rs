@@ -61,12 +61,13 @@ pub(crate) struct TimeAvgData {
     /// The mean UTC time of the bin, weighted by the uncertainty in the column
     /// averages, in CF-compliant format.
     #[netcdf(
+        skip(read),
         dimensions("n_obs_instr"),
         rename = "utc_time",
         kind = "array",
         attr(name = "standard_name", value = "time"),
         attr(name = "comment", value = "This contains the same times as cdate, but in CF-compliant format."),
-        map_units(write = Self::map_utc_cf_time, read = Self::noop::<Array1<i64>>)
+        map_units(write = Self::map_utc_cf_time)
     )]
     #[subset(skip)]
     #[concat(skip)]
@@ -349,16 +350,6 @@ impl TimeAvgData {
         _: &AllSitesMetaAttrs,
     ) -> (Array1<i64>, &'static str) {
         map_chrono_i64(self, &self.cdate, _rs_name, _nc_name)
-    }
-
-    fn noop<A>(
-        _data: A,
-        _rs_field: &str,
-        _nc_name: &str,
-        _var: &netcdf::Variable,
-        _units: Option<&str>,
-    ) -> netcdf::Result<()> {
-        Ok(())
     }
 
     fn station_id_attrs<'a>(
