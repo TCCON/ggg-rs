@@ -47,7 +47,9 @@ Metadata-related annotations:
 Annotations that alter how the field is read:
 - `#[netcdf(attribute)]`: read this field from a group attribute, rather than a variable.
   The field type must implement [`TryFrom`] for [`netcdf::AttributeValue`].
-- `#[netcdf(skip)]`: skip reading this field; the field type must implement [`Default`].
+- `#[netcdf(skip)]`: skip reading (and writing) this field; the field type must implement
+  [`Default`]. `skip(read)` skips only reading, `skip(write)` only writing.
+  See [the section under WriteNetcdf](WriteNetcdf#skip) for details.
 
 Annotations that customize the netCDF to Rust type mapping:
 
@@ -93,8 +95,11 @@ both derives. See [`WriteNetcdf`] for definitions of those attributes.
 Note that this is an *associated function*, not a method —
 there is no `self` yet — so you call it as `Data::read_netcdf(&root)`.
 
-Fields marked with `#[netcdf(skip)]` are filled in with [`Default::default()`],
-thus a skipped field's type must implement [`Default`].
+Fields marked with `#[netcdf(skip)]` or `#[netcdf(skip(read))]` are filled in with
+[`Default::default()`], thus a skipped field's type must implement [`Default`]. A
+`skip(read)` field cannot have `map(read = ...)`, `map_units(read = ...)`,
+`custom(read = ...)`, `unpack`, or `on_fill`, since they would never take effect.
+A `skip(write)` field is read normally.
 
 # Container annotations
 

@@ -31,6 +31,107 @@ impl Direction {
     }
 }
 
+// ---------------------------------------------------------------------------
+// skip
+// ---------------------------------------------------------------------------
+
+const SKIP_FORM_HELP: &str = "`skip` takes no value, or a list of directions: `skip` or \
+     `skip(read, write)` for both, `skip(read)` or `skip(write)` for one";
+
+/// Which directions `#[netcdf(skip)]` / `#[netcdf(skip(read))]` /
+/// `#[netcdf(skip(write))]` skip a field in.
+///
+/// A one-sided skip lets a field exist for only one derive, e.g. a placeholder
+/// that writes a second form of another field's data but has nothing to read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SkipSpec {
+    Both,
+    Read,
+    Write,
+}
+
+/// The `read` / `write` body of a `skip(...)`, parsed by darling.
+#[derive(FromMeta)]
+struct SkipSpecFields {
+    #[darling(default)]
+    read: bool,
+    #[darling(default)]
+    write: bool,
+}
+
+impl FromMeta for SkipSpec {
+    /// A bare `skip` skips both directions.
+    fn from_word() -> darling::Result<Self> {
+        Ok(Self::Both)
+    }
+
+    /// `skip(read)`, `skip(write)`, or `skip(read, write)`.
+    fn from_list(items: &[NestedMeta]) -> darling::Result<Self> {
+        let fields = SkipSpecFields::from_list(items)?;
+        match (fields.read, fields.write) {
+            (true, true) => Ok(Self::Both),
+            (true, false) => Ok(Self::Read),
+            (false, true) => Ok(Self::Write),
+            (false, false) => Err(darling::Error::custom(SKIP_FORM_HELP)),
+        }
+    }
+
+    /// Rejects `skip = ...`.
+    fn from_expr(_expr: &syn::Expr) -> darling::Result<Self> {
+        Err(darling::Error::custom(SKIP_FORM_HELP))
+    }
+}
+
+impl SkipSpec {
+    /// True if the field is skipped when generating code for `dir`.
+    pub(crate) fn skips(self, dir: Direction) -> bool {
+        match self {
+            Self::Both => true,
+            Self::Read => dir == Direction::Read,
+            Self::Write => dir == Direction::Write,
+        }
+    }
+
+    /// Check the other options on a field skipped in `dir`. Skipping both ways
+    /// leaves nothing for any option to do, so `any_option` must be false.
+    /// Skipping only `dir` still lets the other derive use the options the two
+    /// share, so only the `dir`-specific ones in `dir_options` are errors —
+    /// they would be silently ignored. `dir_options` pairs each option's name
+    /// with whether it is present.
+    pub(crate) fn check(
+        self,
+        dir: Direction,
+        any_option: bool,
+        dir_options: &[(&str, bool)],
+        ident: &syn::Ident,
+    ) -> Result<(), darling::Error> {
+        if self == Self::Both {
+            if any_option {
+                return Err(darling::Error::custom(
+                    "`skip` cannot be combined with any other `netcdf` option",
+                )
+                .with_span(ident));
+            }
+            return Ok(());
+        }
+        let present: Vec<String> = dir_options
+            .iter()
+            .filter(|(_, on)| *on)
+            .map(|(name, _)| format!("`{name}`"))
+            .collect();
+        if present.is_empty() {
+            return Ok(());
+        }
+        Err(darling::Error::custom(format!(
+            "{} has no effect with `skip({})`, since `{}` never sees this field",
+            present.join(", "),
+            dir.key(),
+            dir.derive_name()
+        ))
+        .with_span(ident))
+    }
+}
+
 const MAP_FORM_HELP: &str = "`map` and `map_units` need an explicit direction, because reading \
      and writing require different functions: `map(write = path::to::fn)`, \
      `map(read = path::to::fn)`, or both";
@@ -89,6 +190,16 @@ impl FromMeta for MapSpec {
     /// Rejects the old non-directional `map = path::to::fn` form.
     fn from_expr(_expr: &syn::Expr) -> darling::Result<Self> {
         Err(darling::Error::custom(MAP_FORM_HELP))
+    }
+}
+
+impl MapSpec {
+    /// True if this spec has a function for `dir`.
+    pub(crate) fn covers(&self, dir: Direction) -> bool {
+        match dir {
+            Direction::Read => self.read.is_some(),
+            Direction::Write => self.write.is_some(),
+        }
     }
 }
 
@@ -234,6 +345,14 @@ impl FromMeta for CustomSpec {
 }
 
 impl CustomSpec {
+    /// True if this spec has a function for `dir`.
+    pub(crate) fn covers(&self, dir: Direction) -> bool {
+        match dir {
+            Direction::Read => self.read.is_some(),
+            Direction::Write => self.write.is_some(),
+        }
+    }
+
     /// The function for `dir`, or an error if this spec does not cover it.
     pub(crate) fn resolve(
         &self,
@@ -802,8 +921,6 @@ pub(crate) enum NcKind {
     Scalar,
     /// Written as a group attribute rather than a variable.
     Attribute,
-    /// Not written.
-    Skip,
 }
 
 /// Pull the first angle-bracketed type argument out of a path type, so

@@ -1,0 +1,5 @@
+error: `unpack` has no effect with `skip(read)`, since `ReadNetcdf` never sees this field
+ --> tests/ui/nc_skip_read_with_unpack.rs:7:5
+  |
+7 |     values: Vec<f64>,
+  |     ^^^^^^

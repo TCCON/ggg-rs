@@ -5,7 +5,7 @@ use quote::quote;
 
 use crate::common_netcdf::{
     ArityChecks, AttrsSpec, CheckedFn, ContainerOnFill, ContextSpec, CustomSpec, DimList,
-    Direction, FloatTy, MapFns, MapSpec, NcKind, OnFill, UnpackSpec, apply_rename_all,
+    Direction, FloatTy, MapFns, MapSpec, NcKind, OnFill, SkipSpec, UnpackSpec, apply_rename_all,
     float_element_type, infer_kind, is_fill_checkable_int, kind_from_str, nc_name,
     not_fill_checkable_message, not_float_message, resolve_unpack, validate_dims,
 };
@@ -70,6 +70,20 @@ pub(crate) fn expand(input: TokenStream) -> TokenStream {
     for f in &fields {
         let fieldname = f.ident.as_ref().unwrap().clone();
 
+        // Unlike writing, every field has to be initialized to build `Self`, so
+        // a skipped field falls back to `Default` instead of dropping out of the
+        // generated code entirely.
+        if let Some(skip) = f.skip
+            && skip.skips(Direction::Read)
+        {
+            errors.handle(resolve_skip(f, skip));
+            field_blocks.push(quote! {
+                let #fieldname = ::core::default::Default::default();
+            });
+            field_names.push(fieldname);
+            continue;
+        }
+
         // A `custom` field bypasses all the derived machinery: no dimension
         // check, no unpacking, just a call to the user's function.
         match errors.handle(resolve_custom(f)) {
@@ -98,17 +112,6 @@ pub(crate) fn expand(input: TokenStream) -> TokenStream {
         else {
             continue;
         };
-
-        // Unlike writing, every field has to be initialized to build `Self`, so
-        // a skipped field falls back to `Default` instead of dropping out of the
-        // generated code entirely.
-        if read_kind == NcKind::Skip {
-            field_blocks.push(quote! {
-                let #fieldname = ::core::default::Default::default();
-            });
-            field_names.push(fieldname);
-            continue;
-        }
 
         let Some(name) = errors.handle(nc_name(&fieldname, f.rename.as_deref(), rename_all)) else {
             continue;
@@ -249,9 +252,10 @@ struct ReadNetcdfField {
     ident: Option<syn::Ident>,
     ty: syn::Type,
 
-    /// Do not read this field at all.
+    /// Do not read this field, filling it with `Default` instead: `skip` or
+    /// `skip(read)` (`skip(write)` reads it normally). See [`SkipSpec`].
     #[darling(default)]
-    skip: bool,
+    skip: Option<SkipSpec>,
 
     /// Override the netCDF name for this field (takes precedence over the
     /// container-level `rename_all`).
@@ -402,7 +406,6 @@ impl HelpersNeeded {
             NcKind::StringVec => self.strings = true,
             NcKind::Scalar => self.scalar = true,
             NcKind::Attribute => self.attribute = true,
-            NcKind::Skip => (),
         }
     }
 
@@ -843,8 +846,7 @@ fn resolve_custom(field: &ReadNetcdfField) -> Result<Option<&syn::Path>, darling
         return Ok(None);
     };
     let ident = field.ident.as_ref().unwrap();
-    if field.skip
-        || field.kind.is_some()
+    if field.kind.is_some()
         || field.dimensions.is_some()
         || field.attribute
         || field.map.is_some()
@@ -853,12 +855,49 @@ fn resolve_custom(field: &ReadNetcdfField) -> Result<Option<&syn::Path>, darling
         || field.on_fill.is_some()
     {
         return Err(darling::Error::custom(
-            "`custom` is incompatible with `skip`, `kind`, `dimensions`, `attribute`, `map`, \
+            "`custom` is incompatible with `kind`, `dimensions`, `attribute`, `map`, \
              `map_units`, `unpack`, and `on_fill`: the custom function does all the reading",
         )
         .with_span(ident));
     }
     custom.resolve(Direction::Read, ident).map(Some)
+}
+
+/// Validate the options on a field that `skip` or `skip(read)` leaves at
+/// `Default`.
+fn resolve_skip(field: &ReadNetcdfField, skip: SkipSpec) -> Result<(), darling::Error> {
+    // `dimensions` is not on this list, unlike in `WriteNetcdf`: a read-only
+    // struct may keep it as documentation of the expected shape.
+    let any_option = field.rename.is_some()
+        || field.kind.is_some()
+        || field.attribute
+        || field.map.is_some()
+        || field.map_units.is_some()
+        || field.custom.is_some()
+        || field.unpack.is_some()
+        || field.on_fill.is_some();
+    let dir = Direction::Read;
+    skip.check(
+        dir,
+        any_option,
+        &[
+            (
+                "map(read)",
+                field.map.as_ref().is_some_and(|m| m.covers(dir)),
+            ),
+            (
+                "map_units(read)",
+                field.map_units.as_ref().is_some_and(|m| m.covers(dir)),
+            ),
+            (
+                "custom(read)",
+                field.custom.as_ref().is_some_and(|c| c.covers(dir)),
+            ),
+            ("unpack", field.unpack.is_some()),
+            ("on_fill", field.on_fill.is_some()),
+        ],
+        field.ident.as_ref().unwrap(),
+    )
 }
 
 /// Resolve the netCDF kind of the field (array, string, skipped, etc.), the map
@@ -873,23 +912,6 @@ fn resolve_field<'f>(
     let err = |msg: &str| darling::Error::custom(msg).with_span(ident);
 
     let has_dims = field.dimensions.as_ref().is_some_and(|d| !d.0.is_empty());
-
-    // `skip` conflicts with every other option
-    if field.skip {
-        if field.rename.is_some()
-            || field.kind.is_some()
-            || field.attribute
-            || field.map.is_some()
-            || field.map_units.is_some()
-            || field.unpack.is_some()
-            || field.on_fill.is_some()
-        {
-            return Err(err(
-                "`skip` cannot be combined with any other `netcdf` option",
-            ));
-        }
-        return Ok((NcKind::Skip, MapFns::default(), None));
-    }
 
     // `map` and `map_units` are mutually exclusive
     if field.map.is_some() && field.map_units.is_some() {
@@ -965,7 +987,7 @@ fn resolve_value_plan(
         field.on_fill,
     );
 
-    // Strings have no numeric packing; `Attribute` and `Skip` returned earlier.
+    // Strings have no numeric packing; `Attribute` returned earlier.
     if matches!(read_kind, NcKind::StringScalar | NcKind::StringVec) {
         if flags.explicit_field_optin() {
             return Err(err(
@@ -1059,7 +1081,6 @@ fn field_block(
         NcKind::Attribute => quote! {
             __get_attribute(grp, #varname)
         },
-        NcKind::Skip => unreachable!("skip fields are filtered out before codegen"),
     };
 
     // If we need to map values, include that here. Remember that read map functions

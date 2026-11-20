@@ -38,8 +38,8 @@ use quote::quote;
 
 use crate::common_netcdf::{
     ArityChecks, AttrsSpec, CheckedFn, ContextSpec, CustomSpec, DimList, Direction, FloatTy,
-    MapFns, MapSpec, NcKind, ScaleOffsetSpec, apply_rename_all, float_element_type, infer_kind,
-    kind_from_str, nc_name, not_float_message, validate_dims,
+    MapFns, MapSpec, NcKind, ScaleOffsetSpec, SkipSpec, apply_rename_all, float_element_type,
+    infer_kind, kind_from_str, nc_name, not_float_message, validate_dims,
 };
 
 // ---------------------------------------------------------------------------
@@ -96,9 +96,10 @@ struct WriteNetcdfField {
     ident: Option<syn::Ident>,
     ty: syn::Type,
 
-    /// Do not write this field at all.
+    /// Do not write this field: `skip` or `skip(write)` (`skip(read)` writes it
+    /// normally). See [`SkipSpec`].
     #[darling(default)]
-    skip: bool,
+    skip: Option<SkipSpec>,
 
     /// Override the netCDF name for this field (takes precedence over the
     /// container-level `rename_all`).
@@ -253,8 +254,7 @@ fn resolve_custom(f: &WriteNetcdfField) -> Result<Option<&syn::Path>, darling::E
         return Ok(None);
     };
     let ident = f.ident.as_ref().unwrap();
-    if f.skip
-        || f.kind.is_some()
+    if f.kind.is_some()
         || f.dimensions.is_some()
         || f.attribute
         || f.map.is_some()
@@ -266,13 +266,52 @@ fn resolve_custom(f: &WriteNetcdfField) -> Result<Option<&syn::Path>, darling::E
         || f.no_describe
     {
         return Err(darling::Error::custom(
-            "`custom` is incompatible with `skip`, `kind`, `dimensions`, `attribute`, `map`, \
+            "`custom` is incompatible with `kind`, `dimensions`, `attribute`, `map`, \
              `map_units`, `scale_offset`, `attr`, `attrs`, `describe`, and `no_describe`: the \
              custom function does all the writing",
         )
         .with_span(ident));
     }
     custom.resolve(Direction::Write, ident).map(Some)
+}
+
+/// Validate the options on a field that `skip` or `skip(write)` leaves out.
+fn resolve_skip(f: &WriteNetcdfField, skip: SkipSpec) -> Result<(), darling::Error> {
+    let has_dims = f.dimensions.as_ref().is_some_and(|d| !d.0.is_empty());
+    let any_option = f.rename.is_some()
+        || f.kind.is_some()
+        || has_dims
+        || f.attribute
+        || f.map.is_some()
+        || f.map_units.is_some()
+        || f.custom.is_some()
+        || !f.var_attrs.is_empty()
+        || !f.attrs_fns.is_empty()
+        || f.describe.is_some()
+        || f.no_describe
+        || f.scale_offset.is_some();
+    let dir = Direction::Write;
+    skip.check(
+        dir,
+        any_option,
+        &[
+            ("map(write)", f.map.as_ref().is_some_and(|m| m.covers(dir))),
+            (
+                "map_units(write)",
+                f.map_units.as_ref().is_some_and(|m| m.covers(dir)),
+            ),
+            (
+                "custom(write)",
+                f.custom.as_ref().is_some_and(|c| c.covers(dir)),
+            ),
+            ("scale_offset", f.scale_offset.is_some()),
+            ("attr", !f.var_attrs.is_empty()),
+            ("attrs", !f.attrs_fns.is_empty()),
+            ("describe", f.describe.is_some()),
+            ("no_describe", f.no_describe),
+        ],
+        f.ident.as_ref().unwrap(),
+    )
 }
 
 /// Validate a field's attributes and determine its [`NcKind`] plus the map
@@ -283,27 +322,6 @@ fn resolve_field(f: &WriteNetcdfField) -> Result<(NcKind, MapFns<'_>), darling::
     let err = |msg: &str| darling::Error::custom(msg).with_span(ident);
 
     let has_dims = f.dimensions.as_ref().is_some_and(|d| !d.0.is_empty());
-
-    // `skip` is exclusive with every other option.
-    if f.skip {
-        if f.rename.is_some()
-            || f.kind.is_some()
-            || has_dims
-            || f.attribute
-            || f.map.is_some()
-            || f.map_units.is_some()
-            || !f.var_attrs.is_empty()
-            || !f.attrs_fns.is_empty()
-            || f.describe.is_some()
-            || f.no_describe
-            || f.scale_offset.is_some()
-        {
-            return Err(err(
-                "`skip` cannot be combined with any other `netcdf` option",
-            ));
-        }
-        return Ok((NcKind::Skip, MapFns::default()));
-    }
 
     // `map` and `map_units` are mutually exclusive.
     if f.map.is_some() && f.map_units.is_some() {
@@ -490,7 +508,7 @@ impl HelpersNeeded {
             }
             NcKind::Scalar => self.scalar = true,
             NcKind::StringScalar => self.string_scalar = true,
-            NcKind::Attribute | NcKind::Skip => {}
+            NcKind::Attribute => {}
         }
     }
 
@@ -855,7 +873,6 @@ fn field_block(
                 grp.add_attribute(#name, #owned)?;
             }};
         }
-        NcKind::Skip => unreachable!("skip fields are filtered out before codegen"),
     };
 
     // Bind `__var` only when there are attributes to attach (avoids unused
@@ -916,6 +933,14 @@ pub(crate) fn expand(input: TokenStream) -> TokenStream {
     for f in &fields {
         let ident = f.ident.as_ref().unwrap();
 
+        // A skipped field generates no code at all.
+        if let Some(skip) = f.skip
+            && skip.skips(Direction::Write)
+        {
+            errors.handle(resolve_skip(f, skip));
+            continue;
+        }
+
         // A `custom` field bypasses all the derived machinery: no helpers, no
         // description, just a call to the user's function.
         match errors.handle(resolve_custom(f)) {
@@ -940,9 +965,6 @@ pub(crate) fn expand(input: TokenStream) -> TokenStream {
         let Some((wk, map_fns)) = errors.handle(resolve_field(f)) else {
             continue;
         };
-        if wk == NcKind::Skip {
-            continue;
-        }
         let Some(name) = errors.handle(nc_name(ident, f.rename.as_deref(), rename_all)) else {
             continue;
         };

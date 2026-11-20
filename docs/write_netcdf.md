@@ -41,7 +41,8 @@ Metadata-related annotations:
 
 Annotations that alter how the field is written:
 - [`#[netcdf(attribute)]`](#attribute): write this field as a group attribute, rather than a variable.
-- [`#[netcdf(skip)]`](#skip): skip writing this field.
+- [`#[netcdf(skip)]`](#skip): skip writing (and reading) this field. `skip(write)` skips only
+  writing, `skip(read)` only reading.
 
 Attribute-related annotations:
 - [`#[netcdf(describe)]`](#describeno_describe): control how the doc comment is written as an attribute for
@@ -323,7 +324,8 @@ struct Data {
 
 ## `skip`
 
-`#[netcdf(skip)]` will skip writing this field.
+`#[netcdf(skip)]` will skip writing this field. It also skips reading the field
+with [`ReadNetcdf`], so it cannot be combined with any other `netcdf` option.
 
 ```no_run
 use ggg_rs_derive::WriteNetcdf;
@@ -335,6 +337,37 @@ struct Data {
     spectrum: Vec<String>,
     #[netcdf(dimensions("time"))]
     xco2: Vec<f64>
+}
+```
+
+To skip only one direction, list it: `#[netcdf(skip(write))]` leaves the field
+out of the file but still reads it, and `#[netcdf(skip(read))]` writes the field
+but fills it with [`Default::default()`] on read. (`skip(read, write)` is the same
+as a bare `skip`.) A one-sided skip may keep the options the other direction
+uses, but options that only matter to the skipped direction are an error, since
+they would never take effect: for `skip(write)`, those are `map(write = ...)`,
+`map_units(write = ...)`, `custom(write = ...)`, `scale_offset`, `attr`, `attrs`,
+`describe`, and `no_describe`.
+
+`skip(read)` is useful for a placeholder field that writes a second form of
+data held in another field. Since it is never read, its `map` needs no
+`read = ...` half:
+
+```no_run
+use ggg_rs_derive::{ReadNetcdf, WriteNetcdf};
+
+fn to_ppb(data: &Data, _unit: &(), _field: &str, _nc: &str) -> Vec<f64> {
+    data.xco2.iter().map(|v| v * 1000.0).collect()
+}
+
+#[derive(ReadNetcdf, WriteNetcdf)]
+struct Data {
+    // In ppm.
+    #[netcdf(dimensions("time"))]
+    xco2: Vec<f64>,
+    // Also written in ppb, but there is nothing to read back.
+    #[netcdf(skip(read), dimensions("time"), kind = "values", map(write = to_ppb))]
+    xco2_ppb: (),
 }
 ```
 
