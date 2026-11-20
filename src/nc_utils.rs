@@ -1378,15 +1378,29 @@ pub fn get_string_attr<O: GetNcAttr>(
     attr: &str,
 ) -> error_stack::Result<String, GggNcError> {
     let vres = object.get_attr_val(attr)?;
-
-    let sres: Result<String, _> = vres.try_into();
-
-    sres.change_context_lazy(|| {
-        GggNcError::context(format!(
-            "Could not convert attribute '{attr}' on {} to a string",
-            object.description()
-        ))
-    })
+    let type_descr = descr_attval_type(&vres);
+    match vres {
+        netcdf::AttributeValue::Strs(mut strings) => {
+            if strings.is_empty() {
+                Ok("".to_string())
+            } else if strings.len() == 1 {
+                Ok(strings.pop().expect("vec should have 1 element"))
+            } else {
+                Err(GggNcError::Custom(format!("Could not convert attribute '{attr}' (type = {type_descr}) on {} to a string; it contained {} strings", object.description(), strings.len())).into())
+            }
+        }
+        _ => {
+            // Catch-all that supports scalar strings, most other
+            // types will likely error (but maybe byte types convert)
+            let sres: Result<String, _> = vres.try_into();
+            sres.change_context_lazy(|| {
+                GggNcError::context(format!(
+                    "Could not convert attribute '{attr}' (type = {type_descr}) on {} to a string",
+                    object.description()
+                ))
+            })
+        }
+    }
 }
 
 /// Retrieve a string attribute on a variable in an open dataset.
@@ -1542,6 +1556,33 @@ pub fn parse_release_lag(release_lag: &str) -> Result<chrono::Duration, GggNcErr
         Err(GggNcError::Custom(format!(
             "Incorrect format for release lag, expected 'NUMBER UNITS', got '{release_lag}'"
         )))
+    }
+}
+
+fn descr_attval_type(val: &netcdf::AttributeValue) -> &'static str {
+    match val {
+        netcdf::AttributeValue::Uchar(_) => "Uchar",
+        netcdf::AttributeValue::Uchars(_) => "Uchars",
+        netcdf::AttributeValue::Schar(_) => "Schar",
+        netcdf::AttributeValue::Schars(_) => "Schars",
+        netcdf::AttributeValue::Ushort(_) => "Ushort",
+        netcdf::AttributeValue::Ushorts(_) => "Ushorts",
+        netcdf::AttributeValue::Short(_) => "Short",
+        netcdf::AttributeValue::Shorts(_) => "Shorts",
+        netcdf::AttributeValue::Uint(_) => "Uint",
+        netcdf::AttributeValue::Uints(_) => "Uints",
+        netcdf::AttributeValue::Int(_) => "Int",
+        netcdf::AttributeValue::Ints(_) => "Ints",
+        netcdf::AttributeValue::Ulonglong(_) => "Ulonglong",
+        netcdf::AttributeValue::Ulonglongs(_) => "Ulonglongs",
+        netcdf::AttributeValue::Longlong(_) => "Longlong",
+        netcdf::AttributeValue::Longlongs(_) => "Longlongs",
+        netcdf::AttributeValue::Float(_) => "Float",
+        netcdf::AttributeValue::Floats(_) => "Floats",
+        netcdf::AttributeValue::Double(_) => "Double",
+        netcdf::AttributeValue::Doubles(_) => "Doubles",
+        netcdf::AttributeValue::Str(_) => "Str",
+        netcdf::AttributeValue::Strs(_) => "Strs",
     }
 }
 
