@@ -112,6 +112,10 @@ sourcegen-check:
 check: $(NC_LIB)
 	$(CARGOCMD) check $(CARGOARGS)
 
+bacon: $(NC_LIB)
+	# CARGOARGS probably isn't exactly what we want, but it has the features.
+	bacon $(CARGOARGS)
+
 run: $(NC_LIB)
 	# Use as, e.g.: make run BIN=write_public_netcdf ARGS="tccon-std pa20040721_20041221.private.nc"
 	$(CARGOCMD) run $(CARGOARGS) --bin $(BIN) -- $(ARGS)
