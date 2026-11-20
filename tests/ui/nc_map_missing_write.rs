@@ -2,7 +2,7 @@
 // would otherwise silently write the field unmapped.
 use ggg_rs_derive::WriteNetcdf;
 
-fn from_nc(v: Vec<f64>, _n: &str) -> netcdf::Result<Vec<f64>> {
+fn from_nc(v: Vec<f64>, _f: &str, _n: &str, _var: &netcdf::Variable<'_>) -> netcdf::Result<Vec<f64>> {
     Ok(v)
 }
 

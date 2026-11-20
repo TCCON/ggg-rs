@@ -1,6 +1,6 @@
 use ggg_rs_derive::WriteNetcdf;
 
-fn units(_s: &Bad, _v: &Vec<f64>, _n: &str) -> String {
+fn units(_s: &Bad, _v: &Vec<f64>, _f: &str, _n: &str) -> String {
     "ppm".to_string()
 }
 

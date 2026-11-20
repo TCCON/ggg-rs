@@ -3,11 +3,11 @@
 // allow it - that should not produce an error.
 use ggg_rs_derive::WriteNetcdf;
 
-fn ident_no_units(_s: &Bad, v: &Vec<f64>, _n: &str) -> Vec<f64> {
+fn ident_no_units(_s: &Bad, v: &Vec<f64>, _f: &str, _n: &str) -> Vec<f64> {
     v.clone()
 }
 
-fn ident_with_units(_s: &Good, v: &Vec<f64>, _n: &str) -> (Vec<f64>, String) {
+fn ident_with_units(_s: &Good, v: &Vec<f64>, _f: &str, _n: &str) -> (Vec<f64>, String) {
     (v.clone(), "".to_string())
 }
 

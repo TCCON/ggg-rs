@@ -11,7 +11,7 @@ fn to_nc(
     Ok(())
 }
 
-fn scale(_d: &Bad, v: &Vec<f64>, _n: &str) -> Vec<f64> {
+fn scale(_d: &Bad, v: &Vec<f64>, _f: &str, _n: &str) -> Vec<f64> {
     v.clone()
 }
 

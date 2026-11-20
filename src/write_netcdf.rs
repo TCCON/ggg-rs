@@ -82,9 +82,10 @@ struct NcVarAttr {
     /// literal `"K"` rather than being re-parsed as the identifier `K`.
     #[darling(default, with = keep_expr)]
     value: Option<syn::Expr>,
-    /// A function `fn(&Self, &FieldTy, &str) -> V` (with `V: Into<AttributeValue>`)
-    /// producing the attribute value from the whole struct, the field value, and
-    /// the field's netCDF name.
+    /// A function `fn(&Self, &FieldTy, &str, &str) -> V` (with
+    /// `V: Into<AttributeValue>`) producing the attribute value from the whole
+    /// struct, the field value, the Rust field name, and the netCDF name, plus
+    /// a final `&Ctx` with a write context.
     #[darling(default)]
     func: Option<syn::Path>,
 }
@@ -119,14 +120,15 @@ struct WriteNetcdfField {
 
     /// Map the field value before writing. The direction is mandatory, since
     /// reading needs a different function: `map(write = path::to::fn)`, where
-    /// the function is `fn(&Self, &FieldTy, &str) -> Out`. A `read = ...` may
-    /// also be present for `ReadNetcdf`; it is ignored here.
+    /// the function is `fn(&Self, &FieldTy, &str, &str) -> Out` (Rust field
+    /// name, then netCDF name, plus a final `&Ctx` with a write context). A
+    /// `read = ...` may also be present for `ReadNetcdf`; it is ignored here.
     #[darling(default)]
     map: Option<MapSpec>,
 
     /// Like `map`, but the write function also returns the `units` attribute:
-    /// `map(write = path::to::fn)` with
-    /// `fn(&Self, &FieldTy, &str) -> (Out, String)`.
+    /// `map_units(write = path::to::fn)` with
+    /// `fn(&Self, &FieldTy, &str, &str) -> (Out, U)`, `U: Into<AttributeValue>`.
     #[darling(default)]
     map_units: Option<MapSpec>,
 
@@ -708,18 +710,21 @@ fn field_block(
     arity: &mut ArityChecks<'_>,
 ) -> TokenStream2 {
     let ident = field.ident.as_ref().unwrap();
+    let field_str = ident.to_string();
     let mapped = map_fns.any();
 
     // `prelude` computes the value to write; `place` names it afterwards.
     // Without a map we operate directly on `self.<field>`.
     let (mut prelude, mut place): (TokenStream2, TokenStream2) = if let Some(m) = map_fns.map {
+        let m = arity.checked(CheckedFn::MapWrite, m);
         (
-            quote! { let __val = #m(self, &self.#ident, #name); },
+            quote! { let __val = #m(self, &self.#ident, #field_str, #name #ctx_arg); },
             quote!(__val),
         )
     } else if let Some((m, _)) = map_fns.map_units {
+        let m = arity.checked(CheckedFn::MapUnitsWrite, m);
         (
-            quote! { let (__val, __units) = #m(self, &self.#ident, #name); },
+            quote! { let (__val, __units) = #m(self, &self.#ident, #field_str, #name #ctx_arg); },
             quote!(__val),
         )
     } else {
@@ -774,8 +779,10 @@ fn field_block(
         if let Some(v) = &a.value {
             attr_stmts.extend(quote! { __var.put_attribute(#an, #v)?; });
         } else if let Some(func) = &a.func {
-            attr_stmts
-                .extend(quote! { __var.put_attribute(#an, #func(self, &self.#ident, #name))?; });
+            let func = arity.checked(CheckedFn::AttrFunc, func);
+            attr_stmts.extend(quote! {
+                __var.put_attribute(#an, #func(self, &self.#ident, #field_str, #name #ctx_arg))?;
+            });
         }
     }
     if let Some((_, unit_attr)) = map_fns.map_units {
@@ -783,7 +790,6 @@ fn field_block(
     }
     // `attrs(func = ...)` functions go last, so they can overwrite any of the
     // above.
-    let field_str = ident.to_string();
     for a in &field.attrs_fns {
         let func = arity.checked(CheckedFn::FieldAttrs, &a.func);
         attr_stmts.extend(quote! {

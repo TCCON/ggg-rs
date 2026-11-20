@@ -1,0 +1,48 @@
+error[E0277]: this `map(read = ...)` function takes a context argument, but this struct has no read context
+  --> tests/ui/nc_context_map_read_takes_ctx_no_context.rs:20:45
+   |
+17 | #[derive(ReadNetcdf)]
+   |          ---------- required by a bound introduced by this call
+...
+20 |     #[netcdf(dimensions("time"), map(read = from_nc), kind = "values")]
+   |                                             ^^^^^^^ remove the final context parameter from this function
+   |
+help: the trait `__ExpectMapRead` is not implemented for `__TakesContext`
+  --> tests/ui/nc_context_map_read_takes_ctx_no_context.rs:17:10
+   |
+17 | #[derive(ReadNetcdf)]
+   |          ^^^^^^^^^^
+   = note: `context(...)` declares a context for writing only, so `ReadNetcdf` does not pass one; add `read = "..."` to `context(...)` if this function needs it
+help: the trait `__ExpectMapRead` is implemented for `__TakesNoContext`
+  --> tests/ui/nc_context_map_read_takes_ctx_no_context.rs:17:10
+   |
+17 | #[derive(ReadNetcdf)]
+   |          ^^^^^^^^^^
+note: required by a bound in `__check_MapRead`
+  --> tests/ui/nc_context_map_read_takes_ctx_no_context.rs:17:10
+   |
+17 | #[derive(ReadNetcdf)]
+   |          ^^^^^^^^^^ required by this bound in `__check_MapRead`
+   = note: this error originates in the derive macro `ReadNetcdf` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0061]: this function takes 5 arguments but 4 arguments were supplied
+  --> tests/ui/nc_context_map_read_takes_ctx_no_context.rs:20:45
+   |
+17 | #[derive(ReadNetcdf)]
+   |          ---------- argument #5 of type `&Scale` is missing
+...
+20 |     #[netcdf(dimensions("time"), map(read = from_nc), kind = "values")]
+   |                                             ^^^^^^^
+   |
+note: function defined here
+  --> tests/ui/nc_context_map_read_takes_ctx_no_context.rs:7:4
+   |
+ 7 | fn from_nc(
+   |    ^^^^^^^
+...
+12 |     _ctx: &Scale,
+   |     ------------
+help: provide the argument
+   |
+20 |     #[netcdf(dimensions("time"), map(read = from_nc(ReadNetcdf, ReadNetcdf, ReadNetcdf, ReadNetcdf, /* &Scale */)), kind = "values")]
+   |                                                    ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++

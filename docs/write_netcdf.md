@@ -49,8 +49,9 @@ Attribute-related annotations:
 - [`#[netcdf(attr(name = "units", value = "K"))]`](#attr): add a static attribute to the variable.
   May be repeated.
 - [`#[netcdf(attr(name = "...", func = path::to::fn))]`](#attr): add an attribute to the
-  variable, computed from a function with the signature `fn(&Self, &FieldTy, &str) -> V`,
-  which receives this struct, the field values, and field name.
+  variable, computed from a function with the signature `fn(&Self, &FieldTy, &str, &str) -> V`,
+  which receives this struct, the field values, field name, and netCDF variable name.
+  With `#[netcdf(context(write = Ctx))]`, it receives `&Ctx` as a fifth argument.
 - [`#[netcdf(attrs(func = path::to::fn))]`](#attrs-field-level): calls the given function to write attributes
   to the variable. The function must have the signature
   `fn(&Self, &FieldTy, &str, &str, &mut netcdf::VariableMut<'_>) -> netcdf::Result<()>`,
@@ -60,11 +61,13 @@ Attribute-related annotations:
 
 Annotations that customize the Rust -> netCDF type mapping:
 - [`#[netcdf(map(write = path::to::fn))]`](#map): transform the field values before writing.
-  The function must have the signature `fn(&Self, &FieldTy, &str) -> Out`; it receives
-  the structure instance, field values, and field name and must return netCDF-compatible
-  values.
+  The function must have the signature `fn(&Self, &FieldTy, &str, &str) -> Out`; it receives
+  the structure instance, field values, field name, and netCDF variable name, and must return
+  netCDF-compatible values. With `#[netcdf(context(write = Ctx))]`, it receives `&Ctx` as a
+  fifth argument.
 - [`#[netcdf(map_units(write = path::to::fn))]`](#map_units): like `map`, but returns `(Out, Into<AttributeValue>)`,
-  where the second element will be written to the "units" attribute.
+  where the second element will be written to the "units" attribute. It takes the same
+  arguments as `map`.
 - [`#[netcdf(kind = "values" | "array" | "string")]`](#kind): control how the values are
   written to the netCDF file; required with the `map` or `map_units` attributes.
   Otherwise, this is usually inferred.
@@ -144,8 +147,9 @@ Including this attribute is an error for scalar typed fields or fields written a
 ## `context`
 
 `#[netcdf(context(write = Ctx))]` modifies the generated code to pass
-`&Ctx` to any functions injected via annotations. This is useful for
-additional data or metadata required to write attributes, scale values,
+`&Ctx` as the final argument to every function injected via annotations:
+`map`, `map_units`, `attr(func = ...)`, `attrs`, and `custom`. This is useful
+for additional data or metadata required to write attributes, scale values,
 etc. A simple example would be to include history from an input file:
 
 ```no_run
@@ -172,6 +176,33 @@ let data_out = Data { xco2: vec![400.0, 401.0, 402.0] };
 let mut file = netcdf::create("out.nc").unwrap();
 let mut root = file.root_mut().unwrap();
 data_out.write_netcdf_context(&mut root, &history).unwrap();
+```
+
+Because the context is passed to *every* annotation function, a function's
+signature depends on whether the struct has a write context. A generic helper
+shared between structs with and without a context therefore cannot be named
+directly in both; wrap it in a small function for the struct whose signature
+differs:
+
+```no_run
+use ggg_rs_derive::WriteNetcdf;
+
+// A shared helper with the context-free signature.
+fn to_ppm<S>(_data: &S, v: &[f64], _field: &str, _nc: &str) -> Vec<f64> {
+    v.iter().map(|x| x * 1e6).collect()
+}
+
+// The struct below has a context, so its map function takes `&String` too.
+fn to_ppm_ctx(data: &Data, v: &[f64], field: &str, nc: &str, _hist: &String) -> Vec<f64> {
+    to_ppm(data, v, field, nc)
+}
+
+#[derive(WriteNetcdf)]
+#[netcdf(context(write = String))]
+struct Data {
+    #[netcdf(dimensions("time"), map(write = to_ppm_ctx), kind = "values")]
+    xco2: Vec<f64>,
+}
 ```
 
 ## `rename_all`
@@ -362,19 +393,21 @@ struct Data {
 
 `#[netcdf(attr(name = "units", value = "K"))]` will attach a constant attribute
   to the variable. Use `attr(name = "...", func = path::to::fn)` if the attribute
-  needs to be computed. The function must take 3 arguments, a reference to the struct,
-  a reference to the field values, and the field name: `fn(&Self, &FieldTy, &str) -> V`
- `V` must implement `Into<AttributeValue>`. You can specify multiple attributes.
+  needs to be computed. The function must take 4 arguments: a reference to the struct,
+  a reference to the field values, the Rust field name, and the netCDF variable name,
+  `fn(&Self, &FieldTy, &str, &str) -> V`. `V` must implement `Into<AttributeValue>`.
+  With a container [`context`](#context), the function takes a final `&Ctx` argument too.
+  You can specify multiple attributes.
 
 ```no_run
 use ggg_rs_derive::WriteNetcdf;
 
-// This function only uses the field name, but it could use the values
+// This function only uses the netCDF name, but it could use the values
 // of the field or the entire structure - the latter can be useful if
 // you need to distill an attribute from a separate field. Here we use
 // generics without trait bounds so that this function could apply to
 // any field.
-fn infer_long_name<'s, D, V>(_data: &D, _values: &V, name: &'s str) -> &'s str {
+fn infer_long_name<'s, D, V>(_data: &D, _values: &V, _field: &str, name: &'s str) -> &'s str {
     match name {
         "xco2" => "carbon_dioxide_column_average",
         _ => name,
@@ -453,9 +486,10 @@ struct Data {
 ## `map`
 
 `#[netcdf(map(write = path::to::fn))]` allows you to define a function to transform
- the value before writing. The function must take 3 arguments, a reference to the struct,
- a reference to the field values, and the field name: `fn(&Self, &FieldTy, &str) -> Out`.
- This allows you to work around types that cannot be directly written to netCDF files,
+ the value before writing. The function must take 4 arguments: a reference to the struct,
+ a reference to the field values, the Rust field name, and the netCDF variable name,
+ `fn(&Self, &FieldTy, &str, &str) -> Out`. With a container [`context`](#context), it
+ takes a final `&Ctx` argument too. This allows you to work around types that cannot be directly written to netCDF files,
  such as [`chrono::DateTime`] instances. Note that this must be combined with the "kind"
  attribute, as the macro will not be able to infer the output type.
 
@@ -468,7 +502,7 @@ same `map(...)`: `map(write = to_nc, read = from_nc)`.
 use ggg_rs_derive::WriteNetcdf;
 use chrono::{DateTime, Utc};
 
-fn datetime_to_timestamp(_data: &Data, times: &[DateTime<Utc>], _name: &str) -> Vec<i64> {
+fn datetime_to_timestamp(_data: &Data, times: &[DateTime<Utc>], _field: &str, _nc: &str) -> Vec<i64> {
     times.iter().map(|t| t.timestamp()).collect()
 }
 
@@ -483,8 +517,9 @@ struct Data {
 
 ## `map_units`
 
-`#[netcdf(map_units(write = path::to::fn))]` is like `map`, but the function returns
-`(Out, String)` and the returned string is written as the `units` attribute.
+`#[netcdf(map_units(write = path::to::fn))]` is like `map`, and takes the same
+arguments, but the function returns `(Out, U)` where `U: Into<AttributeValue>`.
+The second element is written as the `units` attribute.
 This version can also accept a `units_attr` option to change which attribute the units
 are written to; by default, they are written to "units".
 
@@ -492,7 +527,9 @@ are written to; by default, they are written to "units".
 use ggg_rs_derive::WriteNetcdf;
 use chrono::{DateTime, Utc};
 
-fn datetime_to_timestamp(_data: &Data, times: &[DateTime<Utc>], _name: &str) -> (Vec<i64>, &'static str) {
+fn datetime_to_timestamp(
+    _data: &Data, times: &[DateTime<Utc>], _field: &str, _nc: &str,
+) -> (Vec<i64>, &'static str) {
     let timestamps = times.iter().map(|t| t.timestamp()).collect();
     (timestamps, "seconds since 1970-01-01 00:00:00")
 }

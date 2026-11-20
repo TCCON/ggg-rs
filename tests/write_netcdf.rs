@@ -7,7 +7,12 @@ use ggg_rs_derive::WriteNetcdf;
 use ndarray::{Array2, array};
 
 /// `map_units` hook: convert a fraction to ppm and report the units string.
-fn frac_to_ppm<T>(_data: &T, values: &Vec<f64>, _name: &str) -> (Vec<f64>, String) {
+fn frac_to_ppm<T>(
+    _data: &T,
+    values: &Vec<f64>,
+    _field: &str,
+    _nc_name: &str,
+) -> (Vec<f64>, String) {
     (
         values.iter().map(|v| v * 1.0e6).collect(),
         "ppm".to_string(),
@@ -15,7 +20,7 @@ fn frac_to_ppm<T>(_data: &T, values: &Vec<f64>, _name: &str) -> (Vec<f64>, Strin
 }
 
 /// `attr(func = ...)` hook: build a long_name from the field's netCDF name.
-fn make_long_name(_data: &Data, _values: &Vec<f64>, name: &str) -> String {
+fn make_long_name(_data: &Data, _values: &Vec<f64>, _field: &str, name: &str) -> String {
     let name = format!("data for {name}");
     name
 }

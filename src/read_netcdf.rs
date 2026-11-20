@@ -126,7 +126,15 @@ pub(crate) fn expand(input: TokenStream) -> TokenStream {
             Some(ValuePlan::IntFillCheck) => helpers.int_fill = true,
             None => {}
         }
-        field_blocks.push(field_block(f, read_kind, &name, map_fns, value_plan));
+        field_blocks.push(field_block(
+            f,
+            read_kind,
+            &name,
+            map_fns,
+            value_plan,
+            ctx_arg.as_ref(),
+            &mut arity,
+        ));
         field_names.push(fieldname);
     }
 
@@ -265,8 +273,10 @@ struct ReadNetcdfField {
 
     /// Map the field value after reading. The direction is mandatory, since
     /// writing needs a different function: `map(read = path::to::fn)`, where the
-    /// function is `fn(NcTy, &str, &netcdf::Variable<'_>) -> netcdf::Result<Out>`. Its arguments are
-    /// the value read from the netCDF file (by value) and the struct field name.
+    /// function is `fn(NcTy, &str, &str, &netcdf::Variable<'_>) -> netcdf::Result<Out>`.
+    /// Its arguments are the value read from the netCDF file (by value), the
+    /// Rust field name, the netCDF name, and the variable, plus a final `&Ctx`
+    /// with a read context.
     /// Reading is fallible — the data comes from a file this program did not
     /// necessarily write — so the function returns a `netcdf::Result`. A
     /// `write = ...` may also be present for `WriteNetcdf`; it is ignored here.
@@ -274,9 +284,9 @@ struct ReadNetcdfField {
     map: Option<MapSpec>,
 
     /// Like `map`, but the read function also accepts the value of the `units`
-    /// attribute as a third argument:
-    /// `fn(NcTy, &str, &netcdf::Variable<'_>, Option<&str>) -> netcdf::Result<Out>`.
-    /// If the variable has no `units`, the third argument is `None`.
+    /// attribute, after the variable:
+    /// `fn(NcTy, &str, &str, &netcdf::Variable<'_>, Option<&str>) -> netcdf::Result<Out>`.
+    /// If the variable has no `units`, that argument is `None`.
     #[darling(default)]
     map_units: Option<MapSpec>,
 
@@ -1019,12 +1029,14 @@ fn field_block(
     varname: &str,
     map_fns: MapFns<'_>,
     value_plan: Option<ValuePlan>,
+    ctx_arg: Option<&TokenStream2>,
+    arity: &mut ArityChecks<'_>,
 ) -> TokenStream2 {
     let fieldname = field.ident.as_ref().unwrap();
-    // `map`/`map_units` receive the *struct field* name, not the netCDF variable
-    // name. `String` tokenizes as a string literal; note that quote! does not
-    // interpolate inside a literal, so `"#fieldname"` would emit the text
-    // `#fieldname` verbatim.
+    // `map`/`map_units` receive the struct field name and then the netCDF
+    // variable name. `String` tokenizes as a string literal; note that quote!
+    // does not interpolate inside a literal, so `"#fieldname"` would emit the
+    // text `#fieldname` verbatim.
     let fieldname_str = fieldname.to_string();
 
     // Generate the call to read in the values from the netcdf file. `grp` will be a &netcdf::Group<'_>.
@@ -1051,23 +1063,25 @@ fn field_block(
     };
 
     // If we need to map values, include that here. Remember that read map functions
-    // have a signature of (netcdf_value, field_name) -> netcdf::Result<Out> and read
-    // map_unit functions have (netcdf_value, field_name, unit_string) -> netcdf::Result<Out>.
+    // take (value, field_name, nc_name, var) and read map_units functions add the
+    // units string after `var`; both gain a final `&Ctx` with a read context.
     // Both are fallible, so their calls take a `?`.
     let remap = if let Some(map_fxn) = map_fns.map {
+        let map_fxn = arity.checked(CheckedFn::MapRead, map_fxn);
         quote! {
             let __var = grp
                 .variable(#varname)
                 .ok_or_else(|| ::netcdf::Error::NotFound(format!("variable: '{}'", #varname)))?;
-            #map_fxn(__val, #fieldname_str, &__var)?
+            #map_fxn(__val, #fieldname_str, #varname, &__var #ctx_arg)?
         }
     } else if let Some((map_fxn, unit_attr)) = map_fns.map_units {
+        let map_fxn = arity.checked(CheckedFn::MapUnitsRead, map_fxn);
         quote! {
             let __var = grp
                 .variable(#varname)
                 .ok_or_else(|| ::netcdf::Error::NotFound(format!("variable: '{}'", #varname)))?;
             let __units = __get_units(grp, #varname, #unit_attr)?;
-            #map_fxn(__val, #fieldname_str, &__var, __units.as_deref())?
+            #map_fxn(__val, #fieldname_str, #varname, &__var, __units.as_deref() #ctx_arg)?
         }
     } else {
         quote!(__val)

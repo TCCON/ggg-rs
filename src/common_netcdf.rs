@@ -396,19 +396,29 @@ pub(crate) enum CheckedFn {
     CustomWrite,
     FieldAttrs,
     GroupAttrs,
+    MapRead,
+    MapWrite,
+    MapUnitsRead,
+    MapUnitsWrite,
+    AttrFunc,
 }
 
 impl CheckedFn {
-    const ALL: [Self; 4] = [
+    const ALL: [Self; 9] = [
         Self::CustomRead,
         Self::CustomWrite,
         Self::FieldAttrs,
         Self::GroupAttrs,
+        Self::MapRead,
+        Self::MapWrite,
+        Self::MapUnitsRead,
+        Self::MapUnitsWrite,
+        Self::AttrFunc,
     ];
 
     fn direction(self) -> Direction {
         match self {
-            Self::CustomRead => Direction::Read,
+            Self::CustomRead | Self::MapRead | Self::MapUnitsRead => Direction::Read,
             _ => Direction::Write,
         }
     }
@@ -417,8 +427,9 @@ impl CheckedFn {
     fn base_arity(self) -> usize {
         match self {
             Self::CustomRead => 3,
-            Self::CustomWrite | Self::FieldAttrs => 5,
+            Self::CustomWrite | Self::FieldAttrs | Self::MapUnitsRead => 5,
             Self::GroupAttrs => 2,
+            Self::MapRead | Self::MapWrite | Self::MapUnitsWrite | Self::AttrFunc => 4,
         }
     }
 
@@ -429,6 +440,11 @@ impl CheckedFn {
             Self::CustomWrite => "`custom(write = ...)`",
             Self::FieldAttrs => "field-level `attrs(func = ...)`",
             Self::GroupAttrs => "container-level `attrs(func = ...)`",
+            Self::MapRead => "`map(read = ...)`",
+            Self::MapWrite => "`map(write = ...)`",
+            Self::MapUnitsRead => "`map_units(read = ...)`",
+            Self::MapUnitsWrite => "`map_units(write = ...)`",
+            Self::AttrFunc => "`attr(func = ...)`",
         }
     }
 
@@ -443,6 +459,15 @@ impl CheckedFn {
                 "fn(&Self, &FieldTy, &str, &str, &mut netcdf::VariableMut<'_>) -> netcdf::Result<()>"
             }
             Self::GroupAttrs => "fn(&Self, &mut netcdf::GroupMut<'_>) -> netcdf::Result<()>",
+            Self::MapRead => {
+                "fn(NcTy, &str, &str, &netcdf::Variable<'_>) -> netcdf::Result<FieldTy>"
+            }
+            Self::MapWrite => "fn(&Self, &FieldTy, &str, &str) -> Out",
+            Self::MapUnitsRead => {
+                "fn(NcTy, &str, &str, &netcdf::Variable<'_>, Option<&str>) -> netcdf::Result<FieldTy>"
+            }
+            Self::MapUnitsWrite => "fn(&Self, &FieldTy, &str, &str) -> (Out, Units)",
+            Self::AttrFunc => "fn(&Self, &FieldTy, &str, &str) -> V",
         }
     }
 
@@ -452,6 +477,11 @@ impl CheckedFn {
             Self::CustomWrite => "CustomWrite",
             Self::FieldAttrs => "FieldAttrs",
             Self::GroupAttrs => "GroupAttrs",
+            Self::MapRead => "MapRead",
+            Self::MapWrite => "MapWrite",
+            Self::MapUnitsRead => "MapUnitsRead",
+            Self::MapUnitsWrite => "MapUnitsWrite",
+            Self::AttrFunc => "AttrFunc",
         };
         syn::Ident::new(&format!("{prefix}{suffix}"), proc_macro2::Span::call_site())
     }

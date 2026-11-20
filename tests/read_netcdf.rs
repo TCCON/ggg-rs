@@ -2,7 +2,12 @@ use ggg_rs_derive::{ReadNetcdf, WriteNetcdf};
 use ndarray::{Array2, array};
 
 /// Write half of `map_units`: scale to ppm and report the units string.
-fn frac_to_ppm<T>(_data: &T, values: &Vec<f64>, _name: &str) -> (Vec<f64>, String) {
+fn frac_to_ppm<T>(
+    _data: &T,
+    values: &Vec<f64>,
+    _field: &str,
+    _nc_name: &str,
+) -> (Vec<f64>, String) {
     (
         values.iter().map(|v| v * 1.0e6).collect(),
         "ppm".to_string(),
@@ -15,6 +20,7 @@ fn frac_to_ppm<T>(_data: &T, values: &Vec<f64>, _name: &str) -> (Vec<f64>, Strin
 fn ppm_to_frac(
     values: Vec<f64>,
     name: &str,
+    _nc_name: &str,
     _var: &netcdf::Variable<'_>,
     units: Option<&str>,
 ) -> netcdf::Result<Vec<f64>> {

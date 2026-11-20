@@ -25,7 +25,7 @@ The following attributes modify the behavior of the macro:
   an additional argument of type `&Ctx` to allow passing runtime-dependent information
   into the writer. The type can be specified as `read = Ctx` to only apply to `ReadNetcdf`
   or `ty = Ctx` to define the same context type for `ReadNetcdf` and [`WriteNetcdf`].
-  See [the section under WriteNetcdf](WriteNetcdf#context) and [below](#run-time-context-for-custom-functions)
+  See [the section under WriteNetcdf](WriteNetcdf#context) and [below](#run-time-context)
   for details.
 - `#[netcdf(rename_all = "...")]`: change how all fields map to variable names using
   serde-style case conventions. See [the section under WriteNetcdf](WriteNetcdf#rename_all)
@@ -53,11 +53,13 @@ Annotations that customize the netCDF to Rust type mapping:
 
 - [`#[netcdf(map(read = path::to::fn))]`](#map): transforms the value after it is read
   to map to Rust types not natively mapped to netCDF files. The function must have the
-  signature `fn(NcTy, &str, &netcdf::Variable<'_>) -> netcdf::Result<Out>`, and receives
-  the value from the file, field name, and the variable from which the values were read.
+  signature `fn(NcTy, &str, &str, &netcdf::Variable<'_>) -> netcdf::Result<Out>`, and receives
+  the value from the file, field name, netCDF variable name, and the variable from which
+  the values were read. If a read context is present, this receives `&Ctx` as the fifth argument.
 - [`#[netcdf(map_units(read = path::to::fn))]`](#map_units): like `map`, but receives the
-  units of the values as the fourth argument, making the function signature
-  `fn(NcTy, &str, &netcdf::Variable<'_>, Option<&str>) -> netcdf::Result<Out>`.
+  units of the values as the fifth argument, making the function signature
+  `fn(NcTy, &str, &str, &netcdf::Variable<'_>, Option<&str>) -> netcdf::Result<Out>`.
+  If a read context is present, this receives `&Ctx` as the sixth argument.
 - `#[netcdf(kind = "values" | "array" | "string")]`: control how the values are
   read from the netCDF file; required with the `map` or `map_units` attributes.
   Otherwise, this is usually inferred. See [the section under WriteNetcdf](WriteNetcdf#kind) for details.
@@ -293,9 +295,15 @@ Some annotations are omitted here because they are described in the
 ## `map`
 
 `#[netcdf(map(read = path::to::fn))]`: transforms the value after it is read.
-The function takes the value from the file and the struct field
-name, and returns a [`netcdf::Result`] containing the new type (which must
-match the structure field type): `fn(NcTy, &str, &netcdf::Variable<'_>) -> netcdf::Result<Out>`.
+The function takes the value from the file, the Rust field name, the netCDF
+variable name, and the variable, and returns a [`netcdf::Result`] containing
+the new type (which must match the structure field type):
+
+`fn(NcTy, &str, &str, &netcdf::Variable<'_>) -> netcdf::Result<Out>`
+
+With a read [context](#run-time-context), the function takes a final `&Ctx`
+argument too.
+
 Note that, unlike the corresponding functions for [`WriteNetcdf`], there is no
 `&Self` argument, because `read_netcdf` is still constructing `Self` when the
 function runs. Further, the function is fallible: the data comes from a file this
@@ -312,9 +320,10 @@ but this can be overridden with the `units_attr` option to `map_units`, e.g.,
 `#[netcdf(map_units(read = path::to::fn, units_attr = "long_units"))]`.
 The signature of the function given to `read` is:
 
-`fn(NcTy, &str, &netcdf::Variable<'_>, Option<&str>) -> netcdf::Result<Out>`
+`fn(NcTy, &str, &str, &netcdf::Variable<'_>, Option<&str>) -> netcdf::Result<Out>`
 
-where the `Option<&str>` will contain the units string if the attribute
+plus a final `&Ctx` with a read context. The two `&str` arguments are the Rust
+field name and the netCDF variable name, as for `map`, and the `Option<&str>` will contain the units string if the attribute
 is present. If that attribute is not present, this will be `None`.
 This is a convenience to avoid needing boilerplate to get the units
 attribute from the variable instance in each `map_units` function.
@@ -326,7 +335,13 @@ since the type in the file no longer matches the field's declared type.
 use ggg_rs_derive::ReadNetcdf;
 
 
-fn ppm_to_frac(values: Vec<f64>, name: &str, _var: &netcdf::Variable<'_>, units: Option<&str>) -> netcdf::Result<Vec<f64>> {
+fn ppm_to_frac(
+    values: Vec<f64>,
+    name: &str,
+    _nc_name: &str,
+    _var: &netcdf::Variable<'_>,
+    units: Option<&str>,
+) -> netcdf::Result<Vec<f64>> {
     match units {
         Some("ppm") => Ok(values.into_iter().map(|v| v / 1.0e6).collect()),
         other => Err(netcdf::Error::Str(
@@ -379,7 +394,7 @@ can be combined with is `rename`. `kind`, `dimensions`, `attribute`, `map`,
 `map_units`, `unpack`, and `on_fill` are errors on a `custom` field, and a
 container `unpack`/`on_fill` skips it: any unpacking is the function's job.
 Note that `custom` functions must accept an additional argument if the `context`
-annotation is added to the structure; see [below](#run-time-context-for-custom-functions).
+annotation is added to the structure; see [below](#run-time-context).
 
 ```no_run
 use ggg_rs_derive::ReadNetcdf;
@@ -403,14 +418,15 @@ struct Data {
 }
 ```
 
-### Run-time context for custom functions
+### Run-time context
 
-`custom` functions sometimes need inputs that aren't in the file or the
-struct, such as a lookup table loaded separately. Reading can't get these
-from `Self`, since `Self` doesn't exist yet. This can be addressed
-by adding the container level `#[netcdf(context(...))]` annotation.
+`custom`, `map`, and `map_units` functions sometimes need inputs that aren't
+in the file or the struct, such as a lookup table loaded separately. Reading
+can't get these from `Self`, since `Self` doesn't exist yet. This can be
+addressed by adding the container level `#[netcdf(context(...))]` annotation.
 As described [above](#summary), this changes the generated `read_netcdf`
-function.
+function, and every `custom`, `map`, and `map_units` read function then takes
+`&Ctx` as its final argument.
 
 Only a single context value can be passed.
 If many inputs are needed, you would bundle them together in one context struct
