@@ -68,6 +68,7 @@ tempfile = "3.27.0"
 nccompare = { path = "./deps/nccompare" }
 rstest = "0.18.2"
 static_assertions = "1.1.0"
+xtask = { path = "./xtask" }
 # This is a workaround to gate the test_utils module behind a feature
 # to avoid pulling in some unnecessary dependencies outside of testing
 ggg-rs = { path = ".", features = ["test-utils"] }

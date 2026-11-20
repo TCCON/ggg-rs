@@ -1,4 +1,4 @@
-// Generated from quantity_template.rs.in and quantities.toml by tests/units_sourcegen.rs.
+// Generated from quantity_template.rs.in and quantities.toml by xtask.
 // Do not edit directly; edit the template or table, then run `make sourcegen`.
 use serde::Serialize;
 use uom::{
