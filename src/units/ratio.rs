@@ -126,7 +126,26 @@ where
 pub fn map_units<N, U, V, D, A>(
     _data: &A,
     ratios: &ndarray::Array<Ratio<U, V>, D>,
-    _name: &str,
+    _rs_name: &str,
+    _nc_name: &str,
+) -> (ndarray::Array<V, D>, &'static str)
+where
+    N: Unit + Conversion<V, T = V::T>,
+    U: Units<V> + ?Sized,
+    V: Num + Conversion<V>,
+    D: ndarray::Dimension,
+{
+    array_to_value_and_abbr::<N, U, V, D>(ratios.view())
+}
+
+/// Like [`map_units`], but with an additional argument to swallow
+/// a context type passed to helper functions like this.
+pub fn map_units_ctx<N, U, V, D, A, Ctx>(
+    _data: &A,
+    ratios: &ndarray::Array<Ratio<U, V>, D>,
+    _rs_name: &str,
+    _nc_name: &str,
+    _ctx: Ctx
 ) -> (ndarray::Array<V, D>, &'static str)
 where
     N: Unit + Conversion<V, T = V::T>,
@@ -167,7 +186,26 @@ where
 pub fn map<N, U, V, D, A>(
     _data: &A,
     ratios: &ndarray::Array<Ratio<U, V>, D>,
-    _name: &str,
+    _rs_name: &str,
+    _nc_name: &str,
+) -> ndarray::Array<V, D>
+where
+    N: Unit + Conversion<V, T = V::T>,
+    U: Units<V> + ?Sized,
+    V: Num + Conversion<V>,
+    D: ndarray::Dimension,
+{
+    array_to_value_and_abbr::<N, U, V, D>(ratios.view()).0
+}
+
+/// Like [`map`], but with an extra argument to swallow 
+/// a context type passed to helper functions like this.
+pub fn map_ctx<N, U, V, D, A, Ctx>(
+    _data: &A,
+    ratios: &ndarray::Array<Ratio<U, V>, D>,
+    _rs_name: &str,
+    _nc_name: &str,
+    _ctx: Ctx
 ) -> ndarray::Array<V, D>
 where
     N: Unit + Conversion<V, T = V::T>,

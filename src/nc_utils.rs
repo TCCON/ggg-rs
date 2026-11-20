@@ -842,7 +842,8 @@ pub fn get_data<T: Copy + NcTypeDescriptor, D: ndarray::Dimension>(
 ///   for those.
 pub fn map_cftime<T: ToNanos, D: ndarray::Dimension>(
     timestamps: Array<T, D>,
-    _field: &str,
+    _rs_name: &str,
+    _nc_name: &str,
     _var: &netcdf::Variable<'_>,
     units: Option<&str>,
 ) -> netcdf::Result<Array<chrono::DateTime<chrono::Utc>, D>> {
@@ -852,6 +853,18 @@ pub fn map_cftime<T: ToNanos, D: ndarray::Dimension>(
         )
     })?;
     convert_cftime(timestamps, units).map_err(|e| netcdf::Error::Str(e.to_string()))
+}
+
+/// Like [`map_cftime`], but with an extra argument to swallow a context type.
+pub fn map_cftime_ctx<T: ToNanos, D: ndarray::Dimension, Ctx>(
+    timestamps: Array<T, D>,
+    _rs_name: &str,
+    _nc_name: &str,
+    _var: &netcdf::Variable<'_>,
+    units: Option<&str>,
+    _ctx: Ctx,
+) -> netcdf::Result<Array<chrono::DateTime<chrono::Utc>, D>> {
+    map_cftime(timestamps, _rs_name, _nc_name, _var, units)
 }
 
 /// The equivalent of [`map_cftime`] when reading CF times into [`chrono::NaiveDateTime`] values.
@@ -866,13 +879,26 @@ pub fn map_cftime<T: ToNanos, D: ndarray::Dimension>(
 ///   for those.
 pub fn map_cftime_naive<T: ToNanos, D: ndarray::Dimension>(
     timestamps: Array<T, D>,
-    field: &str,
+    _rs_name: &str,
+    _nc_name: &str,
     var: &netcdf::Variable<'_>,
     units: Option<&str>,
 ) -> netcdf::Result<Array<chrono::NaiveDateTime, D>> {
-    let utc_dt = map_cftime(timestamps, field, var, units)?;
+    let utc_dt = map_cftime(timestamps, _rs_name, _nc_name, var, units)?;
     let naive_dt = utc_dt.mapv(|dt| dt.naive_utc());
     Ok(naive_dt)
+}
+
+/// Like [`map_cftime_naive`], but with an extra argument to swallow a context type.
+pub fn map_cftime_naive_ctx<T: ToNanos, D: ndarray::Dimension, Ctx>(
+    timestamps: Array<T, D>,
+    _rs_name: &str,
+    _nc_name: &str,
+    var: &netcdf::Variable<'_>,
+    units: Option<&str>,
+    _ctx: Ctx,
+) -> netcdf::Result<Array<chrono::NaiveDateTime, D>> {
+    map_cftime_naive(timestamps, _rs_name, _nc_name, var, units)
 }
 
 /// Convert a CF time variable from a netCDF file into an array of [`chrono::DateTime`]
@@ -1165,9 +1191,21 @@ pub fn chrono_to_cftime_fractional<T: chrono::TimeZone, D: ndarray::Dimension>(
 pub fn map_chrono_f64<T: chrono::TimeZone, D: ndarray::Dimension, A>(
     _data: &A,
     times: &Array<chrono::DateTime<T>, D>,
-    _name: &str,
+    _rs_name: &str,
+    _nc_name: &str,
 ) -> (Array<f64, D>, &'static str) {
     chrono_to_cftime_fractional(times.view())
+}
+
+/// Like [`map_chrono_f64`], but with an extra argument to swallow a context type.
+pub fn map_chrono_f64_ctx<T: chrono::TimeZone, D: ndarray::Dimension, A, Ctx>(
+    _data: &A,
+    times: &Array<chrono::DateTime<T>, D>,
+    _rs_name: &str,
+    _nc_name: &str,
+    _ctx: Ctx,
+) -> (Array<f64, D>, &'static str) {
+    map_chrono_f64(_data, times, _rs_name, _nc_name)
 }
 
 /// Wrapper around [`chrono_to_cftime_fractional`] to interface with [`ggg_rs_derive::WriteNetcdf`],
@@ -1177,10 +1215,22 @@ pub fn map_chrono_f64<T: chrono::TimeZone, D: ndarray::Dimension, A>(
 pub fn map_chrono_naive_f64<D: ndarray::Dimension, A>(
     _data: &A,
     times: &Array<chrono::NaiveDateTime, D>,
-    _name: &str,
+    _rs_name: &str,
+    _nc_name: &str,
 ) -> (Array<f64, D>, &'static str) {
     let utc_times = times.mapv(|t| t.and_utc());
     chrono_to_cftime_fractional(utc_times.view())
+}
+
+/// Like [`map_chrono_naive_f64`], but with an extra argument to swallow a context type.
+pub fn map_chrono_naive_f64_ctx<D: ndarray::Dimension, A, Ctx>(
+    _data: &A,
+    times: &Array<chrono::NaiveDateTime, D>,
+    _rs_name: &str,
+    _nc_name: &str,
+    _ctx: Ctx,
+) -> (Array<f64, D>, &'static str) {
+    map_chrono_naive_f64(_data, times, _rs_name, _nc_name)
 }
 
 /// Convert an array of timezone-aware [`chrono::DateTime`] values to an integer-based timestamp.
@@ -1205,9 +1255,21 @@ pub fn chrono_to_cftime<T: chrono::TimeZone, D: ndarray::Dimension>(
 pub fn map_chrono_i64<T: chrono::TimeZone, D: ndarray::Dimension, A>(
     _data: &A,
     times: &Array<chrono::DateTime<T>, D>,
-    _name: &str,
+    _rs_name: &str,
+    _nc_name: &str,
 ) -> (Array<i64, D>, &'static str) {
     chrono_to_cftime(times.view())
+}
+
+/// Like [`map_chrono_i64`], but with an extra argument to swallow a context type.
+pub fn map_chrono_i64_ctx<T: chrono::TimeZone, D: ndarray::Dimension, A, Ctx>(
+    _data: &A,
+    times: &Array<chrono::DateTime<T>, D>,
+    _rs_name: &str,
+    _nc_name: &str,
+    _ctx: Ctx,
+) -> (Array<i64, D>, &'static str) {
+    map_chrono_i64(_data, times, _rs_name, _nc_name)
 }
 
 /// Wrapper around [`chrono_to_cftime`] to interface with [`ggg_rs_derive::WriteNetcdf`],
@@ -1217,10 +1279,22 @@ pub fn map_chrono_i64<T: chrono::TimeZone, D: ndarray::Dimension, A>(
 pub fn map_chrono_naive_i64<D: ndarray::Dimension, A>(
     _data: &A,
     times: &Array<chrono::NaiveDateTime, D>,
-    _name: &str,
+    _rs_name: &str,
+    _nc_name: &str,
 ) -> (Array<i64, D>, &'static str) {
     let utc_times = times.mapv(|t| t.and_utc());
     chrono_to_cftime(utc_times.view())
+}
+
+/// Like [`map_chrono_naive_i64`], but with an extra argument to swallow a context type.
+pub fn map_chrono_naive_i64_ctx<D: ndarray::Dimension, A, Ctx>(
+    _data: &A,
+    times: &Array<chrono::NaiveDateTime, D>,
+    _rs_name: &str,
+    _nc_name: &str,
+    _ctx: Ctx,
+) -> (Array<i64, D>, &'static str) {
+    map_chrono_naive_i64(_data, times, _rs_name, _nc_name)
 }
 
 /// Read data from a variable into a [`uom::si::Quantity`].
