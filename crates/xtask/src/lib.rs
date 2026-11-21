@@ -41,7 +41,7 @@ pub fn units_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .expect("xtask must be inside the ggg-rs crate directory")
-        .join("src/units")
+        .join("../src/units")
 }
 
 fn render(template: &str, spec: &QuantitySpec) -> Result<String, String> {

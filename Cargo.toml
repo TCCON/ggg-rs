@@ -2,6 +2,9 @@
 name = "ggg-rs"
 version = "0.1.0"
 edition = "2021"
+
+[workspace]
+members = ["crates/xtask"]
 # Use the newer feature resolving algorithm
 resolver = "2"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -68,7 +71,7 @@ tempfile = "3.27.0"
 nccompare = { path = "./deps/nccompare" }
 rstest = "0.18.2"
 static_assertions = "1.1.0"
-xtask = { path = "./xtask" }
+xtask = { path = "./crates/xtask" }
 # This is a workaround to gate the test_utils module behind a feature
 # to avoid pulling in some unnecessary dependencies outside of testing
 ggg-rs = { path = ".", features = ["test-utils"] }

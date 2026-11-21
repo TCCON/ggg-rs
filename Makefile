@@ -104,10 +104,10 @@ testdoc: $(NC_LIB)
 # and src/units/quantities.toml. The xtask package does not depend on ggg-rs, so
 # these work even when ggg-rs does not compile.
 sourcegen:
-	cargo run --quiet --manifest-path xtask/Cargo.toml -- sourcegen
+	cargo run --quiet --manifest-path crates/xtask/Cargo.toml -- sourcegen
 
 sourcegen-check:
-	cargo run --quiet --manifest-path xtask/Cargo.toml -- sourcegen --check
+	cargo run --quiet --manifest-path crates/xtask/Cargo.toml -- sourcegen --check
 
 check: $(NC_LIB)
 	$(CARGOCMD) check $(CARGOARGS)

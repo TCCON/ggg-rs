@@ -1,6 +1,6 @@
 //! Check that the per-quantity modules under `src/units` match the shared template.
 //!
-//! The generation logic lives in the `xtask` package (see `xtask/src/lib.rs`)
+//! The generation logic lives in the `xtask` package (see `crates/xtask/src/lib.rs`)
 //! so that it can run even when ggg-rs does not compile. Run `make sourcegen`
 //! to regenerate the modules if this test fails.
 
