@@ -10,48 +10,67 @@ use ggg_rs::{
     utils::GggNcError,
 };
 use ndarray::{Array1, Ix1, Ix2};
+use ndarray_stats::QuantileExt;
 use uom::si::{
     self,
     f32::{Angle, Pressure, Ratio},
+    ratio::part_per_million,
 };
 
-use crate::data_structures::Level2Data;
-
-/// Required variables to average XCO2
-pub(super) const CO2_VAR_DEF: SourceVarDef = SourceVarDef {
-    private_prior_var: "prior_1co2",
-    public_prior_var: "prior_co2",
-    ak_var: "ak_xco2",
-    ak_bin_var: "ak_slant_xco2_bin",
-    xgas_var: "xco2_x2019",
-    wmo_scale_var: "aicf_xco2_x2019_scale",
-};
-
-/// Required variables to average XCH4
-pub(super) const CH4_VAR_DEF: SourceVarDef = SourceVarDef {
-    private_prior_var: "prior_1ch4",
-    public_prior_var: "prior_ch4",
-    ak_var: "ak_xch4",
-    ak_bin_var: "ak_slant_xch4_bin",
-    xgas_var: "xch4",
-    wmo_scale_var: "aicf_xch4_scale",
-};
+use crate::data_structures::{Gas, Level2Data, StationMetaAttrs};
 
 /// A struct defining the set of variables and other setting required
 /// to average a particular gas.
-pub(super) struct SourceVarDef {
+pub(crate) struct SourceBinDef {
     private_prior_var: &'static str,
     public_prior_var: &'static str,
     ak_var: &'static str,
     ak_bin_var: &'static str,
     xgas_var: &'static str,
     wmo_scale_var: &'static str,
+    pub(crate) stddev_limit: Ratio,
+    pub(crate) output_group: &'static str,
+}
+
+/// Required information to average XCO2
+pub(crate) fn co2_bin_def() -> SourceBinDef {
+    SourceBinDef {
+        private_prior_var: "prior_1co2",
+        public_prior_var: "prior_co2",
+        ak_var: "ak_xco2",
+        ak_bin_var: "ak_slant_xco2_bin",
+        xgas_var: "xco2_x2019",
+        wmo_scale_var: "aicf_xco2_x2019_scale",
+        stddev_limit: Ratio::new::<part_per_million>(1.0),
+        output_group: Gas::CO2.output_group(),
+    }
+}
+
+/// Required information to average XCH4
+pub(crate) fn ch4_bin_def() -> SourceBinDef {
+    SourceBinDef {
+        private_prior_var: "prior_1ch4",
+        public_prior_var: "prior_ch4",
+        ak_var: "ak_xch4",
+        ak_bin_var: "ak_slant_xch4_bin",
+        xgas_var: "xch4",
+        wmo_scale_var: "aicf_xch4_scale",
+        stddev_limit: todo!(),
+        output_group: Gas::CH4.output_group(),
+    }
+}
+
+pub(crate) fn bin_def_from_gas(gas: Gas) -> SourceBinDef {
+    match gas {
+        Gas::CO2 => co2_bin_def(),
+        Gas::CH4 => ch4_bin_def(),
+    }
 }
 
 /// Read data for a single Xgas from a private or public L2 TCCON file.
 pub(crate) fn read_file(
     nc_file: &Path,
-    var_def: &SourceVarDef,
+    var_def: &SourceBinDef,
 ) -> error_stack::Result<Level2Data, GggNcError> {
     log::info!("Reading L2 data from file {}", nc_file.display());
     let ds = netcdf::open(nc_file).map_err(|e| GggNcError::NcErr(e))?;
@@ -72,7 +91,7 @@ pub(crate) fn read_file(
 /// this will be part of the private netCDF writer.
 fn read_private_file(
     ds: &netcdf::File,
-    var_def: &SourceVarDef,
+    var_def: &SourceBinDef,
 ) -> error_stack::Result<Level2Data, GggNcError> {
     let mut data = read_either_file(
         ds,
@@ -87,7 +106,7 @@ fn read_private_file(
 
     // Expand the prior variables
     log::debug!("Expanding priors");
-    let prior_index = get_var_data::<u32, Ix1>(ds, "prior_index")?.mapv(|i| i as usize);
+    let prior_index = get_var_data::<u32, Ix1, _>(ds, "prior_index")?.mapv(|i| i as usize);
     data.p_levels_prior =
         nc_utils::expand_priors_2d(data.p_levels_prior.view(), prior_index.view())
             .change_context_lazy(|| {
@@ -103,14 +122,14 @@ fn read_private_file(
     // Expand the AKs. This duplicates a lot of logic from the public writer, but this can also go away
     // in GGG2020.2.
     log::debug!("Expanding AKs");
-    let airmass = get_var_data::<f32, Ix1>(ds, "o2_7885_am_o2")?;
+    let airmass = get_var_data::<f32, Ix1, _>(ds, "o2_7885_am_o2")?;
     let slant_xgas = Array1::from_iter(
         data.xgas
             .iter()
             .zip(airmass)
             .map(|(x, a)| x.get::<uom::si::ratio::ratio>() * a),
     );
-    let ak_bins = get_var_data::<f32, Ix1>(ds, var_def.ak_bin_var)?;
+    let ak_bins = get_var_data::<f32, Ix1, _>(ds, var_def.ak_bin_var)?;
     let ak_bin_units = get_string_attr_on_var(ds, var_def.ak_bin_var, None, "units")?;
     let tmp = nc_utils::expand_slant_xgas_binned_aks(
         slant_xgas.view(),
@@ -157,7 +176,7 @@ fn read_private_file(
 /// since the data is assumed to be public.
 fn read_public_file(
     ds: &netcdf::File,
-    var_def: &SourceVarDef,
+    var_def: &SourceBinDef,
 ) -> error_stack::Result<Level2Data, GggNcError> {
     let mut data = read_either_file(
         ds,
@@ -187,7 +206,10 @@ fn read_either_file(
         ggg_rs::utils::site_id_from_filename(&file_path).change_context_lazy(|| {
             GggNcError::context("Error getting the site ID from the input L2 file name")
         })?;
-    let station_id = crate::station_ids::get_mip_station_id(&tccon_site_id, None)
+    let mip_mapping = crate::station_ids::load_mip_config(None)
+        .change_context_lazy(|| GggNcError::context("error loading the MIP station mapping"))?;
+    let station_id = mip_mapping
+        .get_station_id(&tccon_site_id)
         .change_context_lazy(|| {
             GggNcError::context(format!(
                 "Error getting MIP station ID for the input L2 file {}",
@@ -195,20 +217,20 @@ fn read_either_file(
             ))
         })?;
 
-    let utc_time = get_var_data::<f64, Ix1>(&ds, "time")?.mapv(|ts| convert_nc_timestamp(ts));
+    let utc_time = get_var_data::<f64, Ix1, _>(ds, "time")?.mapv(|ts| convert_nc_timestamp(ts));
     let is_public = Array1::<i8>::ones(utc_time.dim());
-    let latitude = get_var_data_quantity::<f32, Ix1, Angle>(&ds, "lat")?;
-    let longitude = get_var_data_quantity::<f32, Ix1, Angle>(&ds, "long")?;
-    let sza = get_var_data_quantity::<f32, Ix1, Angle>(&ds, "solzen")?;
-    let p_surf = get_var_data_quantity::<f32, Ix1, Pressure>(&ds, "pout")?;
-    let p_levels_prior = get_var_data_quantity::<f32, Ix2, Pressure>(&ds, "prior_pressure")?;
-    let p_levels_ak = get_var_data_quantity::<f32, Ix1, Pressure>(ds, "ak_pressure")?;
-    let prior_h2o_wet = get_var_data_quantity::<f32, Ix2, Ratio>(&ds, prior_h2o_var)?;
-    let prior_wet = get_var_data_quantity::<f32, Ix2, Ratio>(&ds, prior_var)?;
+    let latitude = get_var_data_quantity::<f32, Ix1, Angle, _>(ds, "lat")?;
+    let longitude = get_var_data_quantity::<f32, Ix1, Angle, _>(ds, "long")?;
+    let sza = get_var_data_quantity::<f32, Ix1, Angle, _>(ds, "solzen")?;
+    let p_surf = get_var_data_quantity::<f32, Ix1, Pressure, _>(ds, "pout")?;
+    let p_levels_prior = get_var_data_quantity::<f32, Ix2, Pressure, _>(ds, "prior_pressure")?;
+    let p_levels_ak = get_var_data_quantity::<f32, Ix1, Pressure, _>(ds, "ak_pressure")?;
+    let prior_h2o_wet = get_var_data_quantity::<f32, Ix2, Ratio, _>(ds, prior_h2o_var)?;
+    let prior_wet = get_var_data_quantity::<f32, Ix2, Ratio, _>(ds, prior_var)?;
     // let prior_dry = prior_wet / (-prior_h2o_wet + Ratio::new(1.0));
-    let avg_kernel = get_var_data::<f32, Ix2>(&ds, ak_var)?;
-    let xgas = get_var_data_quantity::<f32, Ix1, Ratio>(&ds, xgas_var)?;
-    let xgas_error = get_var_data_quantity::<f32, Ix1, Ratio>(&ds, &error_var_name(xgas_var))?;
+    let avg_kernel = get_var_data::<f32, Ix2, _>(ds, ak_var)?;
+    let xgas = get_var_data_quantity::<f32, Ix1, Ratio, _>(ds, xgas_var)?;
+    let xgas_error = get_var_data_quantity::<f32, Ix1, Ratio, _>(ds, &error_var_name(xgas_var))?;
 
     let unit_ratio = Ratio::new::<si::ratio::ratio>(1.0);
     let one_minus_h2o = prior_h2o_wet.map(|x| unit_ratio - *x);
@@ -247,6 +269,67 @@ fn read_either_file(
     })
 }
 
+pub(crate) fn read_tccon_metadata(
+    file: &Path,
+) -> error_stack::Result<StationMetaAttrs, GggNcError> {
+    let tccon_site_id = ggg_rs::utils::site_id_from_filename(&file).change_context_lazy(|| {
+        GggNcError::context("Error getting the site ID from the input L2 file name")
+    })?;
+    let mip_mapping = crate::station_ids::load_mip_config(None)
+        .change_context_lazy(|| GggNcError::context("error loading the MIP station mapping"))?;
+    let station_name = mip_mapping
+        .get_station_name(&tccon_site_id)
+        .change_context_lazy(|| {
+            GggNcError::context(format!(
+                "Error getting MIP station name for the input L2 file {}",
+                file.display()
+            ))
+        })?;
+
+    let ds = netcdf::open(file).change_context_lazy(|| {
+        GggNcError::Context(format!(
+            "Error opening file {} to read metadata",
+            file.display()
+        ))
+    })?;
+    let is_private = ds.variable("flag").is_some();
+
+    let (source_release_lag, all_public_after) = if is_private {
+        let lag_str = nc_utils::get_string_attr(&ds, "release_lag")?;
+        let lag = nc_utils::parse_release_lag(&lag_str)?;
+        let times = nc_utils::get_var_cftime::<f64, Ix1, _>(&ds, "time")?;
+        let last_time = times.max().change_context_lazy(|| {
+            GggNcError::context("error getting last ZPD time in private file")
+        })?;
+        let pub_after_dt = *last_time + lag;
+        // For simplicity, we round up to the next day
+        let pub_after = if pub_after_dt.time() == chrono::NaiveTime::MIN {
+            pub_after_dt.date_naive()
+        } else {
+            pub_after_dt.date_naive() + chrono::Days::new(1)
+        };
+
+        (Some(lag_str), Some(pub_after))
+    } else {
+        (None, None)
+    };
+
+    let tccon_long_name = nc_utils::get_string_attr(&ds, "long_name")?;
+    let source_data_doi = nc_utils::get_string_attr(&ds, "data_doi")?;
+    let source_data_revision = nc_utils::get_string_attr(&ds, "data_revision")?;
+    let source_data_reference = nc_utils::get_string_attr(&ds, "data_reference")?;
+
+    Ok(StationMetaAttrs {
+        station_name: station_name.to_string(),
+        tccon_long_name,
+        source_release_lag,
+        source_data_doi,
+        source_data_revision,
+        source_data_reference,
+        all_public_after,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -259,7 +342,7 @@ mod tests {
             test_dir.join("inputs/write-timeavg-netcdf/averaging/pa_input_test.private.qc.nc");
         let expected_file = test_dir.join("expected/write-timeavg-netcdf/averaging/01_loaded.nc");
         let l2_data =
-            read_file(&input_file, &CO2_VAR_DEF).expect("Reading test input fail should succeed");
+            read_file(&input_file, &co2_bin_def()).expect("Reading test input fail should succeed");
 
         let expected_ds = netcdf::open(expected_file)
             .expect("Should be able to open the file with expected values");

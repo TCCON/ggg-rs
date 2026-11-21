@@ -52,6 +52,7 @@ This means that if a variable matches multiple rules, then its ancillary variabl
 
 Discovery rules can specify the fields `xgas_attr_overrides`, `xgas_error_attr_overrides`, `prior_profile_attr_overrides`,
 `prior_xgas_attr_overrides`, and `ak_attr_overrides` to set attributes on their respective variables.
+See the [overrides section](./variable_attributes.md#attribute-overrides) for details.
 These should be used for attributes that will be the same for _all_ the variables of that type created by this rule.
 For example, to add a cautionary note about experimental data to our previous mid-IR discovery rule:
 

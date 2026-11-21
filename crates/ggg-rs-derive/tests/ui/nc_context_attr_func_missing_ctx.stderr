@@ -1,0 +1,41 @@
+error[E0277]: this `attr(func = ...)` function does not take the write context, `&Note`
+  --> tests/ui/nc_context_attr_func_missing_ctx.rs:14:61
+   |
+11 | #[derive(WriteNetcdf)]
+   |          ----------- required by a bound introduced by this call
+...
+14 |     #[netcdf(dimensions("time"), attr(name = "note", func = note))]
+   |                                                             ^^^^ add a final `&Note` parameter to this function
+   |
+help: the trait `__ExpectAttrFunc` is not implemented for `__TakesNoContext`
+  --> tests/ui/nc_context_attr_func_missing_ctx.rs:11:10
+   |
+11 | #[derive(WriteNetcdf)]
+   |          ^^^^^^^^^^^
+   = note: `context(...)` declares a write context, so `WriteNetcdf` passes `&Note` as the final argument to every `attr(func = ...)` function
+help: the trait `__ExpectAttrFunc` is implemented for `__TakesContext`
+  --> tests/ui/nc_context_attr_func_missing_ctx.rs:11:10
+   |
+11 | #[derive(WriteNetcdf)]
+   |          ^^^^^^^^^^^
+note: required by a bound in `__check_AttrFunc`
+  --> tests/ui/nc_context_attr_func_missing_ctx.rs:11:10
+   |
+11 | #[derive(WriteNetcdf)]
+   |          ^^^^^^^^^^^ required by this bound in `__check_AttrFunc`
+   = note: this error originates in the derive macro `WriteNetcdf` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0061]: this function takes 4 arguments but 5 arguments were supplied
+  --> tests/ui/nc_context_attr_func_missing_ctx.rs:14:61
+   |
+11 | #[derive(WriteNetcdf)]
+   |          ----------- unexpected argument #5 of type `&Note`
+...
+14 |     #[netcdf(dimensions("time"), attr(name = "note", func = note))]
+   |                                                             ^^^^
+   |
+note: function defined here
+  --> tests/ui/nc_context_attr_func_missing_ctx.rs:7:4
+   |
+ 7 | fn note(_d: &Bad, _v: &Vec<f64>, _f: &str, _n: &str) -> String {
+   |    ^^^^

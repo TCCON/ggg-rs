@@ -1,3 +1,6 @@
+# mip_site_ids MUST NOT CHANGE; if new sites are added,
+# they will have to have new IDs at the end and the alphabetical
+# -> numerical ordering will stop.
 [site_mapping.an]
 tccon_name = "anmyeondo01"
 mip_name = "anmyeondo"

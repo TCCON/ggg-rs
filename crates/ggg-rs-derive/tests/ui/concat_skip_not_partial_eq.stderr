@@ -1,0 +1,12 @@
+error[E0277]: can't compare `NoEq` with `NoEq`
+  --> tests/ui/concat_skip_not_partial_eq.rs:10:11
+   |
+10 |     meta: NoEq,
+   |           ^^^^ no implementation for `NoEq == NoEq`
+   |
+   = help: the trait `PartialEq` is not implemented for `NoEq`
+help: consider annotating `NoEq` with `#[derive(PartialEq)]`
+   |
+ 4 + #[derive(PartialEq)]
+ 5 | struct NoEq;
+   |

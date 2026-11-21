@@ -1,0 +1,20 @@
+Comparison of time-averaged files in between:
+  - test-data/inputs/write-timeavg-netcdf/compare/prev
+  - test-data/inputs/write-timeavg-netcdf/compare/new
+
+==== FILES ====
+
+2 files present in both directories
+0 files present only in the PREVIOUS directory
+0 files present only in the NEW directory
+
+==== CO2 ====
+
+# soundings only in previous across common files = 0
+# soundings only in new across common files = 0
+# soundings mean bias = 1.64
+# soundings min/max difference = -4, 0
+Column mixing mean bias = 6.0256E-7 mol/mol
+Column mixing min/max difference = -1.0000E-6, 5.0000E-7 mol/mol
+Sigma column mixing mean bias = 6.0256E-8 mol/mol
+Sigma column mixing min/max difference = -1.0000E-7, 5.0000E-8 mol/mol

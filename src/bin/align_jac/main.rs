@@ -567,7 +567,7 @@ mod tests {
 
     #[test]
     fn test_align_jac() {
-        init_test_logging();
+        init_test_logging(None);
         let jac_in_dir = test_data_dir()
             .join("inputs")
             .join("averaging-kernels")
@@ -608,7 +608,7 @@ mod tests {
 
     #[test]
     fn test_align_jac_filter_gases() {
-        init_test_logging();
+        init_test_logging(None);
         let jac_in_dir = test_data_dir()
             .join("inputs")
             .join("averaging-kernels")
@@ -653,7 +653,7 @@ mod tests {
 
     #[test]
     fn test_align_jac_specify_files() {
-        init_test_logging();
+        init_test_logging(None);
         let jac_in_dir = test_data_dir()
             .join("inputs")
             .join("averaging-kernels")
@@ -698,7 +698,7 @@ mod tests {
 
     #[test]
     fn test_align_jac_dry_run() {
-        init_test_logging();
+        init_test_logging(None);
         let jac_files = ["j_hcl_5625.test", "j_hcl_5687.test"];
 
         let jac_in_dir = test_data_dir()
@@ -746,7 +746,7 @@ mod tests {
     }
 
     fn test_exit_codes_inner(input_subdir: &str, expected_ecode: u8) {
-        init_test_logging();
+        init_test_logging(None);
         let jac_in_dir = test_data_dir()
             .join("inputs")
             .join("averaging-kernels")

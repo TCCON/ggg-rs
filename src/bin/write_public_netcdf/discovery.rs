@@ -7,7 +7,7 @@ use netcdf::AttributeValue;
 use regex::Regex;
 use serde::Deserialize;
 
-use crate::copying::{de_attribute_overrides, XgasAncInferOptions, XgasAncillary};
+use crate::copying::{de_attribute_overrides, AttrCopy, XgasAncInferOptions, XgasAncillary};
 use crate::XgasCopy;
 
 #[derive(Debug, thiserror::Error)]
@@ -307,23 +307,23 @@ pub(crate) struct XgasMatchRule {
     #[serde(flatten)]
     pattern: XgasMatchMethod,
     #[serde(default, deserialize_with = "de_attribute_overrides")]
-    pub(crate) xgas_attr_overrides: IndexMap<String, AttributeValue>,
+    pub(crate) xgas_attr_overrides: IndexMap<String, AttrCopy>,
     #[serde(default)]
     pub(crate) xgas_error: Option<AncillaryDiscoveryMethod>,
     #[serde(default, deserialize_with = "de_attribute_overrides")]
-    pub(crate) xgas_error_attr_overrides: IndexMap<String, AttributeValue>,
+    pub(crate) xgas_error_attr_overrides: IndexMap<String, AttrCopy>,
     #[serde(default)]
     pub(crate) prior_profile: Option<AncillaryDiscoveryMethod>,
     #[serde(default, deserialize_with = "de_attribute_overrides")]
-    pub(crate) prior_profile_attr_overrides: IndexMap<String, AttributeValue>,
+    pub(crate) prior_profile_attr_overrides: IndexMap<String, AttrCopy>,
     #[serde(default)]
     pub(crate) prior_xgas: Option<AncillaryDiscoveryMethod>,
     #[serde(default, deserialize_with = "de_attribute_overrides")]
-    pub(crate) prior_xgas_attr_overrides: IndexMap<String, AttributeValue>,
+    pub(crate) prior_xgas_attr_overrides: IndexMap<String, AttrCopy>,
     #[serde(default)]
     pub(crate) ak: Option<AncillaryDiscoveryMethod>,
     #[serde(default, deserialize_with = "de_attribute_overrides")]
-    pub(crate) ak_attr_overrides: IndexMap<String, AttributeValue>,
+    pub(crate) ak_attr_overrides: IndexMap<String, AttrCopy>,
     #[serde(default)]
     pub(crate) slant_bin: Option<AncillaryDiscoveryMethod>,
     #[serde(default)]

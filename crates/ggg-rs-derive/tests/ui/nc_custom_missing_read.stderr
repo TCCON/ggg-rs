@@ -1,0 +1,5 @@
+error: `custom` on this field has no `read = ...`, which `ReadNetcdf` requires
+  --> tests/ui/nc_custom_missing_read.rs:18:5
+   |
+18 |     values: Vec<f64>,
+   |     ^^^^^^

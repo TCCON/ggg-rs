@@ -1,0 +1,5 @@
+error: unknown skip mode "last", expected "equal" or "first"
+ --> tests/ui/concat_unknown_skip_mode.rs:6:21
+  |
+6 |     #[concat(skip = "last")]
+  |                     ^^^^^^

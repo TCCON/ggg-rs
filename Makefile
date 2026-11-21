@@ -91,14 +91,43 @@ release: $(NC_LIB)
 test: $(NC_LIB)
 	$(CARGOCMD) test $(CARGOARGS) -- $(TEST_PATTERN)
 
+testbin: $(NC_LIB)
+	$(CARGOCMD) test $(CARGOARGS) --bin $(BIN) -- $(TEST_PATTERN)
+
+testlib: $(NC_LIB)
+	$(CARGOCMD) test $(CARGOARGS) --lib -- $(TEST_PATTERN)
+
+testdoc: $(NC_LIB)
+	$(CARGOCMD) test $(CARGOARGS) --doc -- $(TEST_PATTERN)
+
+# Regenerate the src/units quantity modules from src/units/quantity_template.rs.in
+# and src/units/quantities.toml. The xtask package does not depend on ggg-rs, so
+# these work even when ggg-rs does not compile.
+sourcegen:
+	cargo run --quiet --manifest-path crates/xtask/Cargo.toml -- sourcegen
+
+sourcegen-check:
+	cargo run --quiet --manifest-path crates/xtask/Cargo.toml -- sourcegen --check
+
 check: $(NC_LIB)
 	$(CARGOCMD) check $(CARGOARGS)
+
+bacon: $(NC_LIB)
+	# CARGOARGS probably isn't exactly what we want, but it has the features.
+	bacon $(CARGOARGS)
+
+run: $(NC_LIB)
+	# Use as, e.g.: make run BIN=write_public_netcdf ARGS="tccon-std pa20040721_20041221.private.nc"
+	$(CARGOCMD) run $(CARGOARGS) --bin $(BIN) -- $(ARGS)
 
 docs: $(NC_LIB)
 	$(CARGOCMD) doc --no-deps $(CARGOARGS)
 
 all-docs: $(NC_LIB)
 	$(CARGOCMD) doc $(CARGOARGS)
+
+clean:
+	cargo clean
 
 ifeq ("$(BUILD_ENV)", "1")
 $(NC_LIB):

@@ -2,6 +2,9 @@
 name = "ggg-rs"
 version = "0.1.0"
 edition = "2021"
+
+[workspace]
+members = ["crates/xtask"]
 # Use the newer feature resolving algorithm
 resolver = "2"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -10,13 +13,14 @@ resolver = "2"
 anyhow = { version = "1", optional = true }  # needed for test_utils' custom log4rs appender
 approx = "0.5.1"  # this is needed for more than tests (e.g., apply_nc_fills)
 chrono = { version = "0.4.40", features = ["serde"] }
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4", features = ["derive", "cargo"] }
 clap-verbosity-flag = "2.2.0"
 # If in the future I need a dynamic builder pattern, use this crate.
 # derive_builder = "0.20.2"
 # If in the future I need a typed builder pattern, use this crate.
 # typed-builder = "0.23.2"
 encoding = "0.2.33"
+ggg-rs-derive = { path = "crates/ggg-rs-derive" }
 itertools = "0.14.0"
 log = "0.4.27"
 log4rs = "1.2.0"
@@ -56,10 +60,17 @@ noisy_float = "0.2.1"
 # Needed v0.11 (not 0.12, which was available at the time) to match an `ffi` version.
 mlua = {version = "0.11.0", features = ["lua55", "serde", "vendored"]}
 csv = "1.4.0"
+textwrap = "0.16.4"
+reqwest = {version = "0.13.5", features = ["blocking"] }
+tar = "0.4.46"
+flate2 = "1.1.10"
+tempfile = "3.27.0"
 
 [dev-dependencies]
+nccompare = { path = "./crates/nccompare" }
 rstest = "0.18.2"
 static_assertions = "1.1.0"
+xtask = { path = "./crates/xtask" }
 # This is a workaround to gate the test_utils module behind a feature
 # to avoid pulling in some unnecessary dependencies outside of testing
 ggg-rs = { path = ".", features = ["test-utils"] }

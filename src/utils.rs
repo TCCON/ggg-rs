@@ -101,22 +101,15 @@ impl Display for GggError {
             ),
 
             Self::CouldNotWrite { path, reason } => {
-                // WORKAROUND: vscode's rust-analyzer is improperly handling macro expansion,
-                // causing a type mismatch if the write! returns directly. Try removing the let r
-                // and return directly in the future
-                let r = write!(f, "Could not write to {} because: {reason}", path.display());
-                r
+                write!(f, "Could not write to {} because: {reason}", path.display())
             }
 
             Self::HeaderError(err) => write!(f, "{err}"),
             Self::DataError { path, cause } => {
-                // WORKAROUND: same as above
-                let r = write!(f, "Error in data format of {}: {cause}", path.display());
-                r
+                write!(f, "Error in data format of {}: {cause}", path.display())
             }
             Self::Lua(msg) => {
-                let r = write!(f, "{msg}");
-                r
+                write!(f, "{msg}")
             }
 
             Self::NotImplemented(case) => write!(f, "Not implemented: {case}"),
@@ -249,37 +242,27 @@ impl Display for GggNcError {
                 variable,
                 group,
             } => {
-                // WORKAROUND: vscode's rust-analyzer is improperly handling macro expansion,
-                // causing a type mismatch if the write! returns directly. Try removing the let r
-                // and return directly in the future
                 if let Some(grp) = group {
-                    let r = write!(
+                    write!(
                         f,
                         "Attribute '{attribute}' not found on variable '{grp}/{variable}'"
-                    );
-                    r
+                    )
                 } else {
-                    let r = write!(
+                    write!(
                         f,
                         "Attribute '{attribute}' not found on variable '{variable}'"
-                    );
-                    r
+                    )
                 }
             }
             GggNcError::MissingGroupAttr { attribute, group } => {
-                // WORKAROUND: As above
-                let r = write!(f, "Attribute '{attribute}' not found on group '{group}'");
-                r
+                write!(f, "Attribute '{attribute}' not found on group '{group}'")
             }
 
             GggNcError::MissingVar { variable, group } => {
-                // WORKAROUND: As above
                 if let Some(grp) = group {
-                    let r = write!(f, "Variable '{variable}' not found in group '{grp}'");
-                    r
+                    write!(f, "Variable '{variable}' not found in group '{grp}'")
                 } else {
-                    let r = write!(f, "Variable '{variable}' not found");
-                    r
+                    write!(f, "Variable '{variable}' not found")
                 }
             }
             GggNcError::WrongDimensionality {
@@ -287,16 +270,13 @@ impl Display for GggNcError {
                 group,
                 shape_err,
             } => {
-                // WORKAROUND: As above
                 if let Some(grp) = group {
-                    let r = write!(
+                    write!(
                         f,
                         "Variable '{variable}' in group '{grp}' has wrong number of dimensions, underlying error was: {shape_err}"
-                    );
-                    r
+                    )
                 } else {
-                    let r = write!(f, "Variable '{variable}' has wrong number of dimensions, underlying error was: {shape_err}");
-                    r
+                    write!(f, "Variable '{variable}' has wrong number of dimensions, underlying error was: {shape_err}")
                 }
             }
             GggNcError::NcErr(error) => write!(f, "{error}"),
@@ -528,11 +508,7 @@ impl Display for ApodizationFxn {
             ApodizationFxn::StrongNortonBeer => "N3",
             ApodizationFxn::Triangular => "TR",
         };
-        // WORKAROUND: vscode's rust-analyzer is improperly handling macro expansion,
-        // causing a type mismatch if the write! returns directly. Try removing the let r
-        // and return directly in the future
-        let r = write!(f, "{s}");
-        r
+        write!(f, "{s}")
     }
 }
 
@@ -1603,6 +1579,7 @@ pub fn split_gas_and_window(colname: &str) -> Option<(&str, &str)> {
     }
 }
 
+/// Iterator type for [`iter_dates`]
 pub struct DateIter {
     curr: chrono::NaiveDate,
     end: chrono::NaiveDate,
@@ -1622,6 +1599,7 @@ impl Iterator for DateIter {
     }
 }
 
+/// Create an iterator over all dates between start and end, _inclusive_.
 pub fn iter_dates(start_date: chrono::NaiveDate, end_date: chrono::NaiveDate) -> DateIter {
     DateIter {
         curr: start_date,
@@ -1974,9 +1952,24 @@ pub fn utf_or_hex(bytes: &[u8], omit_trailing_nulls: bool) -> Cow<'_, str> {
 
 #[cfg(test)]
 mod tests {
-    use std::assert_eq;
-
     use super::*;
+    use crate::test_utils::utc_dt_ymd;
+
+    #[test]
+    fn test_date_iter() {
+        let date_iter = iter_dates(
+            utc_dt_ymd(2020, 1, 1).date_naive(),
+            utc_dt_ymd(2020, 1, 3).date_naive(),
+        )
+        .collect_vec();
+        // Confirm that the end date is included in the iteration
+        let expected_dates = vec![
+            utc_dt_ymd(2020, 1, 1).date_naive(),
+            utc_dt_ymd(2020, 1, 2).date_naive(),
+            utc_dt_ymd(2020, 1, 3).date_naive(),
+        ];
+        assert_eq!(date_iter, expected_dates);
+    }
 
     #[test]
     fn test_nth_day_of_week() {

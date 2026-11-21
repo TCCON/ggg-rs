@@ -6,6 +6,8 @@ pub mod averaging;
 pub mod cit_spectrum_name;
 /// Common code for `collate-*-results` programs.
 pub mod collation;
+/// Common constants used throughout the programs.
+pub mod constants;
 /// Common error types
 pub mod error;
 /// Utilities for handling I2S configuration
@@ -16,6 +18,8 @@ pub mod interpolation;
 pub mod logging;
 /// A module with common functions that Lua scripts can use
 pub mod lua;
+/// A module with mathematical/statistical utilities
+pub mod math_utils;
 /// Utilities for netCDF files
 #[cfg(feature = "netcdf")]
 pub mod nc_utils;

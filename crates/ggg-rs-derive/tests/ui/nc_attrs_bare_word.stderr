@@ -1,0 +1,5 @@
+error: `attrs` needs a function: `attrs(func = path::to::fn)`
+ --> tests/ui/nc_attrs_bare_word.rs:6:14
+  |
+6 |     #[netcdf(attrs)]
+  |              ^^^^^

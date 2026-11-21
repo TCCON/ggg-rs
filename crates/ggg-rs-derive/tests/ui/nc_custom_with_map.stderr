@@ -1,0 +1,5 @@
+error: `custom` is incompatible with `kind`, `dimensions`, `attribute`, `map`, `map_units`, `scale_offset`, `attr`, `attrs`, `describe`, and `no_describe`: the custom function does all the writing
+  --> tests/ui/nc_custom_with_map.rs:21:5
+   |
+21 |     values: Vec<f64>,
+   |     ^^^^^^

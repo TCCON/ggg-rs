@@ -1,0 +1,41 @@
+error[E0277]: this `custom(read = ...)` function does not take the read context, `&Ctx`
+  --> tests/ui/nc_context_fn_missing_arg.rs:13:28
+   |
+10 | #[derive(ReadNetcdf)]
+   |          ---------- required by a bound introduced by this call
+...
+13 |     #[netcdf(custom(read = from_nc))]
+   |                            ^^^^^^^ add a final `&Ctx` parameter to this function
+   |
+help: the trait `__ExpectCustomRead` is not implemented for `__TakesNoContext`
+  --> tests/ui/nc_context_fn_missing_arg.rs:10:10
+   |
+10 | #[derive(ReadNetcdf)]
+   |          ^^^^^^^^^^
+   = note: `context(...)` declares a read context, so `ReadNetcdf` passes `&Ctx` as the final argument to every `custom(read = ...)` function
+help: the trait `__ExpectCustomRead` is implemented for `__TakesContext`
+  --> tests/ui/nc_context_fn_missing_arg.rs:10:10
+   |
+10 | #[derive(ReadNetcdf)]
+   |          ^^^^^^^^^^
+note: required by a bound in `__check_CustomRead`
+  --> tests/ui/nc_context_fn_missing_arg.rs:10:10
+   |
+10 | #[derive(ReadNetcdf)]
+   |          ^^^^^^^^^^ required by this bound in `__check_CustomRead`
+   = note: this error originates in the derive macro `ReadNetcdf` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0061]: this function takes 3 arguments but 4 arguments were supplied
+  --> tests/ui/nc_context_fn_missing_arg.rs:13:28
+   |
+10 | #[derive(ReadNetcdf)]
+   |          ---------- unexpected argument #4 of type `&Ctx`
+...
+13 |     #[netcdf(custom(read = from_nc))]
+   |                            ^^^^^^^
+   |
+note: function defined here
+  --> tests/ui/nc_context_fn_missing_arg.rs:6:4
+   |
+ 6 | fn from_nc(_f: &str, _n: &str, _g: &netcdf::Group<'_>) -> netcdf::Result<f64> {
+   |    ^^^^^^^

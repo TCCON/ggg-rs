@@ -1,4 +1,5 @@
 use std::{
+    eprintln,
     io::Read,
     ops::{Add, Mul},
     path::Path,
@@ -9,7 +10,7 @@ use error_stack::ResultExt;
 use indexmap::IndexMap;
 use interp::interp_slice;
 use itertools::Itertools;
-use ndarray::{Array, Array1, Array2, ArrayD, ArrayView1, ArrayView2, ArrayViewD};
+use ndarray::{Array, Array1, Array2, ArrayD, ArrayView, ArrayView1, ArrayView2, ArrayViewD};
 use netcdf::{
     types::{FloatType, IntType, NcVariableType},
     Extents, NcTypeDescriptor,
@@ -667,7 +668,7 @@ where
         serde_json::Value::String(s) => {
             let v: u32 = s.trim().parse()
             .map_err(|e| D::Error::custom(format!(
-                "if given as a string, release_lag must be parsable as an unsigned integer (parsing error was: {e}"
+                "if given as a string, release_lag must be parsable as an unsigned integer (parsing error was: {e})"
             )))?;
             Ok(v)
         }
@@ -771,25 +772,529 @@ fn read_nc_site_metadata_json(
 /// netCDF file [`GggNcError::MissingVar`], reading the data fails
 /// [`GggNcError::NcErr`], or the array does not match the requested
 /// dimensionality `D` [`GggNcError::WrongDimensionality`].
-pub fn get_var_data<T: Copy + NcTypeDescriptor, D: ndarray::Dimension>(
-    ds: &netcdf::File,
+///
+/// If you already have a reference to the [`netcdf::Variable`], see
+/// [`get_data`].
+pub fn get_var_data<T: Copy + NcTypeDescriptor, D: ndarray::Dimension, O: GetNcVar>(
+    obj: O,
     varname: &str,
 ) -> error_stack::Result<Array<T, D>, GggNcError> {
-    let var = ds.variable(varname).ok_or_else(|| GggNcError::MissingVar {
+    let var = obj.get_var(varname).ok_or_else(|| GggNcError::MissingVar {
         variable: varname.to_owned(),
         group: None,
     })?;
 
+    get_data(&var)
+}
+
+/// As [`get_var_data`], but directly takes a reference to the variable.
+pub fn get_data<T: Copy + NcTypeDescriptor, D: ndarray::Dimension>(
+    var: &netcdf::Variable,
+) -> error_stack::Result<Array<T, D>, GggNcError> {
     let arr = var
         .get::<T, _>(Extents::All)
         .map_err(|e| GggNcError::NcErr(e))?
         .into_dimensionality::<D>()
         .map_err(|e| GggNcError::WrongDimensionality {
-            variable: varname.to_string(),
+            variable: var.name(),
             group: None,
             shape_err: e,
         })?;
     Ok(arr)
+}
+
+/// Map times given following the CF conventions back to [`chrono::DateTime`]
+/// instances with [`chrono::Utc`] as the time zone. The generic parameters are:
+///
+/// - `T`: the numeric type of the CF time array, and
+/// - `D`: the dimensionality of the CF time array.
+///
+/// This function is meant for use with the derive macro, [`ggg_rs_derive::ReadNetcdf`],
+/// specifically in the `map_units` annotation. In that use, `T` will normally need specified,
+/// and should match the data type in the netCDF file. If in doubt, use `f64` or `i64`.
+///
+/// ```no_run
+/// use ggg_rs_derive::ReadNetcdf;
+/// use ggg_rs::nc_utils::map_cftime;
+/// use chrono::{DateTime, Utc};
+/// use ndarray::Array1;
+///
+/// #[derive(ReadNetcdf)]
+/// struct Data {
+///     // Note that only the concrete numeric type is needed in the turbofish syntax.
+///     // Q and D can be inferred from the field's type.
+///     #[netcdf(
+///         dimensions("time"),
+///         map_units(read = map_cftime::<i64, _>),
+///         kind = "array"
+///     )]
+///     time: Array1<DateTime<Utc>>
+/// }
+/// ```
+///
+/// # See also
+///
+/// - For the inverse (mapping date times to CF times), see [`map_chrono_f64`]
+///   or [`map_chrono_i64`]. There are type-specific implementations for those
+///   functions to handle different levels of precision.
+/// - To convert a CF time to naive date/times, see [`map_cftime_naive`].
+/// - There are limitations on the CF time conversion; see [`convert_cftime`]
+///   for those.
+pub fn map_cftime<T: ToNanos, D: ndarray::Dimension>(
+    timestamps: Array<T, D>,
+    _rs_name: &str,
+    _nc_name: &str,
+    _var: &netcdf::Variable<'_>,
+    units: Option<&str>,
+) -> netcdf::Result<Array<chrono::DateTime<chrono::Utc>, D>> {
+    let units = units.ok_or_else(|| {
+        netcdf::Error::Str(
+            "units must be provided to convert a CF time to a chrono DateTime".to_string(),
+        )
+    })?;
+    convert_cftime(timestamps, units).map_err(|e| netcdf::Error::Str(e.to_string()))
+}
+
+/// Like [`map_cftime`], but with an extra argument to swallow a context type.
+pub fn map_cftime_ctx<T: ToNanos, D: ndarray::Dimension, Ctx>(
+    timestamps: Array<T, D>,
+    _rs_name: &str,
+    _nc_name: &str,
+    _var: &netcdf::Variable<'_>,
+    units: Option<&str>,
+    _ctx: Ctx,
+) -> netcdf::Result<Array<chrono::DateTime<chrono::Utc>, D>> {
+    map_cftime(timestamps, _rs_name, _nc_name, _var, units)
+}
+
+/// The equivalent of [`map_cftime`] when reading CF times into [`chrono::NaiveDateTime`] values.
+///
+/// # See also
+///
+/// - For the inverse (mapping date times to CF times), see [`map_chrono_naive_f64`]
+///   or [`map_chrono_naive_i64`]. There are type-specific implementations for those
+///   functions to handle different levels of precision.
+/// - To convert a CF time to UTC-aware date/times, see [`map_cftime`].
+/// - There are limitations on the CF time conversion; see [`convert_cftime`]
+///   for those.
+pub fn map_cftime_naive<T: ToNanos, D: ndarray::Dimension>(
+    timestamps: Array<T, D>,
+    _rs_name: &str,
+    _nc_name: &str,
+    var: &netcdf::Variable<'_>,
+    units: Option<&str>,
+) -> netcdf::Result<Array<chrono::NaiveDateTime, D>> {
+    let utc_dt = map_cftime(timestamps, _rs_name, _nc_name, var, units)?;
+    let naive_dt = utc_dt.mapv(|dt| dt.naive_utc());
+    Ok(naive_dt)
+}
+
+/// Like [`map_cftime_naive`], but with an extra argument to swallow a context type.
+pub fn map_cftime_naive_ctx<T: ToNanos, D: ndarray::Dimension, Ctx>(
+    timestamps: Array<T, D>,
+    _rs_name: &str,
+    _nc_name: &str,
+    var: &netcdf::Variable<'_>,
+    units: Option<&str>,
+    _ctx: Ctx,
+) -> netcdf::Result<Array<chrono::NaiveDateTime, D>> {
+    map_cftime_naive(timestamps, _rs_name, _nc_name, var, units)
+}
+
+/// Convert a CF time variable from a netCDF file into an array of [`chrono::DateTime`]
+/// instances with [`chrono::Utc`] as the time zone.
+///
+/// The generic parameters are the same as for [`convert_cftime`], as are the limitations
+/// on the CF time unit parsing.
+///
+/// # See also
+/// - [`get_cftime`] if you already have a reference to the [`netcdf::Variable`]
+/// - [`convert_cftime`] if you already have an array of CF time values.
+pub fn get_var_cftime<T: ToNanos, D: ndarray::Dimension, O: GetNcVar>(
+    obj: O,
+    varname: &str,
+) -> error_stack::Result<Array<chrono::DateTime<chrono::Utc>, D>, GggNcError> {
+    let var = obj.get_var(varname).ok_or_else(|| GggNcError::MissingVar {
+        variable: varname.to_owned(),
+        group: None,
+    })?;
+    get_cftime::<T, D>(&var)
+}
+
+/// Read times from a variable with a compatible CF-style time value.
+///
+/// The generic parameters are the same as for [`convert_cftime`], as are the limitations
+/// on the CF time unit parsing.
+///
+/// # See also
+/// - [`get_var_cftime`] if you have the [`netcdf::File`] handle and variable name,
+///   rather than the [`netcdf::Variable`] reference.
+/// - [`convert_cftime`] if you already have an array of CF time values.
+pub fn get_cftime<T: ToNanos, D: ndarray::Dimension>(
+    var: &netcdf::Variable,
+) -> error_stack::Result<Array<chrono::DateTime<chrono::Utc>, D>, GggNcError> {
+    let timestamps = get_data::<T, D>(var)?;
+    let units = get_string_attr(var, "units")?;
+    convert_cftime(timestamps, &units)
+}
+
+/// Convert an array of CF time values to [`chrono::DateTime`] instances
+/// with [`chrono::Utc`] as the time zone.
+///
+/// The generic parameters are:
+///
+/// - `T`: the type that the netCDF variable holds or should be read as. Note that,
+///   in most cases, this should be a 64 bit type to avoid loss of precision.
+/// - `D`: the dimensionality of the array.
+///
+/// Note that this is not a fully realized CF time parser. Most notably,
+/// this only supports the "standard" calendar (note the lack of a `calendar`
+/// argument). The units on the variable must be "DURATION since EPOCH" where
+/// DURATION is one of days, hours, minutes, seconds, milliseconds, microseconds,
+/// nanoseconds (or the singular versions). "since" is the only accepted
+/// joining term. Parsing the EPOCH should support any valid epoch
+/// definition under the CF conventions.
+pub fn convert_cftime<T: ToNanos, D: ndarray::Dimension>(
+    timestamps: Array<T, D>,
+    units: &str,
+) -> error_stack::Result<Array<chrono::DateTime<chrono::Utc>, D>, GggNcError> {
+    let (dur_str, epoch_str) = units.split_once(" since ").ok_or_else(|| {
+        GggNcError::Custom(format!(
+            "Expected substring 'since' in time units was not found. Units attribute = '{units}'"
+        ))
+    })?;
+    let epoch = parse_cftime_epoch(epoch_str)?;
+    let shape = timestamps.dim();
+    let times: Vec<chrono::DateTime<chrono::Utc>> = timestamps
+        .into_iter()
+        .map(|ts| ts.to_datetime(dur_str, epoch))
+        .try_collect()?;
+    // Should not panic, as simply returning back to the shape of timestamps,
+    // so the number of elements must match.
+    Ok(Array::from_shape_vec(shape, times).expect("number of elements should be correct"))
+}
+
+/// Parse an epoch string according to the [CF conventions](https://cfconventions.org/Data/cf-conventions/cf-conventions-1.13/cf-conventions.html#time-coordinate-units).
+fn parse_cftime_epoch(
+    epoch: &str,
+) -> error_stack::Result<chrono::DateTime<chrono::Utc>, GggNcError> {
+    // According to the CF conventions (https://cfconventions.org/Data/cf-conventions/cf-conventions-1.13/cf-conventions.html#time-coordinate-units),
+    // the epoch only needs to have year, month, and day - hour, minute, second, and time zone are
+    // optional, though hour, minute, and second are all or nothing.
+    // Also individual components can be single digits, which chrono doesn't do.
+    // Time zone, if given, will be one of "Z" (Zulu = UTC), [+-]n, [+-]nn, (hour only), [+-]n:nn, or [+-]nn:nn.
+    // There will be a space between day and hour, there _may_ be a space between the second and time zone.
+    let _err = |reason: &str| GggNcError::Custom(format!("Invalid CF epoch '{epoch}', {reason}"));
+    let (ymd, hmst) = epoch
+        .split_once(|c: char| c.is_whitespace())
+        .unwrap_or((epoch, ""));
+
+    let mut ymd = ymd.split('-');
+    let year_str = ymd.next().ok_or_else(|| _err("no year found"))?;
+    let month_str = ymd.next().ok_or_else(|| _err("no month found"))?;
+    let day_str = ymd.next().ok_or_else(|| _err("no day found"))?;
+    let year: i32 = year_str.parse().map_err(|e| {
+        _err(&format!(
+            "could not parse year '{year_str}' as integer: {e}"
+        ))
+    })?;
+    let month: u32 = month_str.parse().map_err(|e| {
+        _err(&format!(
+            "could not parse month '{month_str}' as integer: {e}"
+        ))
+    })?;
+    let day: u32 = day_str
+        .parse()
+        .map_err(|e| _err(&format!("could not parse day '{day_str}' as integer: {e}")))?;
+
+    let naive_date = chrono::NaiveDate::from_ymd_opt(year, month, day)
+        .ok_or_else(|| _err("year, month, or day out of range"))?;
+
+    if hmst.trim().is_empty() {
+        return Ok(naive_date.and_hms_opt(0, 0, 0).unwrap().and_utc());
+    }
+
+    // Since the second part wasn't all whitespace, we know that there should be
+    // hours, minutes, and seconds. Seconds can be fractional, and might have a
+    // time zone appended. We must split the time zone off first, because it
+    // might contain a colon. Since the timezone is supposed to be "Z" (or "z" perhaps)
+    // or begin with a + or -, we find where that character is, if present.
+    let i_tz = hmst
+        .char_indices()
+        .fold(None, |idx, (i, c)| {
+            if idx.is_some() {
+                idx
+            } else if c == 'z' || c == 'Z' || c == '+' || c == '-' {
+                Some(i)
+            } else {
+                None
+            }
+        })
+        .unwrap_or(hmst.len());
+    let (hms, tz_str) = hmst.split_at(i_tz);
+    let mut hms = hms.trim().split(':');
+
+    let hour_str = hms.next().ok_or_else(|| _err("no hours found"))?;
+    let min_str = hms.next().ok_or_else(|| _err("no minutes found"))?;
+    let sec_str = hms.next().ok_or_else(|| _err("no seconds found"))?;
+
+    let sec = sec_str.parse::<f64>().map_err(|e| {
+        _err(&format!(
+            "could not parse seconds '{sec_str}' as float: {e}"
+        ))
+    })?;
+
+    let nano = (sec.fract() * 1e9) as u32;
+    let sec = sec.trunc() as u32;
+    let min = min_str.parse().map_err(|e| {
+        _err(&format!(
+            "could not parse minutes '{min_str}' as integer: {e}"
+        ))
+    })?;
+    let hour = hour_str.parse().map_err(|e| {
+        _err(&format!(
+            "could not parse hours '{hour_str}' as integer: {e}"
+        ))
+    })?;
+    let dt = naive_date.and_hms_nano_opt(hour, min, sec, nano)
+        .ok_or_else(|| _err(&format!("hours ({hour}), minutes ({min}), seconds ({sec}), or nanos ({nano}) were out of bounds")))?
+        .and_utc();
+
+    // the timezone string should be empty if there was no timezone - we would have "split"
+    // at the length of the hmst string.
+    if tz_str.trim().is_empty() || tz_str.trim() == "Z" || tz_str.trim() == "z" {
+        Ok(dt)
+    } else {
+        // The time zone string may or may not have a colon
+        let (tz_hr_str, tz_min_str) = tz_str.split_once(':').unwrap_or((tz_str, "0"));
+        // Technically, the minutes should always have two characters, but it isn't our job to enforce
+        // that standard. Will only add that check if a single digit minute produces an erroneous calculation.
+        let tz_hr: i64 = tz_hr_str.trim().parse().map_err(|e| {
+            _err(&format!(
+                "could not parse time zone hours '{tz_hr_str}' as integer: {e}"
+            ))
+        })?;
+        let tz_min: i64 = tz_min_str.trim().parse().map_err(|e| {
+            _err(&format!(
+                "could not parse time zone minutes '{tz_min_str}' as integer: {e}"
+            ))
+        })?;
+
+        // The minutes should always parse as positive, but if the overall
+        // offset is negative (e.g., "-1:15"), they should also be negative -
+        // this example should become -75 minutes, not -1 hour + 15 minutes = 45 minutes.
+        let tz_nsec = if tz_hr >= 0 {
+            tz_hr * 3600 + tz_min * 60
+        } else {
+            tz_hr * 3600 - tz_min * 60
+        };
+        eprintln!("tz_nsec = {tz_nsec}; tz_str = {tz_str}");
+        // The CF conventions specify that you subtract the timezone offset, you get the correct
+        // time. E.g., 09:00+6:00 is 03:00 UTC, and 09:00-6:00 is 15:00 UTC. We do this manually
+        // rather than go through chrono's time zone conversion because the latter includes handling
+        // of daylight savings time related ambiguities.
+        let tz_offset = chrono::TimeDelta::seconds(tz_nsec);
+        Ok(dt - tz_offset)
+    }
+}
+
+/// Represents a type that can be converted to nanoseconds to represent a time difference from an epoch.
+pub trait ToNanos: Copy + NcTypeDescriptor {
+    /// Convert the type to nanoseconds, given the duration string (e.g., "seconds").
+    fn to_nanos(self, dur_str: &str) -> Result<i64, GggNcError>;
+
+    /// Return the conversion factor from the duration given by `dur_str` (e.g., "seconds")
+    /// to nanoseconds.
+    fn conv_factor(dur_str: &str) -> Result<Self, GggNcError>;
+
+    /// Convert this type into a date & time, given a string describing
+    /// its units (e.g., "seconds") and the starting epoch.
+    fn to_datetime(
+        self,
+        dur_str: &str,
+        epoch: chrono::DateTime<chrono::Utc>,
+    ) -> Result<chrono::DateTime<chrono::Utc>, GggNcError> {
+        let ts_nanos = self.to_nanos(dur_str)?;
+        Ok(epoch + chrono::Duration::nanoseconds(ts_nanos))
+    }
+}
+
+impl ToNanos for i64 {
+    fn to_nanos(self, dur_str: &str) -> Result<i64, GggNcError> {
+        let nanos = self * Self::conv_factor(dur_str)?;
+        Ok(nanos)
+    }
+
+    fn conv_factor(dur_str: &str) -> Result<Self, GggNcError> {
+        match dur_str {
+            "nanoseconds" | "nanosecond" => Ok(1),
+            "microseconds" | "microsecond" => Ok(1_000),
+            "milliseconds" | "millisecond" => Ok(1_000_000),
+            "seconds" | "second" => Ok(1_000_000_000),
+            "minutes" | "minute" => Ok(60 * 1_000_000_000),
+            "hours" | "hour" => Ok(60 * 60 * 1_000_000_000),
+            "days" | "day" => Ok(24 * 60 * 60 * 1_000_000_000),
+            _ => Err(GggNcError::Custom(format!(
+                "Unknown duration string, '{dur_str}'"
+            ))),
+        }
+    }
+}
+
+impl ToNanos for u64 {
+    fn to_nanos(self, dur_str: &str) -> Result<i64, GggNcError> {
+        let nanos = self * Self::conv_factor(dur_str)?;
+        nanos.try_into().map_err(|e| {
+            GggNcError::Custom(format!(
+                "Could not convert u64 timestamp value to i64 one: {e}"
+            ))
+        })
+    }
+
+    fn conv_factor(dur_str: &str) -> Result<Self, GggNcError> {
+        let fac = i64::conv_factor(dur_str)?;
+        Ok(fac as u64)
+    }
+}
+
+impl ToNanos for f64 {
+    fn to_nanos(self, dur_str: &str) -> Result<i64, GggNcError> {
+        let nanos = self * Self::conv_factor(dur_str)?;
+        Ok(nanos as i64)
+    }
+
+    fn conv_factor(dur_str: &str) -> Result<Self, GggNcError> {
+        let fac = i64::conv_factor(dur_str)?;
+        Ok(fac as f64)
+    }
+}
+
+/// Convert an array of timezone-aware [`chrono::DateTime`] values to a float-based timestamp.
+/// Sub-second precision will be represented by the fractional part of the floats. Also returns
+/// an appropriate unit string for CF-compliant times.
+///
+/// # See also
+/// - [`chrono_to_cftime`] for integer timestamps at second resolution.
+/// - [`map_chrono_f64`] and [`map_chrono_naive_f64`] to interface with [`ggg_rs_derive::WriteNetcdf`]
+pub fn chrono_to_cftime_fractional<T: chrono::TimeZone, D: ndarray::Dimension>(
+    times: ArrayView<chrono::DateTime<T>, D>,
+) -> (Array<f64, D>, &'static str) {
+    let timestamps = times.mapv(|t| (t.to_utc().timestamp_micros() as f64) / 1_000_000.0);
+    (timestamps, "seconds since 1970-01-01 00:00:00Z")
+}
+
+/// Wrapper around [`chrono_to_cftime_fractional`] to interface with [`ggg_rs_derive::WriteNetcdf`],
+/// particularly the `#[netcdf(map_units = ...)]` helper.
+///
+/// # See also:
+/// - [`map_chrono_naive_f64`] for an interface that works with naive date times
+pub fn map_chrono_f64<T: chrono::TimeZone, D: ndarray::Dimension, A>(
+    _data: &A,
+    times: &Array<chrono::DateTime<T>, D>,
+    _rs_name: &str,
+    _nc_name: &str,
+) -> (Array<f64, D>, &'static str) {
+    chrono_to_cftime_fractional(times.view())
+}
+
+/// Like [`map_chrono_f64`], but with an extra argument to swallow a context type.
+pub fn map_chrono_f64_ctx<T: chrono::TimeZone, D: ndarray::Dimension, A, Ctx>(
+    _data: &A,
+    times: &Array<chrono::DateTime<T>, D>,
+    _rs_name: &str,
+    _nc_name: &str,
+    _ctx: Ctx,
+) -> (Array<f64, D>, &'static str) {
+    map_chrono_f64(_data, times, _rs_name, _nc_name)
+}
+
+/// Wrapper around [`chrono_to_cftime_fractional`] to interface with [`ggg_rs_derive::WriteNetcdf`],
+/// particularly the `#[netcdf(map_units = ...)]` helper. Converts naive date times assuming they represent
+/// UTC times or that a user converting back to a datetime by adding to the 1970-01-01 epoch will understand
+/// the intent. If that is not true, convert the times to be timezone aware, and use [`map_chrono_f64`] instead.
+pub fn map_chrono_naive_f64<D: ndarray::Dimension, A>(
+    _data: &A,
+    times: &Array<chrono::NaiveDateTime, D>,
+    _rs_name: &str,
+    _nc_name: &str,
+) -> (Array<f64, D>, &'static str) {
+    let utc_times = times.mapv(|t| t.and_utc());
+    chrono_to_cftime_fractional(utc_times.view())
+}
+
+/// Like [`map_chrono_naive_f64`], but with an extra argument to swallow a context type.
+pub fn map_chrono_naive_f64_ctx<D: ndarray::Dimension, A, Ctx>(
+    _data: &A,
+    times: &Array<chrono::NaiveDateTime, D>,
+    _rs_name: &str,
+    _nc_name: &str,
+    _ctx: Ctx,
+) -> (Array<f64, D>, &'static str) {
+    map_chrono_naive_f64(_data, times, _rs_name, _nc_name)
+}
+
+/// Convert an array of timezone-aware [`chrono::DateTime`] values to an integer-based timestamp.
+/// Subsecond precision will be truncated.  Also returns an appropriate unit string for CF-compliant
+/// times.
+///
+/// # See also
+/// - [`chrono_to_cftime_fractional`] if sub-second precision is desired.
+/// - [`map_chrono_i64`] and [`map_chrono_naive_i64`] to interface with [`ggg_rs_derive::WriteNetcdf`]
+pub fn chrono_to_cftime<T: chrono::TimeZone, D: ndarray::Dimension>(
+    times: ArrayView<chrono::DateTime<T>, D>,
+) -> (Array<i64, D>, &'static str) {
+    let timestamps = times.mapv(|t| t.to_utc().timestamp());
+    (timestamps, "seconds since 1970-01-01 00:00:00Z")
+}
+
+/// Wrapper around [`chrono_to_cftime`] to interface with [`ggg_rs_derive::WriteNetcdf`],
+/// particularly the `#[netcdf(map_units = ...)]` helper.
+///
+/// # See also:
+/// - [`map_chrono_naive_i64`] for an interface that works with naive date times
+pub fn map_chrono_i64<T: chrono::TimeZone, D: ndarray::Dimension, A>(
+    _data: &A,
+    times: &Array<chrono::DateTime<T>, D>,
+    _rs_name: &str,
+    _nc_name: &str,
+) -> (Array<i64, D>, &'static str) {
+    chrono_to_cftime(times.view())
+}
+
+/// Like [`map_chrono_i64`], but with an extra argument to swallow a context type.
+pub fn map_chrono_i64_ctx<T: chrono::TimeZone, D: ndarray::Dimension, A, Ctx>(
+    _data: &A,
+    times: &Array<chrono::DateTime<T>, D>,
+    _rs_name: &str,
+    _nc_name: &str,
+    _ctx: Ctx,
+) -> (Array<i64, D>, &'static str) {
+    map_chrono_i64(_data, times, _rs_name, _nc_name)
+}
+
+/// Wrapper around [`chrono_to_cftime`] to interface with [`ggg_rs_derive::WriteNetcdf`],
+/// particularly the `#[netcdf(map_units = ...)]` helper. Converts naive date times assuming they represent
+/// UTC times or that a user converting back to a datetime by adding to the 1970-01-01 epoch will understand
+/// the intent. If that is not true, convert the times to be timezone aware, and use [`map_chrono_i64`] instead.
+pub fn map_chrono_naive_i64<D: ndarray::Dimension, A>(
+    _data: &A,
+    times: &Array<chrono::NaiveDateTime, D>,
+    _rs_name: &str,
+    _nc_name: &str,
+) -> (Array<i64, D>, &'static str) {
+    let utc_times = times.mapv(|t| t.and_utc());
+    chrono_to_cftime(utc_times.view())
+}
+
+/// Like [`map_chrono_naive_i64`], but with an extra argument to swallow a context type.
+pub fn map_chrono_naive_i64_ctx<D: ndarray::Dimension, A, Ctx>(
+    _data: &A,
+    times: &Array<chrono::NaiveDateTime, D>,
+    _rs_name: &str,
+    _nc_name: &str,
+    _ctx: Ctx,
+) -> (Array<i64, D>, &'static str) {
+    map_chrono_naive_i64(_data, times, _rs_name, _nc_name)
 }
 
 /// Read data from a variable into a [`uom::si::Quantity`].
@@ -812,18 +1317,19 @@ pub fn get_var_data<T: Copy + NcTypeDescriptor, D: ndarray::Dimension>(
 ///
 /// If you already have a reference to the variable, use [`get_data_quantity`]
 /// instead.
-pub fn get_var_data_quantity<T, D, Q>(
-    ds: &netcdf::File,
+pub fn get_var_data_quantity<T, D, Q, O>(
+    ds: O,
     varname: &str,
 ) -> error_stack::Result<Array<Q, D>, GggNcError>
 where
     T: Copy + NcTypeDescriptor,
     D: ndarray::Dimension,
     Q: FromStr<Err = uom::str::ParseQuantityError> + Copy + Mul<T, Output = Q>,
+    O: GetNcVar,
 {
     // We need the variable anyway, so we duplicate the code of get_var_data rather
     // than calling it
-    let var = ds.variable(varname).ok_or_else(|| GggNcError::MissingVar {
+    let var = ds.get_var(varname).ok_or_else(|| GggNcError::MissingVar {
         variable: varname.to_owned(),
         group: None,
     })?;
@@ -872,15 +1378,29 @@ pub fn get_string_attr<O: GetNcAttr>(
     attr: &str,
 ) -> error_stack::Result<String, GggNcError> {
     let vres = object.get_attr_val(attr)?;
-
-    let sres: Result<String, _> = vres.try_into();
-
-    sres.change_context_lazy(|| {
-        GggNcError::context(format!(
-            "Could not convert attribute '{attr}' on {} to a string",
-            object.description()
-        ))
-    })
+    let type_descr = descr_attval_type(&vres);
+    match vres {
+        netcdf::AttributeValue::Strs(mut strings) => {
+            if strings.is_empty() {
+                Ok("".to_string())
+            } else if strings.len() == 1 {
+                Ok(strings.pop().expect("vec should have 1 element"))
+            } else {
+                Err(GggNcError::Custom(format!("Could not convert attribute '{attr}' (type = {type_descr}) on {} to a string; it contained {} strings", object.description(), strings.len())).into())
+            }
+        }
+        _ => {
+            // Catch-all that supports scalar strings, most other
+            // types will likely error (but maybe byte types convert)
+            let sres: Result<String, _> = vres.try_into();
+            sres.change_context_lazy(|| {
+                GggNcError::context(format!(
+                    "Could not convert attribute '{attr}' (type = {type_descr}) on {} to a string",
+                    object.description()
+                ))
+            })
+        }
+    }
 }
 
 /// Retrieve a string attribute on a variable in an open dataset.
@@ -984,6 +1504,24 @@ impl GetNcAttr for &netcdf::File {
     }
 }
 
+/// A trait used to allow generic access to netCDF variables across
+/// different netCDF constructs (files & groups).
+pub trait GetNcVar {
+    fn get_var<'s>(&'s self, name: &str) -> Option<netcdf::Variable<'s>>;
+}
+
+impl GetNcVar for &netcdf::File {
+    fn get_var<'s>(&'s self, name: &str) -> Option<netcdf::Variable<'s>> {
+        self.variable(name)
+    }
+}
+
+impl GetNcVar for &netcdf::Group<'_> {
+    fn get_var<'s>(&'s self, name: &str) -> Option<netcdf::Variable<'s>> {
+        self.variable(name)
+    }
+}
+
 // ------------- //
 // Value helpers //
 // ------------- //
@@ -1018,5 +1556,242 @@ pub fn parse_release_lag(release_lag: &str) -> Result<chrono::Duration, GggNcErr
         Err(GggNcError::Custom(format!(
             "Incorrect format for release lag, expected 'NUMBER UNITS', got '{release_lag}'"
         )))
+    }
+}
+
+fn descr_attval_type(val: &netcdf::AttributeValue) -> &'static str {
+    match val {
+        netcdf::AttributeValue::Uchar(_) => "Uchar",
+        netcdf::AttributeValue::Uchars(_) => "Uchars",
+        netcdf::AttributeValue::Schar(_) => "Schar",
+        netcdf::AttributeValue::Schars(_) => "Schars",
+        netcdf::AttributeValue::Ushort(_) => "Ushort",
+        netcdf::AttributeValue::Ushorts(_) => "Ushorts",
+        netcdf::AttributeValue::Short(_) => "Short",
+        netcdf::AttributeValue::Shorts(_) => "Shorts",
+        netcdf::AttributeValue::Uint(_) => "Uint",
+        netcdf::AttributeValue::Uints(_) => "Uints",
+        netcdf::AttributeValue::Int(_) => "Int",
+        netcdf::AttributeValue::Ints(_) => "Ints",
+        netcdf::AttributeValue::Ulonglong(_) => "Ulonglong",
+        netcdf::AttributeValue::Ulonglongs(_) => "Ulonglongs",
+        netcdf::AttributeValue::Longlong(_) => "Longlong",
+        netcdf::AttributeValue::Longlongs(_) => "Longlongs",
+        netcdf::AttributeValue::Float(_) => "Float",
+        netcdf::AttributeValue::Floats(_) => "Floats",
+        netcdf::AttributeValue::Double(_) => "Double",
+        netcdf::AttributeValue::Doubles(_) => "Doubles",
+        netcdf::AttributeValue::Str(_) => "Str",
+        netcdf::AttributeValue::Strs(_) => "Strs",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_utils::utc_dt_ymdhms;
+    use ndarray::array;
+
+    #[test]
+    fn test_cftime_like_parsing() {
+        let unit_scales = [
+            ("nanoseconds", 1_000_000_000_i64),
+            ("microseconds", 1_000_000_i64),
+            ("milliseconds", 1_000_i64),
+            ("seconds", 1_i64),
+        ];
+        for (units, scale) in unit_scales {
+            let times = convert_cftime(
+                array![scale, 2 * scale],
+                &format!("{units} since 2010-01-01 00:00:00"),
+            )
+            .unwrap();
+            assert_eq!(
+                times,
+                array![
+                    utc_dt_ymdhms(2010, 1, 1, 0, 0, 1),
+                    utc_dt_ymdhms(2010, 1, 1, 0, 0, 2)
+                ],
+                "i64 {units} parsing failed"
+            );
+        }
+
+        let unit_scales = [
+            ("nanoseconds", 1_000_000_000_u64),
+            ("microseconds", 1_000_000_u64),
+            ("milliseconds", 1_000_u64),
+            ("seconds", 1_u64),
+        ];
+        for (units, scale) in unit_scales {
+            let times = convert_cftime(
+                array![scale, 2 * scale],
+                &format!("{units} since 2010-01-01 00:00:00"),
+            )
+            .unwrap();
+            assert_eq!(
+                times,
+                array![
+                    utc_dt_ymdhms(2010, 1, 1, 0, 0, 1),
+                    utc_dt_ymdhms(2010, 1, 1, 0, 0, 2)
+                ],
+                "u64 {units} parsing failed"
+            );
+        }
+
+        let unit_scales = [
+            ("nanoseconds", 1_000_000_000_f64),
+            ("microseconds", 1_000_000_f64),
+            ("milliseconds", 1_000_f64),
+            ("seconds", 1_f64),
+        ];
+        for (units, scale) in unit_scales {
+            let times = convert_cftime(
+                array![scale, 2.0 * scale],
+                &format!("{units} since 2010-01-01 00:00:00"),
+            )
+            .unwrap();
+            assert_eq!(
+                times,
+                array![
+                    utc_dt_ymdhms(2010, 1, 1, 0, 0, 1),
+                    utc_dt_ymdhms(2010, 1, 1, 0, 0, 2)
+                ],
+                "f64 {units} parsing failed"
+            );
+        }
+
+        let unit_scales = [("minutes", 1440_i64), ("hours", 24_i64), ("days", 1_i64)];
+        for (units, scale) in unit_scales {
+            let times = convert_cftime(
+                array![scale, 2 * scale],
+                &format!("{units} since 2010-01-01 00:00:00"),
+            )
+            .unwrap();
+            assert_eq!(
+                times,
+                array![
+                    utc_dt_ymdhms(2010, 1, 2, 0, 0, 0),
+                    utc_dt_ymdhms(2010, 1, 3, 0, 0, 0)
+                ],
+                "i64 {units} parsing failed"
+            );
+        }
+
+        let unit_scales = [("minutes", 1440_u64), ("hours", 24_u64), ("days", 1_u64)];
+        for (units, scale) in unit_scales {
+            let times = convert_cftime(
+                array![scale, 2 * scale],
+                &format!("{units} since 2010-01-01 00:00:00"),
+            )
+            .unwrap();
+            assert_eq!(
+                times,
+                array![
+                    utc_dt_ymdhms(2010, 1, 2, 0, 0, 0),
+                    utc_dt_ymdhms(2010, 1, 3, 0, 0, 0)
+                ],
+                "u64 {units} parsing failed"
+            );
+        }
+
+        let unit_scales = [("minutes", 1440_f64), ("hours", 24_f64), ("days", 1_f64)];
+        for (units, scale) in unit_scales {
+            let times = convert_cftime(
+                array![scale, 2.0 * scale],
+                &format!("{units} since 2010-01-01 00:00:00"),
+            )
+            .unwrap();
+            assert_eq!(
+                times,
+                array![
+                    utc_dt_ymdhms(2010, 1, 2, 0, 0, 0),
+                    utc_dt_ymdhms(2010, 1, 3, 0, 0, 0)
+                ],
+                "f64 {units} parsing failed"
+            );
+        }
+    }
+
+    #[test]
+    fn test_cftime_epoch_parsing() {
+        fn _parse_assert(
+            epoch: &str,
+            year: i32,
+            month: u32,
+            day: u32,
+            hour: u32,
+            minute: u32,
+            second: u32,
+            nanos: i64,
+        ) {
+            let epoch_dt = parse_cftime_epoch(epoch).unwrap();
+            let expected_dt = utc_dt_ymdhms(year, month, day, hour, minute, second)
+                + chrono::TimeDelta::nanoseconds(nanos);
+            assert_eq!(epoch_dt, expected_dt);
+        }
+
+        fn _parse_error(epoch: &str) {
+            let _ = parse_cftime_epoch(epoch).unwrap_err();
+        }
+
+        // Date only
+        _parse_assert("1970-01-01", 1970, 1, 1, 0, 0, 0, 0);
+        // Date with single character month and day
+        _parse_assert("1970-1-1", 1970, 1, 1, 0, 0, 0, 0);
+        // Date and time, no timezone
+        _parse_assert("1970-01-01 12:34:56", 1970, 1, 1, 12, 34, 56, 0);
+        // Date and time with fractional second
+        _parse_assert(
+            "1970-01-01 12:34:56.25",
+            1970,
+            1,
+            1,
+            12,
+            34,
+            56,
+            250_000_000,
+        );
+        // Date and time with Z for the timezone, with and without a space
+        _parse_assert("1970-01-01 12:34:56Z", 1970, 1, 1, 12, 34, 56, 0);
+        _parse_assert("1970-01-01 12:34:56 Z", 1970, 1, 1, 12, 34, 56, 0);
+
+        // Date and time with +0 for the timezone
+        _parse_assert("1970-01-01 12:34:56+0", 1970, 1, 1, 12, 34, 56, 0);
+        _parse_assert("1970-01-01 12:34:56 +0", 1970, 1, 1, 12, 34, 56, 0);
+
+        // Date and time with just hour offsets
+        _parse_assert("1970-01-01 12:34:56+1", 1970, 1, 1, 11, 34, 56, 0);
+        _parse_assert("1970-01-01 12:34:56+11", 1970, 1, 1, 1, 34, 56, 0);
+        _parse_assert("1970-01-01 12:34:56 +1", 1970, 1, 1, 11, 34, 56, 0);
+        _parse_assert("1970-01-01 12:34:56 +11", 1970, 1, 1, 1, 34, 56, 0);
+
+        _parse_assert("1970-01-01 12:34:56-1", 1970, 1, 1, 13, 34, 56, 0);
+        _parse_assert("1970-01-01 12:34:56-11", 1970, 1, 1, 23, 34, 56, 0);
+        _parse_assert("1970-01-01 12:34:56 -1", 1970, 1, 1, 13, 34, 56, 0);
+        _parse_assert("1970-01-01 12:34:56 -11", 1970, 1, 1, 23, 34, 56, 0);
+
+        // Date and time with hour and minute offsets
+        _parse_assert("1970-01-01 12:34:56+1:15", 1970, 1, 1, 11, 19, 56, 0);
+        _parse_assert("1970-01-01 12:34:56+11:15", 1970, 1, 1, 1, 19, 56, 0);
+        _parse_assert("1970-01-01 12:34:56 +1:15", 1970, 1, 1, 11, 19, 56, 0);
+        _parse_assert("1970-01-01 12:34:56 +11:15", 1970, 1, 1, 1, 19, 56, 0);
+
+        _parse_assert("1970-01-01 12:34:56-1:15", 1970, 1, 1, 13, 49, 56, 0);
+        _parse_assert("1970-01-01 12:34:56-11:15", 1970, 1, 1, 23, 49, 56, 0);
+        _parse_assert("1970-01-01 12:34:56 -1:15", 1970, 1, 1, 13, 49, 56, 0);
+        _parse_assert("1970-01-01 12:34:56 -11:15", 1970, 1, 1, 23, 49, 56, 0);
+
+        // Now we check that parsing fails when it should.
+        // First, incomplete dates.
+        _parse_error("1970");
+        _parse_error("1970-01");
+
+        // Then, incomplete times
+        _parse_error("1970-01-01 12");
+        _parse_error("1970-01-01 12:34");
+
+        // Then, invalid time zones
+        _parse_error("1970-01-01 12:34:56 UTC");
+        _parse_error("1970-01-01 12:34:56 PST");
     }
 }

@@ -14,10 +14,10 @@ use itertools::Itertools;
 use ndarray::{ArrayD, ArrayView1, ArrayViewD, Axis};
 use netcdf::AttributeValue;
 use num_traits::Zero;
-use serde::{Deserialize, Deserializer};
+use serde::{de::Error, Deserialize, Deserializer};
 
 use crate::{
-    config::{default_attr_remove, AttributeActions},
+    config::AttributeActions,
     constants::{PRIOR_INDEX_VARNAME, PRIOR_PRESSURE_VARNAME, PROGRAM_NAME, TIME_DIM_NAME},
     discovery::{Rename, XgasMatchRule},
 };
@@ -98,11 +98,12 @@ impl CopyError {
 }
 
 pub(crate) trait CopySet {
-    fn copy(
+    fn copy<S: AsRef<str>>(
         &self,
         private_file: &netcdf::File,
         public_file: &mut netcdf::FileMut,
         time_subsetter: &Subsetter,
+        attr_omit_by_default: &[S],
     ) -> error_stack::Result<(), CopyError>;
 }
 
@@ -260,11 +261,7 @@ pub(crate) struct AuxVarCopy {
     /// Additional attributes to add, or values to replace private file
     /// attributes.
     #[serde(default, deserialize_with = "de_attribute_overrides")]
-    pub(crate) attr_overrides: IndexMap<String, netcdf::AttributeValue>,
-
-    /// A list of private attributes to remove.
-    #[serde(default = "crate::config::default_attr_remove")]
-    pub(crate) attr_to_remove: Vec<String>,
+    pub(crate) attr_overrides: IndexMap<String, AttrCopy>,
 
     /// Whether this variable is required or can be skipped if
     /// not present in the source file
@@ -273,6 +270,7 @@ pub(crate) struct AuxVarCopy {
 }
 
 impl AuxVarCopy {
+    #[allow(dead_code)] // required for testing
     pub(crate) fn new<P: ToString, L: ToString>(
         private_name: P,
         long_name: L,
@@ -283,7 +281,6 @@ impl AuxVarCopy {
             public_name: None,
             long_name: long_name.to_string(),
             attr_overrides: IndexMap::new(),
-            attr_to_remove: crate::config::default_attr_remove(),
             required,
         }
     }
@@ -299,41 +296,35 @@ impl AuxVarCopy {
             public_name: None,
             long_name: long_name.to_string(),
             attr_overrides: IndexMap::new(),
-            attr_to_remove: vec![],
             required,
         }
     }
 
+    #[allow(dead_code)] // required for testing
     pub(crate) fn with_public_name<P: ToString>(mut self, public_name: P) -> Self {
         self.public_name = Some(public_name.to_string());
         self
     }
 
-    pub(crate) fn with_attr_override<N: ToString, V: Into<netcdf::AttributeValue>>(
+    #[allow(dead_code)] // required for testing
+    pub(crate) fn with_attr_override<N: ToString, V: Into<AttrCopy>>(
         mut self,
         attr_name: N,
         attr_value: V,
     ) -> Self {
         let attr_name = attr_name.to_string();
-        let attr_value = attr_value.into();
-        self.attr_overrides.insert(attr_name, attr_value);
-        self
-    }
-
-    #[allow(dead_code)] // needed at least for testing
-    pub(crate) fn with_attr_remove<S: ToString>(mut self, attr_name: S) -> Self {
-        let attr_name = attr_name.to_string();
-        self.attr_to_remove.push(attr_name);
+        self.attr_overrides.insert(attr_name, attr_value.into());
         self
     }
 }
 
 impl CopySet for AuxVarCopy {
-    fn copy(
+    fn copy<S: AsRef<str>>(
         &self,
         private_file: &netcdf::File,
         public_file: &mut netcdf::FileMut,
         time_subsetter: &Subsetter,
+        attr_omit_by_default: &[S],
     ) -> error_stack::Result<(), CopyError> {
         // Will need to create a variable with the same dimensions, then copy the good subset of values
         // and the attributes.
@@ -358,7 +349,7 @@ impl CopySet for AuxVarCopy {
             time_subsetter,
             &self.long_name,
             &self.attr_overrides,
-            &self.attr_to_remove,
+            attr_omit_by_default,
         )
     }
 }
@@ -385,11 +376,7 @@ pub(crate) struct PriorProfCopy {
     /// Additional attributes to add, or values to replace private file
     /// attributes.
     #[serde(default, deserialize_with = "de_attribute_overrides")]
-    pub(crate) attr_overrides: IndexMap<String, netcdf::AttributeValue>,
-
-    /// A list of private attributes to remove.
-    #[serde(default = "crate::config::default_attr_remove")]
-    pub(crate) attr_to_remove: Vec<String>,
+    pub(crate) attr_overrides: IndexMap<String, AttrCopy>,
 
     /// Whether this variable is required or can be skipped if
     /// not present in the source file
@@ -409,7 +396,6 @@ impl PriorProfCopy {
             long_name: long_name.to_string(),
             target_vmr_unit: None,
             attr_overrides: IndexMap::new(),
-            attr_to_remove: crate::config::default_attr_remove(),
             required,
         }
     }
@@ -419,10 +405,7 @@ impl PriorProfCopy {
         self
     }
 
-    pub(crate) fn set_attr_overrides(
-        mut self,
-        overrides: IndexMap<String, AttributeValue>,
-    ) -> Self {
+    pub(crate) fn set_attr_overrides(mut self, overrides: IndexMap<String, AttrCopy>) -> Self {
         self.attr_overrides = overrides;
         self
     }
@@ -434,11 +417,12 @@ impl PriorProfCopy {
 }
 
 impl CopySet for PriorProfCopy {
-    fn copy(
+    fn copy<S: AsRef<str>>(
         &self,
         private_file: &netcdf::File,
         public_file: &mut netcdf::FileMut,
         time_subsetter: &Subsetter,
+        attr_omit_by_default: &[S],
     ) -> error_stack::Result<(), CopyError> {
         let public_name = self.public_name.as_deref().unwrap_or(&self.private_name);
 
@@ -504,7 +488,7 @@ impl CopySet for PriorProfCopy {
             new_dims,
             &self.long_name,
             &attr_overrides,
-            &self.attr_to_remove,
+            attr_omit_by_default,
         )?;
         Ok(())
     }
@@ -521,7 +505,7 @@ pub(crate) struct XgasCopy {
     xgas_public: Option<String>,
 
     #[serde(default, deserialize_with = "de_attribute_overrides")]
-    xgas_attr_overrides: IndexMap<String, AttributeValue>,
+    xgas_attr_overrides: IndexMap<String, AttrCopy>,
 
     /// The abbreviation of the physical gas, e.g., both `wco2` and `lco2`
     /// should set this to "co2". This can be used to identify variables that
@@ -544,28 +528,28 @@ pub(crate) struct XgasCopy {
     xgas_error: XgasAncillary,
 
     #[serde(default, deserialize_with = "de_attribute_overrides")]
-    xgas_error_attr_overrides: IndexMap<String, AttributeValue>,
+    xgas_error_attr_overrides: IndexMap<String, AttrCopy>,
 
     /// How/whether to copy the a priori profiles.
     #[serde(default = "crate::config::default_ancillary_infer_first")]
     prior_profile: XgasAncillary,
 
     #[serde(default, deserialize_with = "de_attribute_overrides")]
-    prior_profile_attr_overrides: IndexMap<String, AttributeValue>,
+    prior_profile_attr_overrides: IndexMap<String, AttrCopy>,
 
     /// How/whether to copy the a prior column average.
     #[serde(default = "crate::config::default_ancillary_infer_first")]
     prior_xgas: XgasAncillary,
 
     #[serde(default, deserialize_with = "de_attribute_overrides")]
-    prior_xgas_attr_overrides: IndexMap<String, AttributeValue>,
+    prior_xgas_attr_overrides: IndexMap<String, AttrCopy>,
 
     /// How/whether to copy the averaging kernels.
     #[serde(default = "crate::config::default_ancillary_infer_first")]
     ak: XgasAncillary,
 
     #[serde(default, deserialize_with = "de_attribute_overrides")]
-    ak_attr_overrides: IndexMap<String, AttributeValue>,
+    ak_attr_overrides: IndexMap<String, AttrCopy>,
 
     /// Where to find the slant Xgas bins that correspond to the AKs.
     /// This is a special case, and will only be accessed if the AKs are
@@ -792,7 +776,7 @@ impl XgasCopy {
         &self,
         private_file: &netcdf::File,
         public_file: &netcdf::File,
-        attr_overrides: &mut IndexMap<String, AttributeValue>,
+        attr_overrides: &mut IndexMap<String, AttrCopy>,
     ) -> error_stack::Result<(), CopyError> {
         if attr_overrides.contains_key("wmo_or_analogous_scale") {
             return Ok(());
@@ -815,6 +799,8 @@ impl XgasCopy {
                 })?;
             if !scale.is_empty() {
                 attr_overrides.insert("wmo_or_analogous_scale".to_string(), scale.into());
+            } else {
+                log::warn!("'{private_scale_name}' variable was empty; will not write 'wmo_or_analogous_scale' for {}", self.xgas);
             }
         } else {
             log::debug!(
@@ -828,11 +814,12 @@ impl XgasCopy {
 }
 
 impl CopySet for XgasCopy {
-    fn copy(
+    fn copy<S: AsRef<str>>(
         &self,
         private_file: &netcdf::File,
         public_file: &mut netcdf::FileMut,
         time_subsetter: &Subsetter,
+        attr_omit_by_default: &[S],
     ) -> error_stack::Result<(), CopyError> {
         // Copy the xgas and its error, get the WMO scale and make it an attribute, copy the prior profile,
         // prior Xgas, and averaging kernels.
@@ -888,11 +875,10 @@ impl CopySet for XgasCopy {
             }
         };
 
-        let attr_to_remove = default_attr_remove();
         let mut attr_overrides = self.xgas_attr_overrides.clone();
         if !attr_overrides.contains_key("description") {
             let new_desc = xgas_helpers::update_xgas_description(&xgas_var, self.gas_from_xgas())?;
-            attr_overrides.insert("description".to_string(), new_desc);
+            attr_overrides.insert("description".to_string(), new_desc.into());
         }
         self.maybe_add_traceability_scale_attr(private_file, public_file, &mut attr_overrides)?;
 
@@ -906,7 +892,7 @@ impl CopySet for XgasCopy {
             time_subsetter,
             &format!("column average {} mole fraction", self.gas_long),
             attr_overrides,
-            &attr_to_remove,
+            attr_omit_by_default,
             &gas_units,
         )
         .change_context_lazy(|| {
@@ -926,7 +912,7 @@ impl CopySet for XgasCopy {
                 time_subsetter,
                 &format!("column average {} mole fraction error", self.gas_long),
                 self.xgas_error_attr_overrides.clone(),
-                &attr_to_remove,
+                attr_omit_by_default,
                 &gas_units,
             )
             .change_context_lazy(|| {
@@ -962,7 +948,7 @@ impl CopySet for XgasCopy {
                 time_subsetter,
                 &format!("a priori {} column average", self.gas_long),
                 attr_overrides,
-                &attr_to_remove,
+                attr_omit_by_default,
                 &gas_units,
             )
             .change_context_lazy(|| {
@@ -999,7 +985,12 @@ impl CopySet for XgasCopy {
                 .set_attr_overrides(attr_overrides);
 
             prior_copier
-                .copy(private_file, public_file, time_subsetter)
+                .copy(
+                    private_file,
+                    public_file,
+                    time_subsetter,
+                    attr_omit_by_default,
+                )
                 .change_context_lazy(|| {
                     CopyError::context(format!(
                         "copying prior profile variable '{private_prior_name}' for Xgas {}",
@@ -1063,7 +1054,7 @@ impl CopySet for XgasCopy {
                 vec![TIME_DIM_NAME.to_string(), level_dim_name],
                 &format!("{} averaging kernel", self.gas_long),
                 &attr_overrides,
-                &attr_to_remove,
+                attr_omit_by_default,
             )
             .change_context_lazy(|| {
                 CopyError::context(format!(
@@ -1101,6 +1092,61 @@ impl CopySet for XgasCopy {
             })?;
 
         Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum AttrCopy {
+    Value(AttributeValue),
+    Copy,
+    Omit,
+}
+
+impl From<AttributeValue> for AttrCopy {
+    fn from(value: AttributeValue) -> Self {
+        Self::Value(value)
+    }
+}
+
+impl From<String> for AttrCopy {
+    fn from(value: String) -> Self {
+        Self::Value(AttributeValue::Str(value))
+    }
+}
+
+impl From<&str> for AttrCopy {
+    fn from(value: &str) -> Self {
+        Self::Value(AttributeValue::Str(value.to_string()))
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct AttrOverrideTable {
+    omit: Option<bool>,
+    value: Option<toml::Value>,
+}
+
+impl TryFrom<AttrOverrideTable> for AttrCopy {
+    type Error = toml::de::Error;
+
+    fn try_from(value: AttrOverrideTable) -> Result<Self, Self::Error> {
+        match (value.omit, value.value.clone()) {
+            (Some(true), None) => return Ok(Self::Omit),
+            (Some(true), Some(_)) => {
+                return Err(toml::de::Error::custom(
+                    "cannot combine 'omit = true' with 'value = ...'",
+                ))
+            }
+            (Some(false), None) => return Ok(Self::Copy),
+            (None, None) => return Ok(Self::Copy),
+            (_, Some(v)) => {
+                let av = override_to_attr_val("?", v).map_err(|e| toml::de::Error::custom(e))?;
+                return Ok(Self::Value(av));
+            }
+        }
+
+        // In the future, it may be possible to have invalid combinations of options in the table,
+        // in which case we would add a fallthrough error here.
     }
 }
 
@@ -1276,11 +1322,12 @@ pub(crate) enum ComputedVariable {
 }
 
 impl CopySet for ComputedVariable {
-    fn copy(
+    fn copy<S: AsRef<str>>(
         &self,
         private_file: &netcdf::File,
         public_file: &mut netcdf::FileMut,
         time_subsetter: &Subsetter,
+        _attr_omit_by_default: &[S],
     ) -> error_stack::Result<(), CopyError> {
         match self {
             ComputedVariable::PriorSource { public_name } => {
@@ -1507,37 +1554,54 @@ fn add_history_attr(
 
 pub(crate) fn de_attribute_overrides<'de, D>(
     deserializer: D,
-) -> Result<IndexMap<String, AttributeValue>, D::Error>
+) -> Result<IndexMap<String, AttrCopy>, D::Error>
 where
     D: Deserializer<'de>,
 {
     let map = toml::Table::deserialize(deserializer)?;
     let mut attr_overrides = IndexMap::new();
     for (attr, val) in map.into_iter() {
-        let attr_val = match val {
-            toml::Value::String(s) => AttributeValue::Str(s),
-            toml::Value::Integer(i) => AttributeValue::Longlong(i),
-            toml::Value::Float(f) => AttributeValue::Double(f),
-            toml::Value::Boolean(b) => AttributeValue::Ushort(b as u16),
-            toml::Value::Datetime(datetime) => {
-                let dstr = datetime.to_string();
-                AttributeValue::Str(dstr)
-            },
-            toml::Value::Array(values) => {
-                let vstr = values.into_iter()
-                    .map(|v| v.to_string())
-                    .collect_vec();
-                AttributeValue::Strs(vstr)
-            },
-            toml::Value::Table(_) => {
-                return Err(serde::de::Error::custom(format!(
-                    "While reading attribute overrides, got a table for the value of attribute '{attr}'. Tables cannot be converted to netCDF attribute values."
-                )))
-            },
+        let attr_val: AttrCopy = if let toml::Value::Table(table) = val {
+            let override_table: AttrOverrideTable = table
+                .try_into()
+                .map_err(|e| serde::de::Error::custom(e.to_string()))?;
+            override_table.try_into().map_err(|e| {
+                serde::de::Error::custom(format!(
+                    "Invalid attribute override table for {attr}: {e}"
+                ))
+            })?
+        } else {
+            override_to_attr_val(&attr, val)
+                .map_err(|msg| serde::de::Error::custom(msg))?
+                .into()
         };
         attr_overrides.insert(attr, attr_val);
     }
     Ok(attr_overrides)
+}
+
+fn override_to_attr_val(attr: &str, val: toml::Value) -> Result<AttributeValue, String> {
+    match val {
+        toml::Value::String(s) => Ok(AttributeValue::Str(s)),
+        toml::Value::Integer(i) => Ok(AttributeValue::Longlong(i)),
+        toml::Value::Float(f) => Ok(AttributeValue::Double(f)),
+        toml::Value::Boolean(b) => Ok(AttributeValue::Ushort(b as u16)),
+        toml::Value::Datetime(datetime) => {
+            let dstr = datetime.to_string();
+            Ok(AttributeValue::Str(dstr))
+        },
+        toml::Value::Array(values) => {
+            let vstr = values.into_iter()
+                .map(|v| v.to_string())
+                .collect_vec();
+            Ok(AttributeValue::Strs(vstr))
+        },
+        toml::Value::Table(_) => {
+            Err(format!(
+                "While reading attribute overrides, got a table for the value of attribute '{attr}'. Tables cannot be converted to netCDF attribute values."
+            ))
+        },
+    }
 }
 
 #[cfg(test)]
@@ -1569,18 +1633,33 @@ mod tests {
     fn test_de_aux_var_attrs() {
         let toml_str = r#"private_name = "day"
         long_name = "day of year"
-        attr_overrides = {units = "Julian day", description = "1-based day of year"}
-        attr_to_remove = ["vmin", "vmax"]
+        [attr_overrides]
+        units = "Julian day"
+        description = "1-based day of year"
+        vmin = { omit = true }
+        vmax = { omit = true }
         "#;
         let aux_de: AuxVarCopy = toml::from_str(toml_str).expect("deserialization should work");
 
         let aux_val = AuxVarCopy::new_keep_attrs("day", "day of year", true)
             .with_attr_override("units", "Julian day")
             .with_attr_override("description", "1-based day of year")
-            .with_attr_remove("vmin")
-            .with_attr_remove("vmax");
+            .with_attr_override("vmin", AttrCopy::Omit)
+            .with_attr_override("vmax", AttrCopy::Omit);
 
         assert_eq!(aux_de, aux_val);
+    }
+
+    #[test]
+    fn test_de_aux_var_table() {
+        let toml_str = r#"private_name = "day"
+        long_name = "day of year"
+        [attr_overrides]
+        precision = { omit = true, value = "bob" }
+        "#;
+        let err = toml::from_str::<AuxVarCopy>(toml_str)
+            .expect_err("deserialization of invalid attribute override table should fail");
+        assert_eq!(err.to_string(), "TOML parse error at line 3, column 9\n  |\n3 |         [attr_overrides]\n  |         ^^^^^^^^^^^^^^^^\nInvalid attribute override table for precision: cannot combine 'omit = true' with 'value = ...'\n\n")
     }
 
     #[test]

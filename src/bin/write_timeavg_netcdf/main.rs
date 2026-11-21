@@ -3,11 +3,17 @@ use std::{path::PathBuf, process::ExitCode};
 use clap::Parser;
 use clap_verbosity_flag::{InfoLevel, Verbosity};
 use ggg_rs::logging::init_logging;
+use itertools::Itertools;
+
+use crate::{average_site::read_l2::bin_def_from_gas, data_structures::Gas};
 
 mod average_site;
 #[cfg(test)]
 mod common_test;
+mod compare;
+mod daily_files;
 mod data_structures;
+mod release;
 mod station_ids;
 
 fn main() -> ExitCode {
@@ -17,6 +23,9 @@ fn main() -> ExitCode {
 
     let res = match clargs.command {
         Subcommand::AvgSite(avg_site_cli) => avg_site_cli.driver(),
+        Subcommand::Daily(daily_cli) => daily_cli.driver(),
+        Subcommand::Release(release_cli) => release_cli.driver(),
+        Subcommand::Compare(compare_cli) => compare_cli.driver(),
     };
 
     match res {
@@ -40,8 +49,12 @@ struct Cli {
 #[derive(Debug, Clone, clap::Subcommand)]
 enum Subcommand {
     AvgSite(AvgSiteCli),
+    Daily(DailyFileCli),
+    Release(ReleaseCli),
+    Compare(CompareCli),
 }
 
+/// Convert public or private L2 TCCON netCDF files to per-site time-averaged files.
 #[derive(Debug, Clone, clap::Args)]
 struct AvgSiteCli {
     /// The netCDF file containing the data from individual
@@ -58,14 +71,21 @@ struct AvgSiteCli {
     /// The width of the time bins in minutes.
     #[clap(short = 'm', long, default_value_t = 30)]
     time_bin_minutes: u32,
+
+    /// Control which gases to average, repeat to include multiple gases.
+    #[clap(short = 'g', long, default_values_t = vec![Gas::CO2, Gas::CH4])]
+    gas: Vec<Gas>,
 }
 
 impl AvgSiteCli {
     fn driver(&self) -> error_stack::Result<(), CliError> {
+        let gas_defs = self.gas.iter().map(|g| bin_def_from_gas(*g)).collect_vec();
         average_site::average_site_driver(
             &self.level2_file,
             self.get_timeavg_file()?.as_path(),
+            &gas_defs,
             self.get_time_bin(),
+            None,
         )
     }
 
@@ -99,6 +119,107 @@ impl AvgSiteCli {
 
     fn get_time_bin(&self) -> chrono::Duration {
         chrono::Duration::minutes(self.time_bin_minutes as i64)
+    }
+}
+
+/// Reorganize per-site time-averaged files into per-day files.
+#[derive(Debug, Clone, clap::Args)]
+struct DailyFileCli {
+    /// The per-site averaged files; the result of the avg-site subcommand.
+    average_files: Vec<PathBuf>,
+
+    /// Which directory to write the daily files into
+    #[clap(long, short = 'o', default_value = ".")]
+    output_dir: PathBuf,
+
+    /// Which gases to process. If any input file is missing the requisite
+    /// group, that is an error.
+    #[clap(long, short = 'g', default_values_t = vec![Gas::CO2, Gas::CH4])]
+    gases: Vec<Gas>,
+
+    /// Date to start processing on or after. If the earliest date in the files
+    /// is after this date, processing will start on that date.
+    #[clap(long, short = 's')]
+    start_date: Option<chrono::NaiveDate>,
+
+    /// Date to stop processing on or before. If the latest date in the files
+    /// is before this date, processing will stop on that date.
+    #[clap(long, short = 'e')]
+    end_date: Option<chrono::NaiveDate>,
+
+    /// By default, files with no data are not written. Pass this flag to
+    /// include them in the output.
+    #[clap(long)]
+    write_empty: bool,
+
+    /// Do not write out the citations.bib file. This file requires making a
+    /// request to crosscite.org, so if you are running in an environment
+    /// where HTTP requests are not allowed, use this to disable writing that file.
+    #[clap(long, short = 'b')]
+    no_include_bib_file: bool,
+}
+
+impl DailyFileCli {
+    fn driver(&self) -> error_stack::Result<(), CliError> {
+        daily_files::daily_files_driver(
+            &self.average_files,
+            &self.output_dir,
+            &self.gases,
+            self.start_date,
+            self.end_date,
+            self.write_empty,
+            !self.no_include_bib_file,
+        )
+    }
+}
+
+/// Generate a release of the time averaged files with a citable DOI
+#[derive(Debug, Clone, clap::Args)]
+pub(crate) struct ReleaseCli {
+    /// The directory containing the daily .nc4 files and their citations.json file.
+    source_dir: PathBuf,
+
+    /// The directory where the output tgz and metadata file will be written.
+    dest_dir: PathBuf,
+
+    /// The revision number to use in the DOI, filenames, etc. Must start with "R".
+    /// Usually, this is a date in YYYYMMDD format, e.g. "R20261103". If omitted,
+    /// it is given the current date.
+    #[clap(long, short = 'r')]
+    revision: Option<String>,
+
+    /// The DOI at which this release will be hosted. Must start with "10.".
+    #[clap(long, short = 'd')]
+    doi: Option<String>,
+}
+
+impl ReleaseCli {
+    fn driver(self) -> error_stack::Result<(), CliError> {
+        release::release_driver(&self.source_dir, &self.dest_dir, self.revision, self.doi)
+    }
+}
+
+/// Compare two sets of daily files, checking present obs. IDs and column values.
+#[derive(Debug, Clone, clap::Args)]
+pub(crate) struct CompareCli {
+    /// Directory containing the previous "tccon_timeavg_*.nc4" files.
+    prev_dir: PathBuf,
+
+    /// Directory containing the new "tccon_timeavg_*.nc4" files.
+    new_dir: PathBuf,
+
+    /// Where to write the report files.
+    #[clap(short = 'r', long, default_value = ".")]
+    report_dir: PathBuf,
+
+    /// Control which gases to check, repeat to include multiple gases.
+    #[clap(short = 'g', long, default_values_t = vec![Gas::CO2, Gas::CH4])]
+    gas: Vec<Gas>,
+}
+
+impl CompareCli {
+    fn driver(self) -> error_stack::Result<(), CliError> {
+        compare::compare_driver(&self.prev_dir, &self.new_dir, &self.report_dir, &self.gas)
     }
 }
 

@@ -1,0 +1,5 @@
+error: `axis` has no effect on inferred Vec fields
+ --> tests/ui/concat_axis_on_vec.rs:6:5
+  |
+6 |     values: Vec<u8>,
+  |     ^^^^^^

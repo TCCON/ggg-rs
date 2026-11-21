@@ -1,0 +1,5 @@
+error: `on_fill` requires an f32, f64, or i8–u64 element type, but the element type of `Flags` could not be determined — a type alias is opaque to the macro. Use a concrete `Vec<T>` or `Array<T, _>`, or drop the annotation.
+  --> tests/ui/nc_on_fill_error_on_type_alias.rs:10:5
+   |
+10 |     flags: Flags,
+   |     ^^^^^

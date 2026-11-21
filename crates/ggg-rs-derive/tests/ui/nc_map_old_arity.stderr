@@ -1,0 +1,31 @@
+error[E0277]: this `map(write = ...)` function does not have the expected signature `fn(&Self, &FieldTy, &str, &str) -> Out`
+  --> tests/ui/nc_map_old_arity.rs:11:46
+   |
+ 9 | #[derive(WriteNetcdf)]
+   |          ----------- required by a bound introduced by this call
+10 | struct Bad {
+11 |     #[netcdf(dimensions("time"), map(write = scale), kind = "values")]
+   |                                              ^^^^^ `map(write = ...)` expects `fn(&Self, &FieldTy, &str, &str) -> Out`
+   |
+   = help: the trait `__ArityMapWrite<_, _>` is not implemented for fn item `for<'a, 'b, 'c> fn(&'a Bad, &'b Vec<f64>, &'c str) -> Vec<f64> {scale}`
+note: required by a bound in `__check_MapWrite`
+  --> tests/ui/nc_map_old_arity.rs:9:10
+   |
+ 9 | #[derive(WriteNetcdf)]
+   |          ^^^^^^^^^^^ required by this bound in `__check_MapWrite`
+   = note: this error originates in the derive macro `WriteNetcdf` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0061]: this function takes 3 arguments but 4 arguments were supplied
+  --> tests/ui/nc_map_old_arity.rs:11:46
+   |
+ 9 | #[derive(WriteNetcdf)]
+   |          ----------- unexpected argument #4 of type `&'static str`
+10 | struct Bad {
+11 |     #[netcdf(dimensions("time"), map(write = scale), kind = "values")]
+   |                                              ^^^^^
+   |
+note: function defined here
+  --> tests/ui/nc_map_old_arity.rs:5:4
+   |
+ 5 | fn scale(_d: &Bad, v: &Vec<f64>, _n: &str) -> Vec<f64> {
+   |    ^^^^^

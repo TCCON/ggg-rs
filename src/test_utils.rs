@@ -1,18 +1,21 @@
-#[cfg(feature = "netcdf")]
-use std::{eprintln, fmt::Debug, format, ops::Mul, str::FromStr};
+use std::io::Read;
+// #[cfg(feature = "netcdf")]
+use std::{fmt::Debug, ops::Mul, str::FromStr};
 use std::{
     fmt::Display,
     io::{BufRead, BufReader, Lines},
     path::{Path, PathBuf},
-    process::{Command, Stdio},
 };
 
-#[cfg(feature = "netcdf")]
 use approx::AbsDiffEq;
 #[cfg(feature = "netcdf")]
 use netcdf::NcTypeDescriptor;
 
+#[cfg(feature = "netcdf")]
+use crate::nc_utils::{GetNcAttr, GetNcVar};
+
 static INIT_LOGGING: std::sync::Once = std::sync::Once::new();
+pub const NCDF_F32_DEFAULT_FILL: f32 = 9.969209716543442e30;
 
 #[allow(dead_code)]
 pub fn test_data_dir() -> PathBuf {
@@ -23,8 +26,10 @@ pub fn test_data_dir() -> PathBuf {
 /// Set up the log4rs backend to interact properly with Cargo's test capture mechanism
 ///
 /// Tests should call this to set up logging during their run, rather than relying on
-/// the normal [`crate::logging::init_logging`].
-pub fn init_test_logging() {
+/// the normal [`crate::logging::init_logging`]. Use `level = None` for the default
+/// log level (debug).
+pub fn init_test_logging(level: Option<log::LevelFilter>) {
+    let level = level.unwrap_or(log::LevelFilter::Debug);
     INIT_LOGGING.call_once(|| {
         let encoder = Box::new(log4rs::encode::pattern::PatternEncoder::new(
             crate::logging::LOG_PATTERN,
@@ -36,7 +41,7 @@ pub fn init_test_logging() {
             .build(
                 log4rs::config::Root::builder()
                     .appender("test")
-                    .build(log::LevelFilter::Debug),
+                    .build(level),
             )
             .expect("should be able to build test log4rs config");
         log4rs::init_config(config).expect("should be able to initialize log4rs logging for tests");
@@ -65,9 +70,20 @@ impl log4rs::append::Append for TestAppender {
 
 /// Test helper function to quickly create a UTC datetime.
 pub fn utc_dt_ymd(year: i32, month: u32, day: u32) -> chrono::DateTime<chrono::Utc> {
+    utc_dt_ymdhms(year, month, day, 0, 0, 0)
+}
+
+pub fn utc_dt_ymdhms(
+    year: i32,
+    month: u32,
+    day: u32,
+    hour: u32,
+    minute: u32,
+    second: u32,
+) -> chrono::DateTime<chrono::Utc> {
     chrono::NaiveDate::from_ymd_opt(year, month, day)
         .unwrap()
-        .and_hms_opt(0, 0, 0)
+        .and_hms_opt(hour, minute, second)
         .unwrap()
         .and_utc()
 }
@@ -81,19 +97,39 @@ pub fn remove_file_if_exists(file: &Path) -> std::io::Result<()> {
 }
 
 pub fn compare_output_text_files(expected_dir: &Path, output_dir: &Path, out_file_name: &str) {
-    let mut child = Command::new("diff")
-        .arg("-q")
-        .arg(expected_dir.join(out_file_name))
-        .arg(output_dir.join(out_file_name))
-        .stdout(Stdio::null())
-        .spawn()
-        .expect("Spawning diff process should not fail");
+    let expected_file = expected_dir.join(out_file_name);
+    let output_file = output_dir.join(out_file_name);
 
-    let is_same = child
-        .wait()
-        .expect("Waiting for diff process should not fail")
-        .success();
-    assert!(is_same, "{out_file_name} did not match expected.");
+    // Could do this with block reads, but going to assume that test text
+    // files are not big enough for that to be worth it.
+    let mut expected_bytes = vec![];
+    std::fs::File::open(&expected_file)
+        .expect(&format!(
+            "should be able to open the expected file {}",
+            expected_file.display()
+        ))
+        .read_to_end(&mut expected_bytes)
+        .expect(&format!(
+            "should be able to read the expected file {}",
+            expected_file.display()
+        ));
+
+    let mut output_bytes = vec![];
+    std::fs::File::open(&output_file)
+        .expect(&format!(
+            "should be able to open the output file {}",
+            output_file.display()
+        ))
+        .read_to_end(&mut output_bytes)
+        .expect(&format!(
+            "should be able to read the output file {}",
+            output_file.display()
+        ));
+
+    assert!(
+        expected_bytes == output_bytes,
+        "{out_file_name} did not match expected"
+    );
 }
 
 /// Extension trait for `Result` types to aid test debugging.
@@ -118,36 +154,6 @@ impl<T, E: std::fmt::Debug + Display> TestResult<T> for Result<T, E> {
             }
         }
     }
-}
-
-/// Compare two arrays with [`approx::relative_eq!`].
-///
-/// # Parameters
-/// - The first parameter is the array with the expected values
-/// - The second parameter is the array with the actual values
-/// - The third parameter is the max relative different. [`approx`]
-///   will compare the absolute differences to the larger value times
-///   this multiplier.
-///
-/// # Side effects
-/// If the two arrays do not agree to within the default EPSILON for their
-/// type and the given relative error, this will panic, display the two
-/// arrays' debug representations, and save them as Numpy binaries to
-/// the current directory.
-macro_rules! assert_arrays_rel_eq {
-    ($expected:expr, $actual:expr, $max_relative:expr) => {
-        if !approx::relative_eq!($actual, $expected, max_relative = $max_relative) {
-
-            // Dump to disk (ignoring Result so it doesn't mask the panic)
-            let _ = ndarray_npy::write_npy("debug_actual.npy", $actual);
-            let _ = ndarray_npy::write_npy("debug_expected.npy", $expected);
-
-            panic!(
-                "Array assertion failed!\nleft = {:?}\nright = {:?} \nActual and Expected arrays have been dumped to 'debug_actual.npy' and 'debug_expected.npy', access with numpy.load.",
-                $actual, $expected
-            );
-        }
-    };
 }
 
 /// Create a structure and verify its fields are contained in another struct.
@@ -291,28 +297,54 @@ macro_rules! test_struct_check_field_types {
 /// [`compare_to_netcdf_values_eq`] - for integer arrays
 /// [`compare_to_netcdf_quantities`] - for [`uom::si::Quantity`] arrays
 #[cfg(feature = "netcdf")]
-pub fn compare_to_netcdf_values_approx<T, D>(
-    expected_ds: &netcdf::File,
+pub fn compare_to_netcdf_values_approx<T, D, O>(
+    expected_ds: O,
     nc_var: &str,
     data: &ndarray::Array<T, D>,
 ) where
     T: Copy
         + NcTypeDescriptor
         + approx::RelativeEq
+        + num_traits::Float
         + Debug
         + ndarray_npy::WritableElement
         + From<f32>,
-    <T as approx::AbsDiffEq>::Epsilon: Clone + From<f32>,
-    D: ndarray::Dimension,
+    <T as approx::AbsDiffEq>::Epsilon: Copy + Debug + From<f32> + Into<T>,
+    D: ndarray::Dimension + Copy,
+    O: GetNcVar,
 {
-    let expected_data = crate::nc_utils::get_var_data::<T, D>(expected_ds, nc_var).expect(
+    // The relative tolerance of 1e-7 was selected for timeavg read_l2 tests of the CO2 prior
+    let rtol: <T as AbsDiffEq>::Epsilon = 1e-7.into();
+    compare_to_netcdf_values_approx_with_tolerance::<_, _, O>(expected_ds, nc_var, data, rtol);
+}
+
+/// Like [`compare_to_netcdf_values_approx`], but with a custom tolerance.
+///
+/// Don't let the trait bounds scare you, `rtol` should just be the same type as contained
+/// in `data` - `f32` or `f64`.
+#[cfg(feature = "netcdf")]
+pub fn compare_to_netcdf_values_approx_with_tolerance<T, D, O>(
+    expected_ds: O,
+    nc_var: &str,
+    data: &ndarray::Array<T, D>,
+    rtol: <T as AbsDiffEq>::Epsilon,
+) where
+    T: Copy
+        + NcTypeDescriptor
+        + approx::RelativeEq
+        + num_traits::Float
+        + Debug
+        + ndarray_npy::WritableElement
+        + From<f32>,
+    <T as approx::AbsDiffEq>::Epsilon: Copy + Debug + From<f32> + Into<T>,
+    D: ndarray::Dimension + Copy,
+    O: GetNcVar,
+{
+    let expected_data = crate::nc_utils::get_var_data::<T, D, O>(expected_ds, nc_var).expect(
         &format!("Could not get variable '{nc_var}' from the validation netCDF file"),
     );
     eprintln!("Checking against {nc_var}");
-
-    // The relative tolerance of 1e-7 was selected for timeavg read_l2 tests of the CO2 prior
-    let rtol: <T as AbsDiffEq>::Epsilon = 1e-7.into();
-    assert_arrays_rel_eq!(&expected_data, data, rtol)
+    assert_arrays_allclose(&expected_data, data, rtol);
 }
 
 /// Compare an array of plain numbers to expected values in a [`netcdf::File`].
@@ -324,15 +356,16 @@ pub fn compare_to_netcdf_values_approx<T, D>(
 /// [`compare_to_netcdf_values_approx`] - for float arrays
 /// [`compare_to_netcdf_quantities`] - for [`uom::si::Quantity`] arrays
 #[cfg(feature = "netcdf")]
-pub fn compare_to_netcdf_values_eq<T, D>(
-    expected_ds: &netcdf::File,
+pub fn compare_to_netcdf_values_eq<T, D, O>(
+    expected_ds: O,
     nc_var: &str,
     data: &ndarray::Array<T, D>,
 ) where
     T: Copy + NcTypeDescriptor + Eq + Debug,
     D: ndarray::Dimension,
+    O: GetNcVar,
 {
-    let expected_data = crate::nc_utils::get_var_data::<T, D>(expected_ds, nc_var).expect(
+    let expected_data = crate::nc_utils::get_var_data::<T, D, O>(expected_ds, nc_var).expect(
         &format!("Could not get variable '{nc_var}' from the validation netCDF file"),
     );
     eprintln!("Checking against {nc_var}");
@@ -355,21 +388,114 @@ pub fn compare_to_netcdf_quantities<T, D, Q>(
     data: &ndarray::ArrayRef<Q, D>,
 ) where
     T: Copy + NcTypeDescriptor,
-    D: ndarray::Dimension,
+    D: ndarray::Dimension + Copy,
     Q: FromStr<Err = uom::str::ParseQuantityError>
         + Copy
         + Mul<T, Output = Q>
         + crate::array_ops::FloatConversion,
 {
-    let expected_data = crate::nc_utils::get_var_data_quantity::<T, D, Q>(expected_ds, nc_var)
+    // The relative tolerance of 1e-7 was selected for timeavg read_l2 tests of the CO2 prior
+    compare_to_netcdf_quantities_with_tolerance(expected_ds, nc_var, &data, 1e-7);
+}
+
+/// Like [`compare_to_netcdf_quantities`], but with an option for a custom tolerance.
+#[cfg(feature = "netcdf")]
+pub fn compare_to_netcdf_quantities_with_tolerance<T, D, Q, O>(
+    expected_ds: O,
+    nc_var: &str,
+    data: &ndarray::ArrayRef<Q, D>,
+    rtol: f64,
+) where
+    T: Copy + NcTypeDescriptor,
+    D: ndarray::Dimension + Copy,
+    Q: FromStr<Err = uom::str::ParseQuantityError>
+        + Copy
+        + Mul<T, Output = Q>
+        + crate::array_ops::FloatConversion,
+    O: GetNcVar,
+{
+    let expected_data = crate::nc_utils::get_var_data_quantity::<T, D, Q, O>(expected_ds, nc_var)
         .expect(&format!(
             "Could not get variable '{nc_var}' from the validation netCDF file"
         ));
     let expected_data = expected_data.mapv(|q| q.into_f64());
     let data = data.mapv(|q| q.into_f64());
-    eprintln!("Checking against {nc_var}");
-    // The relative tolerance of 1e-7 was selected for timeavg read_l2 tests of the CO2 prior
-    assert_arrays_rel_eq!(&expected_data, &data, 1e-7)
+    eprintln!("Checking against {nc_var} with rtol = {rtol}");
+    // assert_arrays_rel_eq!(&expected_data, &data, tol)
+    assert_arrays_allclose(&expected_data, &data, rtol);
+}
+
+/// Assert that two arrays (usually of floats) are within some relative tolerance.
+///
+/// This function will also log the unequal elements to stderr (through [`log::debug!`],
+/// so be sure to call [`init_test_logging`] if you want to see that) with a reproduction
+/// of the [`approx`] crate's logic to help understand exactly why it fails. The panic
+/// message will list the indices that were not equal, the values, and the difference. This
+/// also saves the two arrays out in a format `numpy` can read, if further debugging is needed.
+fn assert_arrays_allclose<T, D>(
+    expected: &ndarray::ArrayRef<T, D>,
+    actual: &ndarray::ArrayRef<T, D>,
+    rtol: <T as AbsDiffEq>::Epsilon,
+) where
+    T: approx::RelativeEq + num_traits::Float + ndarray_npy::WritableElement,
+    <T as std::ops::Sub<T>>::Output: Debug,
+    <T as AbsDiffEq>::Epsilon: Into<T> + Copy + Debug,
+    D: ndarray::Dimension + Copy,
+    D::Pattern: Debug,
+{
+    let mut uneq = vec![];
+    ndarray::Zip::indexed(expected)
+        .and(actual)
+        .for_each(|idx, ex, ac| {
+            if ex.relative_ne(ac, T::default_epsilon(), rtol.clone()) {
+                // Debugging: mimic the relative_eq implementation (https://docs.rs/approx/latest/src/approx/relative_eq.rs.html#38)
+                // to understand where the difference is coming from
+                log::debug!("At index = {idx:?}");
+                let abs_diff = (*ac - *ex).abs();
+                let abs_ac = (*ac).abs();
+                let abs_ex = (*ex).abs();
+                let largest = if abs_ac > abs_ex { abs_ac } else { abs_ex };
+                log::debug!(
+                    "Abs diff = {abs_diff:?} vs. epsilon = {:?}, pass = {}",
+                    T::default_epsilon(),
+                    abs_diff < T::default_epsilon().into()
+                );
+                log::debug!(
+                    "Max rel diff = {:?}, largest = {largest:?}, rtol = {rtol:?}, pass = {}",
+                    largest * rtol.into(),
+                    abs_diff < largest * rtol.into()
+                );
+                // End debugging
+                uneq.push((idx, ex, ac, *ac - *ex))
+            }
+        });
+    if !uneq.is_empty() {
+        // Dump to disk (ignoring Result so it doesn't mask the panic)
+        let _ = ndarray_npy::write_npy("debug_actual.npy", actual);
+        let _ = ndarray_npy::write_npy("debug_expected.npy", expected);
+        panic!("Arrays do not match. The unequal indices, expected values, actual values, and differences, are:\n\t{uneq:?}\nActual and Expected arrays have been dumped to 'debug_actual.npy' and 'debug_expected.npy', access with numpy.load.")
+    }
+}
+
+/// Compare the values of one or more netCDF attributes between two objects that
+/// can both have attributes. Usually this will be an expected dataset, group,
+/// or variable and the output of a test.
+#[cfg(feature = "netcdf")]
+pub fn compare_nc_attrs<A: GetNcAttr, B: GetNcAttr>(
+    expected: A,
+    test_output: B,
+    attributes: &[&str],
+) {
+    for attr in attributes {
+        let val_a = expected.get_attr_val(attr).expect(&format!(
+            "must be able to get expected attribute value for {attr}"
+        ));
+        let val_b = test_output.get_attr_val(attr).expect(&format!(
+            "must be able to get output attribute value for {attr}"
+        ));
+
+        assert_eq!(val_a, val_b, "values for attribute '{attr}' differ");
+    }
 }
 
 /// Iterate over fenced blocks in a Markdown file.
@@ -398,7 +524,6 @@ pub fn compare_to_netcdf_quantities<T, D, Q>(
 /// ...
 /// ```
 /// ````
-
 pub fn iter_fenced_blocks<P, F, I>(tag: &str, files: I) -> FencedBlocks<P, F>
 where
     P: AsRef<Path>,

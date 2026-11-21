@@ -1,0 +1,5 @@
+error: `attr` has no effect with `skip(write)`, since `WriteNetcdf` never sees this field
+ --> tests/ui/nc_skip_write_with_attr.rs:7:5
+  |
+7 |     values: Vec<f64>,
+  |     ^^^^^^

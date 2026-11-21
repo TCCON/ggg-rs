@@ -1,0 +1,15 @@
+error[E0599]: no method named `write_netcdf_context` found for struct `Data` in the current scope
+  --> tests/ui/nc_context_read_only_no_write_ctx.rs:15:18
+   |
+ 8 | struct Data {
+   | ----------- method `write_netcdf_context` not found for this struct
+...
+15 |     let _ = data.write_netcdf_context(&mut file.root_mut().unwrap(), &Ctx);
+   |                  ^^^^^^^^^^^^^^^^^^^^
+   |
+help: there is a method `write_netcdf` with a similar name, but with different arguments
+  --> tests/ui/nc_context_read_only_no_write_ctx.rs:6:10
+   |
+ 6 | #[derive(WriteNetcdf)]
+   |          ^^^^^^^^^^^
+   = note: this error originates in the derive macro `WriteNetcdf` (in Nightly builds, run with -Z macro-backtrace for more info)

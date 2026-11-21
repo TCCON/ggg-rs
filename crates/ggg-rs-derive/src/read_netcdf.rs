@@ -1,0 +1,1173 @@
+use darling::{FromDeriveInput, FromField, ast};
+use proc_macro::TokenStream;
+use proc_macro2::TokenStream as TokenStream2;
+use quote::quote;
+
+use crate::common_netcdf::{
+    ArityChecks, AttrsSpec, CheckedFn, ContainerOnFill, ContextSpec, CustomSpec, DimList,
+    Direction, FloatTy, MapFns, MapSpec, NcKind, OnFill, SkipSpec, UnpackSpec, apply_rename_all,
+    float_element_type, infer_kind, is_fill_checkable_int, kind_from_str, nc_name,
+    not_fill_checkable_message, not_float_message, resolve_unpack, validate_dims,
+};
+
+/// What unpacking a single field needs, once the container default, the field
+/// override, and the field's element type have all been taken into account.
+/// `None` rather than this struct means "emit no unpacking code at all".
+#[derive(Debug, Clone, Copy)]
+struct UnpackPlan {
+    float_ty: FloatTy,
+    scale: bool,
+    offset: bool,
+    on_fill: OnFill,
+}
+
+/// What a field needs done to its values after they are read, beyond the read
+/// itself. `None` rather than this enum means "emit nothing".
+#[derive(Debug, Clone, Copy)]
+enum ValuePlan {
+    /// A float field: scale, offset, and/or mask fill values.
+    Float(UnpackPlan),
+    /// An integer field declared `on_fill = "error"`: fail on a fill or
+    /// missing value. Integers have no other fill handling, since they cannot
+    /// hold NaN and "keep"/"ignore" both leave the value alone.
+    IntFillCheck,
+}
+
+pub(crate) fn expand(input: TokenStream) -> TokenStream {
+    let derive_input = syn::parse_macro_input!(input as syn::DeriveInput);
+    let parsed = match ReadNetcdfInput::from_derive_input(&derive_input) {
+        Ok(p) => p,
+        Err(e) => return e.write_errors().into(),
+    };
+    let name = &parsed.ident;
+    let rename_all = parsed.rename_all.as_deref();
+    let fields = parsed
+        .data
+        .take_struct()
+        .expect("darling's supports(struct_named) guarantees this")
+        .fields;
+
+    // Validate `rename_all` once up front (with an empty field name) so an
+    // unknown rule is reported even on an empty struct.
+    let mut errors = darling::Error::accumulator();
+    if let Some(rule) = rename_all
+        && let Err(e) = apply_rename_all("x", rule)
+    {
+        errors.push(e);
+    }
+
+    let mut helpers = HelpersNeeded::default();
+    let mut field_blocks: Vec<TokenStream2> = Vec::new();
+    let mut field_names: Vec<syn::Ident> = Vec::new();
+    // With a context, every `custom` function takes it as a final argument.
+    let context = parsed
+        .context
+        .as_ref()
+        .and_then(|c| c.for_direction(Direction::Read));
+    let ctx_arg = context.map(|_| quote!(, __ctx));
+    let mut arity = ArityChecks::new(parsed.context.as_ref());
+
+    for f in &fields {
+        let fieldname = f.ident.as_ref().unwrap().clone();
+
+        // Unlike writing, every field has to be initialized to build `Self`, so
+        // a skipped field falls back to `Default` instead of dropping out of the
+        // generated code entirely.
+        if let Some(skip) = f.skip
+            && skip.skips(Direction::Read)
+        {
+            errors.handle(resolve_skip(f, skip));
+            field_blocks.push(quote! {
+                let #fieldname = ::core::default::Default::default();
+            });
+            field_names.push(fieldname);
+            continue;
+        }
+
+        // A `custom` field bypasses all the derived machinery: no dimension
+        // check, no unpacking, just a call to the user's function.
+        match errors.handle(resolve_custom(f)) {
+            None => continue,
+            Some(Some(read_fn)) => {
+                let Some(name) =
+                    errors.handle(nc_name(&fieldname, f.rename.as_deref(), rename_all))
+                else {
+                    continue;
+                };
+                let field_str = fieldname.to_string();
+                let read_fn = arity.checked(CheckedFn::CustomRead, read_fn);
+                field_blocks.push(quote! {
+                    let #fieldname = #read_fn(#field_str, #name, grp #ctx_arg)?;
+                });
+                field_names.push(fieldname);
+                continue;
+            }
+            Some(None) => {}
+        }
+
+        // Resolve the read strategy and the netCDF name, collecting errors so
+        // every problem is reported in one compile.
+        let Some((read_kind, map_fns, value_plan)) =
+            errors.handle(resolve_field(f, parsed.unpack.as_ref(), parsed.on_fill))
+        else {
+            continue;
+        };
+
+        let Some(name) = errors.handle(nc_name(&fieldname, f.rename.as_deref(), rename_all)) else {
+            continue;
+        };
+
+        helpers.set_needed_helpers_for_kind(read_kind);
+        if map_fns.map_units.is_some() {
+            helpers.get_units = true;
+        }
+        if f.dimensions.is_some() {
+            helpers.check_dims = true;
+        }
+        match value_plan {
+            Some(ValuePlan::Float(plan)) => helpers.set_needed_unpack(plan.float_ty),
+            Some(ValuePlan::IntFillCheck) => helpers.int_fill = true,
+            None => {}
+        }
+        field_blocks.push(field_block(
+            f,
+            read_kind,
+            &name,
+            map_fns,
+            value_plan,
+            ctx_arg.as_ref(),
+            &mut arity,
+        ));
+        field_names.push(fieldname);
+    }
+
+    if let Err(e) = errors.finish() {
+        return e.write_errors().into();
+    }
+
+    let mut helper_fns = helpers.tokens();
+    helper_fns.extend(arity.defs());
+    let (impl_generics, ty_generics, where_clause) = parsed.generics.split_for_impl();
+    let methods = match context {
+        None => quote! {
+            /// Read this struct's fields from netCDF variables or attributes under `grp`.
+            /// Pass a file root (`File::root()`) or a subgroup.
+            pub fn read_netcdf(grp: &::netcdf::Group<'_>) -> ::netcdf::Result<Self> {
+                #helper_fns
+                #(#field_blocks)*
+                Ok(Self { #(#field_names),* })
+            }
+        },
+        Some(ctx) => {
+            let ctx_ty = &ctx.ty;
+            // Rebind `ctx` before the field blocks run: they bind each field
+            // name as a local, and a field called `ctx` would otherwise shadow it.
+            let with_ctx = quote! {
+                /// Read this struct's fields from netCDF variables or attributes
+                /// under `grp`, passing `ctx` to each `custom` read function.
+                /// Pass a file root (`File::root()`) or a subgroup.
+                pub fn read_netcdf_context(
+                    grp: &::netcdf::Group<'_>,
+                    ctx: &#ctx_ty,
+                ) -> ::netcdf::Result<Self> {
+                    let __ctx = ctx;
+                    let _ = __ctx;
+                    #helper_fns
+                    #(#field_blocks)*
+                    Ok(Self { #(#field_names),* })
+                }
+            };
+            let plain = ctx.default.then(|| {
+                let default_ctx = ctx.default_expr();
+                quote! {
+                    /// Like `read_netcdf_context`, with the context's
+                    /// `Default::default()`.
+                    pub fn read_netcdf(grp: &::netcdf::Group<'_>) -> ::netcdf::Result<Self> {
+                        Self::read_netcdf_context(grp, #default_ctx)
+                    }
+                }
+            });
+            quote! { #with_ctx #plain }
+        }
+    };
+
+    let expanded = quote! {
+        impl #impl_generics #name #ty_generics #where_clause {
+            #methods
+        }
+    };
+
+    TokenStream::from(expanded)
+}
+
+#[derive(FromDeriveInput)]
+#[darling(attributes(netcdf), supports(struct_named))]
+struct ReadNetcdfInput {
+    ident: syn::Ident,
+    generics: syn::Generics,
+    data: ast::Data<darling::util::Ignored, ReadNetcdfField>,
+
+    /// serde-style case convention applied to every field's netCDF name.
+    #[darling(default)]
+    rename_all: Option<String>,
+
+    /// Default unpacking behaviour for every field: `unpack` / `unpack = false` /
+    /// `unpack(scale = .., offset = ..)`. Individual fields can override it.
+    /// Unpacking is on by default, so this is only needed to turn something off.
+    #[darling(default)]
+    unpack: Option<UnpackSpec>,
+
+    /// Default handling of fill and missing values: `on_fill = "keep"` /
+    /// `"ignore"` / `"error"` for every field, or
+    /// `on_fill(float = "...", int = "...")` to set float and integer fields
+    /// separately. Floats default to `"nan"`, integers to `"keep"`.
+    #[darling(default)]
+    on_fill: Option<ContainerOnFill>,
+
+    /// A run-time value passed to every `custom` read function as its last
+    /// argument; see [`ContextSpec`] for the forms. Only the read half is used.
+    #[darling(default)]
+    context: Option<ContextSpec>,
+
+    /// Accepted and ignored: `describe` is a `WriteNetcdf` option. Both derives
+    /// read the same `netcdf` attribute, so each has to tolerate the other's
+    /// keys — otherwise a struct deriving both could not be annotated at all.
+    /// Declaring them explicitly rather than using `allow_unknown_fields` keeps
+    /// genuine typos an error.
+    #[darling(default)]
+    #[allow(dead_code)]
+    describe: Option<darling::util::Ignored>,
+
+    /// Accepted and ignored: group-attribute functions are a `WriteNetcdf`
+    /// option. Parsed with the real type so a malformed `attrs(...)` is still
+    /// reported on a struct that only derives `ReadNetcdf`.
+    #[darling(default, multiple, rename = "attrs")]
+    #[allow(dead_code)]
+    attrs_fns: Vec<AttrsSpec>,
+}
+
+#[derive(FromField)]
+#[darling(attributes(netcdf), forward_attrs(doc))]
+struct ReadNetcdfField {
+    ident: Option<syn::Ident>,
+    ty: syn::Type,
+
+    /// Do not read this field, filling it with `Default` instead: `skip` or
+    /// `skip(read)` (`skip(write)` reads it normally). See [`SkipSpec`].
+    #[darling(default)]
+    skip: Option<SkipSpec>,
+
+    /// Override the netCDF name for this field (takes precedence over the
+    /// container-level `rename_all`).
+    #[darling(default)]
+    rename: Option<String>,
+
+    /// Force a read strategy: `"values"`, `"array"`, or `"string"`. Required
+    /// when `map`/`map_units` is present (the output type can't be inferred).
+    #[darling(default)]
+    kind: Option<String>,
+
+    /// Expected dimension names for this variable, not checked if omitted
+    #[darling(default)]
+    dimensions: Option<DimList>,
+
+    /// Read the field from a *group attribute* instead of a variable.
+    #[darling(default)]
+    attribute: bool,
+
+    /// Map the field value after reading. The direction is mandatory, since
+    /// writing needs a different function: `map(read = path::to::fn)`, where the
+    /// function is `fn(NcTy, &str, &str, &netcdf::Variable<'_>) -> netcdf::Result<Out>`.
+    /// Its arguments are the value read from the netCDF file (by value), the
+    /// Rust field name, the netCDF name, and the variable, plus a final `&Ctx`
+    /// with a read context.
+    /// Reading is fallible — the data comes from a file this program did not
+    /// necessarily write — so the function returns a `netcdf::Result`. A
+    /// `write = ...` may also be present for `WriteNetcdf`; it is ignored here.
+    #[darling(default)]
+    map: Option<MapSpec>,
+
+    /// Like `map`, but the read function also accepts the value of the `units`
+    /// attribute, after the variable:
+    /// `fn(NcTy, &str, &str, &netcdf::Variable<'_>, Option<&str>) -> netcdf::Result<Out>`.
+    /// If the variable has no `units`, that argument is `None`.
+    #[darling(default)]
+    map_units: Option<MapSpec>,
+
+    /// Read the field with a user function instead of the derived helpers:
+    /// `custom(read = path::to::fn)`, where the function is
+    /// `fn(&str, &str, &netcdf::Group<'_>) -> netcdf::Result<FieldTy>`. Its
+    /// arguments are the Rust field name, the netCDF name (after
+    /// `rename`/`rename_all`), and the group to read from. A `write = ...` may
+    /// also be present for `WriteNetcdf`; it is ignored here.
+    #[darling(default)]
+    custom: Option<CustomSpec>,
+
+    /// Override the container's unpacking behaviour for this field. Replaces the
+    /// container setting wholesale rather than merging with it, the same way
+    /// `rename` replaces `rename_all`.
+    #[darling(default)]
+    unpack: Option<UnpackSpec>,
+
+    /// Override the container's fill/missing-value handling for this field.
+    #[darling(default)]
+    on_fill: Option<OnFill>,
+
+    /// Accepted and ignored: on read, `scale_factor` and `add_offset` come from
+    /// the file, not from the annotation. Parsed with the real type rather than
+    /// `Ignored` so that a malformed `scale_offset(...)` is still reported even
+    /// on a struct that only derives `ReadNetcdf`. See `unpack` to control
+    /// whether the file's values are applied.
+    #[darling(default)]
+    #[allow(dead_code)]
+    scale_offset: Option<crate::common_netcdf::ScaleOffsetSpec>,
+
+    /// Accepted and ignored: `attr`, `describe`, and `no_describe` are
+    /// `WriteNetcdf` options. See the note on `ReadNetcdfInput::describe`.
+    #[darling(default, multiple, rename = "attr")]
+    #[allow(dead_code)]
+    var_attrs: Vec<darling::util::Ignored>,
+
+    /// Accepted and ignored, like `attr`. Parsed with the real type so a
+    /// malformed `attrs(...)` is still reported.
+    #[darling(default, multiple, rename = "attrs")]
+    #[allow(dead_code)]
+    attrs_fns: Vec<AttrsSpec>,
+
+    #[darling(default)]
+    #[allow(dead_code)]
+    describe: Option<darling::util::Ignored>,
+
+    #[darling(default)]
+    #[allow(dead_code)]
+    no_describe: bool,
+}
+
+#[derive(Debug, Default)]
+struct HelpersNeeded {
+    /// true if a field needs a helper to confirm that its dimensions
+    /// match what is expected
+    check_dims: bool,
+
+    /// true if a field needs a helper to read a vector of values
+    values: bool,
+
+    /// true if a field needs a helper to read an array of values
+    /// (possibly with multiple dimensions)
+    array: bool,
+
+    /// true if a field needs a helper to read a sequence of strings
+    /// into a vector
+    strings: bool,
+
+    /// true if a field needs a helper to read a scalar numeric value
+    scalar: bool,
+
+    /// true if a field needs a helper to read a single string value
+    string_scalar: bool,
+
+    /// true if a field needs a helper to be read from an attribute
+    attribute: bool,
+
+    /// true if we need to read a units attribute to pass to a map_units function.
+    get_units: bool,
+
+    /// true if some `f32` field applies scale/offset or checks for fill values
+    unpack_f32: bool,
+
+    /// true if some `f64` field does the same
+    unpack_f64: bool,
+
+    /// true if some integer field is declared `on_fill = "error"`
+    int_fill: bool,
+}
+
+impl HelpersNeeded {
+    /// Note that a field needs the unpack helper for its float type. The
+    /// `__OnFill` enum and the fill/missing lookups come along with it.
+    fn set_needed_unpack(&mut self, float_ty: FloatTy) {
+        match float_ty {
+            FloatTy::F32 => self.unpack_f32 = true,
+            FloatTy::F64 => self.unpack_f64 = true,
+        }
+    }
+
+    /// True if either unpack helper is in play, and therefore the shared
+    /// `__OnFill` enum and fill-value lookups need emitting too.
+    fn any_unpack(&self) -> bool {
+        self.unpack_f32 || self.unpack_f64
+    }
+
+    fn set_needed_helpers_for_kind(&mut self, read_kind: NcKind) {
+        match read_kind {
+            NcKind::Values => self.values = true,
+            NcKind::Array => self.array = true,
+            NcKind::StringScalar => self.string_scalar = true,
+            NcKind::StringVec => self.strings = true,
+            NcKind::Scalar => self.scalar = true,
+            NcKind::Attribute => self.attribute = true,
+        }
+    }
+
+    fn tokens(&self) -> TokenStream2 {
+        let mut out = TokenStream2::new();
+        // Tip: to help write/edit a function, make a regular function annotated with `#[cfg(test)]`
+        // so it resolved netcdf and ndarray, work on it outside the quote!, then paste it into the quote!.
+        // Alternatively, if this code is added in a test, the IDE will pick up error (but not autocomplete).
+        if self.check_dims {
+            out.extend(quote! {
+                fn __check_dims<'g>(
+                    g: &'g ::netcdf::Group<'_>,
+                    name: &str,
+                    dims: &[&str],
+                ) -> ::netcdf::Result<()> {
+                    let var = g
+                        .variable(name)
+                        .ok_or_else(|| ::netcdf::Error::NotFound(format!("variable: '{name}'")))?;
+
+                    let vardims: Vec<String> = var.dimensions().iter().map(|d| d.name()).collect();
+                    let matches = vardims.len() == dims.len() && vardims.iter().zip(dims).all(|(got, want)| got.as_str() == *want);
+                    if matches {
+                        Ok(())
+                    } else {
+                        let expected = dims.join(", ");
+                        let actual = vardims.join(", ");
+                        Err(::netcdf::Error::Str(format!(
+                            "Variable '{name}' had wrong dimension number or names: expected [{expected}], got [{actual}]"
+                        )))
+                    }
+                }
+            });
+        }
+        // The getters below only read. Applying `scale_factor` / `add_offset` and
+        // masking fill values is the job of the `__unpack_*` helpers, which are
+        // emitted only for float fields that need them. Keeping the two apart is
+        // what lets these stay at `T: NcTypeDescriptor + Copy`: an earlier version
+        // scaled in place here, which forced `MulAssign + AddAssign +
+        // TryFrom<AttributeValue>` onto every field of the same kind and silently
+        // truncated a fractional scale factor to 0 on integer fields.
+        if self.values {
+            out.extend(quote! {
+                fn __get_values<'g, T: ::netcdf::NcTypeDescriptor + Copy>(
+                    g: &'g ::netcdf::Group<'_>,
+                    name: &str,
+                ) -> ::netcdf::Result<Vec<T>> {
+                    let var = g
+                        .variable(name)
+                        .ok_or_else(|| ::netcdf::Error::NotFound(format!("variable: {name}")))?;
+                    // `..` is the only extent that means "the whole variable";
+                    // `()` would select zero dimensions.
+                    let values = var.get_values::<T, _>(..)?;
+                    Ok(values)
+                }
+            });
+        }
+
+        if self.array {
+            out.extend(quote! {
+                fn __get_array<'g, T: ::netcdf::NcTypeDescriptor + Copy, D: ::ndarray::Dimension>(
+                    g: &'g ::netcdf::Group<'_>,
+                    name: &str,
+                ) -> ::netcdf::Result<::ndarray::Array<T, D>> {
+                    let var = g
+                        .variable(name)
+                        .ok_or_else(|| ::netcdf::Error::NotFound(format!("variable: {name}")))?;
+                    let array = var.get::<T, _>(..)?.into_dimensionality().map_err(|_| {
+                        ::netcdf::Error::Str(format!(
+                            "Variable '{name}' could not be converted into a {}D array",
+                            D::NDIM.unwrap() // should only be None for dynamically dimensioned arrays, which should never have this error
+                        ))
+                    })?;
+                    Ok(array)
+                }
+            });
+        }
+
+        if self.strings {
+            out.extend(quote! {
+                fn __get_strings<'g>(g: &'g ::netcdf::Group<'_>, name: &str) -> ::netcdf::Result<Vec<String>> {
+                    let var = g
+                        .variable(name)
+                        .ok_or_else(|| ::netcdf::Error::NotFound(format!("variable: {name}")))?;
+
+                    let var_dims = var.dimensions();
+                    if var_dims.len() != 1 {
+                        return Err(::netcdf::Error::Str(format!(
+                            "string variable '{name}' expected to have 1 dimension, instead had {}",
+                            var_dims.len()
+                        )));
+                    }
+                    let n = var_dims[0].len();
+                    let mut out = Vec::with_capacity(n);
+
+                    for i in 0..n {
+                        let s = var.get_string([i])?;
+                        out.push(s);
+                    }
+
+                    Ok(out)
+                }
+            });
+        }
+
+        if self.scalar {
+            out.extend(quote! {
+                fn __get_scalar<'g, T: ::netcdf::NcTypeDescriptor + Copy>(
+                    g: &'g ::netcdf::Group<'_>,
+                    name: &str,
+                ) -> ::netcdf::Result<T> {
+                    let var = g
+                        .variable(name)
+                        .ok_or_else(|| ::netcdf::Error::NotFound(format!("variable: '{name}'")))?;
+                    let value = var.get_value::<T, _>(())?;
+                    Ok(value)
+                }
+            });
+        }
+
+        if self.string_scalar {
+            out.extend(quote! {
+                fn __get_scalar_string<'g>(g: &'g ::netcdf::Group<'_>, name: &str) -> ::netcdf::Result<String> {
+                    let var = g
+                        .variable(name)
+                        .ok_or_else(|| ::netcdf::Error::NotFound(format!("variable: {name}")))?;
+
+                    let s = var.get_string(())?;
+                    Ok(s)
+                }
+            });
+        }
+
+        if self.attribute {
+            out.extend(quote! {
+                fn __get_attribute<'g, T: TryFrom<::netcdf::AttributeValue>>(
+                    g: &'g ::netcdf::Group<'_>,
+                    name: &str,
+                ) -> ::netcdf::Result<T>
+                where
+                    ::netcdf::Error: From<<T as TryFrom<::netcdf::AttributeValue>>::Error>,
+                {
+                    let attr_val = g
+                        .attribute_value(name)
+                        .ok_or_else(|| ::netcdf::Error::NotFound(format!("group attribute: '{name}'")))??;
+                    let val: T = attr_val.try_into()?;
+                    Ok(val)
+                }
+            });
+        }
+
+        if self.get_units {
+            out.extend(quote! {
+                fn __get_units<'g>(
+                    g: &'g ::netcdf::Group<'_>,
+                    varname: &str,
+                    unit_attr: &str,
+                ) -> ::netcdf::Result<Option<String>> {
+                    let var = g
+                        .variable(varname)
+                        .ok_or_else(|| ::netcdf::Error::NotFound(format!("variable: '{varname}'")))?;
+                    let unit_attr_val = var.attribute_value(unit_attr).transpose()?;
+                    match unit_attr_val {
+                        Some(::netcdf::AttributeValue::Str(s)) => Ok(Some(s)),
+                        Some(::netcdf::AttributeValue::Strs(vs)) => Ok(Some(vs.join(" "))),
+                        None => Ok(None),
+                        _ => Err(::netcdf::Error::Str(format!(
+                            "Expected unit-like attribute '{unit_attr}' on variable '{varname}' to be string like, but it was not"
+                        ))),
+                    }
+                }
+            });
+        }
+
+        if self.any_unpack() {
+            out.extend(quote! {
+                // Not every variant is constructed by every struct, so silence
+                // dead-code warnings in the caller's crate.
+                #[allow(dead_code)]
+                #[derive(Clone, Copy, PartialEq, Eq)]
+                enum __OnFill { Nan, Keep, Ignore, Error }
+
+                // netCDF reports a *default* fill value for variables that never
+                // declared `_FillValue`, and we deliberately honour it — this
+                // matches netCDF4-python, whose `_toma` falls back to
+                // `default_fillvals` when the attribute is absent. The exception is
+                // the byte types, where Unidata advises against assuming a default
+                // because the range is too narrow to spare a value; there we only
+                // mask when `_FillValue` was written explicitly.
+                fn __fill_value_as_f64(var: &::netcdf::Variable<'_>) -> ::netcdf::Result<Option<f64>> {
+                    use ::netcdf::types::{FloatType, IntType, NcVariableType};
+                    let declared = var.attribute("_FillValue").is_some();
+                    Ok(match var.vartype() {
+                        NcVariableType::Int(IntType::I8 | IntType::U8) if !declared => None,
+                        NcVariableType::Int(IntType::I8) => var.fill_value::<i8>()?.map(|v| v as f64),
+                        NcVariableType::Int(IntType::U8) => var.fill_value::<u8>()?.map(|v| v as f64),
+                        NcVariableType::Int(IntType::I16) => var.fill_value::<i16>()?.map(|v| v as f64),
+                        NcVariableType::Int(IntType::U16) => var.fill_value::<u16>()?.map(|v| v as f64),
+                        NcVariableType::Int(IntType::I32) => var.fill_value::<i32>()?.map(|v| v as f64),
+                        NcVariableType::Int(IntType::U32) => var.fill_value::<u32>()?.map(|v| v as f64),
+                        NcVariableType::Int(IntType::I64) => var.fill_value::<i64>()?.map(|v| v as f64),
+                        NcVariableType::Int(IntType::U64) => var.fill_value::<u64>()?.map(|v| v as f64),
+                        NcVariableType::Float(FloatType::F32) => var.fill_value::<f32>()?.map(|v| v as f64),
+                        NcVariableType::Float(FloatType::F64) => var.fill_value::<f64>()?,
+                        // Strings, chars, compound types: no numeric fill value.
+                        _ => None,
+                    })
+                }
+
+                // `missing_value` is a pure attribute convention with no netCDF-level
+                // support, and it is allowed to be a vector of several values.
+                fn __missing_values_as_f64(var: &::netcdf::Variable<'_>) -> ::netcdf::Result<Vec<f64>> {
+                    use ::netcdf::AttributeValue as __Av;
+                    let Some(val) = var.attribute_value("missing_value") else {
+                        return Ok(Vec::new());
+                    };
+                    Ok(match val? {
+                        __Av::Uchar(v) => vec![v as f64],
+                        __Av::Uchars(vs) => vs.into_iter().map(|v| v as f64).collect(),
+                        __Av::Schar(v) => vec![v as f64],
+                        __Av::Schars(vs) => vs.into_iter().map(|v| v as f64).collect(),
+                        __Av::Ushort(v) => vec![v as f64],
+                        __Av::Ushorts(vs) => vs.into_iter().map(|v| v as f64).collect(),
+                        __Av::Short(v) => vec![v as f64],
+                        __Av::Shorts(vs) => vs.into_iter().map(|v| v as f64).collect(),
+                        __Av::Uint(v) => vec![v as f64],
+                        __Av::Uints(vs) => vs.into_iter().map(|v| v as f64).collect(),
+                        __Av::Int(v) => vec![v as f64],
+                        __Av::Ints(vs) => vs.into_iter().map(|v| v as f64).collect(),
+                        __Av::Ulonglong(v) => vec![v as f64],
+                        __Av::Ulonglongs(vs) => vs.into_iter().map(|v| v as f64).collect(),
+                        __Av::Longlong(v) => vec![v as f64],
+                        __Av::Longlongs(vs) => vs.into_iter().map(|v| v as f64).collect(),
+                        __Av::Float(v) => vec![v as f64],
+                        __Av::Floats(vs) => vs.into_iter().map(|v| v as f64).collect(),
+                        __Av::Double(v) => vec![v],
+                        __Av::Doubles(vs) => vs,
+                        __Av::Str(_) | __Av::Strs(_) => return Err(::netcdf::Error::Str(format!(
+                            "the 'missing_value' attribute of variable '{}' is a string, \
+                             which cannot be compared against numeric data",
+                            var.name()
+                        ))),
+                    })
+                }
+            });
+        }
+
+        if self.int_fill {
+            out.extend(quote! {
+                // The integer counterparts of `__fill_value_as_f64` and
+                // `__missing_values_as_f64`, with the same byte exemption.
+                // Compared in i128 rather than f64 because the default fill
+                // values of the 64-bit types sit near the type extremes, where
+                // f64 cannot tell neighbouring integers apart.
+                fn __fill_value_as_i128(var: &::netcdf::Variable<'_>) -> ::netcdf::Result<Option<i128>> {
+                    use ::netcdf::types::{IntType, NcVariableType};
+                    let declared = var.attribute("_FillValue").is_some();
+                    Ok(match var.vartype() {
+                        NcVariableType::Int(IntType::I8 | IntType::U8) if !declared => None,
+                        NcVariableType::Int(IntType::I8) => var.fill_value::<i8>()?.map(i128::from),
+                        NcVariableType::Int(IntType::U8) => var.fill_value::<u8>()?.map(i128::from),
+                        NcVariableType::Int(IntType::I16) => var.fill_value::<i16>()?.map(i128::from),
+                        NcVariableType::Int(IntType::U16) => var.fill_value::<u16>()?.map(i128::from),
+                        NcVariableType::Int(IntType::I32) => var.fill_value::<i32>()?.map(i128::from),
+                        NcVariableType::Int(IntType::U32) => var.fill_value::<u32>()?.map(i128::from),
+                        NcVariableType::Int(IntType::I64) => var.fill_value::<i64>()?.map(i128::from),
+                        NcVariableType::Int(IntType::U64) => var.fill_value::<u64>()?.map(i128::from),
+                        // A float variable read into an integer field: its fill
+                        // value only matters if it is a whole number.
+                        _ => None,
+                    })
+                }
+
+                // A float sentinel can only match integer data if it is whole.
+                fn __missing_values_as_i128(var: &::netcdf::Variable<'_>) -> ::netcdf::Result<Vec<i128>> {
+                    use ::netcdf::AttributeValue as __Av;
+                    let Some(val) = var.attribute_value("missing_value") else {
+                        return Ok(Vec::new());
+                    };
+                    let whole = |v: f64| (v.is_finite() && v.fract() == 0.0).then_some(v as i128);
+                    Ok(match val? {
+                        __Av::Uchar(v) => vec![v.into()],
+                        __Av::Uchars(vs) => vs.into_iter().map(i128::from).collect(),
+                        __Av::Schar(v) => vec![v.into()],
+                        __Av::Schars(vs) => vs.into_iter().map(i128::from).collect(),
+                        __Av::Ushort(v) => vec![v.into()],
+                        __Av::Ushorts(vs) => vs.into_iter().map(i128::from).collect(),
+                        __Av::Short(v) => vec![v.into()],
+                        __Av::Shorts(vs) => vs.into_iter().map(i128::from).collect(),
+                        __Av::Uint(v) => vec![v.into()],
+                        __Av::Uints(vs) => vs.into_iter().map(i128::from).collect(),
+                        __Av::Int(v) => vec![v.into()],
+                        __Av::Ints(vs) => vs.into_iter().map(i128::from).collect(),
+                        __Av::Ulonglong(v) => vec![v.into()],
+                        __Av::Ulonglongs(vs) => vs.into_iter().map(i128::from).collect(),
+                        __Av::Longlong(v) => vec![v.into()],
+                        __Av::Longlongs(vs) => vs.into_iter().map(i128::from).collect(),
+                        __Av::Float(v) => whole(v as f64).into_iter().collect(),
+                        __Av::Floats(vs) => vs.into_iter().filter_map(|v| whole(v as f64)).collect(),
+                        __Av::Double(v) => whole(v).into_iter().collect(),
+                        __Av::Doubles(vs) => vs.into_iter().filter_map(whole).collect(),
+                        __Av::Str(_) | __Av::Strs(_) => return Err(::netcdf::Error::Str(format!(
+                            "the 'missing_value' attribute of variable '{}' is a string, \
+                             which cannot be compared against numeric data",
+                            var.name()
+                        ))),
+                    })
+                }
+
+                // Only emitted for `on_fill = "error"`: the other settings leave
+                // integer values untouched.
+                fn __check_int_fill<'a, T: Copy + Into<i128> + 'a>(
+                    g: &::netcdf::Group<'_>,
+                    name: &str,
+                    vals: impl IntoIterator<Item = &'a T>,
+                ) -> ::netcdf::Result<()> {
+                    let var = g
+                        .variable(name)
+                        .ok_or_else(|| ::netcdf::Error::NotFound(format!("variable: '{name}'")))?;
+                    let fill = __fill_value_as_i128(&var)?;
+                    let missing = __missing_values_as_i128(&var)?;
+                    for (idx, val) in vals.into_iter().enumerate() {
+                        let raw: i128 = (*val).into();
+                        if fill == Some(raw) || missing.contains(&raw) {
+                            return Err(::netcdf::Error::Str(format!(
+                                "variable '{name}' contains a fill or missing value \
+                                 at index {idx}, and this field is declared \
+                                 on_fill = \"error\""
+                            )));
+                        }
+                    }
+                    Ok(())
+                }
+            });
+        }
+
+        // Two concrete functions rather than one generic: `NaN` cannot be produced
+        // from a generic `T` without a numeric trait, and the only crate that
+        // provides one (`num-traits`) would have to be a dependency of the *caller*,
+        // which would break the self-contained-codegen property.
+        for float_ty in [FloatTy::F32, FloatTy::F64] {
+            let needed = match float_ty {
+                FloatTy::F32 => self.unpack_f32,
+                FloatTy::F64 => self.unpack_f64,
+            };
+            if !needed {
+                continue;
+            }
+            let fn_name = float_ty.unpack_fn();
+            let ty = syn::Ident::new(float_ty.name(), proc_macro2::Span::call_site());
+            out.extend(quote! {
+                // Masking happens before scaling, because `_FillValue` is stored in
+                // the *packed* representation: once a fill value has been multiplied
+                // by the scale factor it is indistinguishable from real data.
+                // netCDF4-python orders it the same way (`_toma` then scale).
+                fn #fn_name<'a>(
+                    g: &::netcdf::Group<'_>,
+                    name: &str,
+                    vals: impl IntoIterator<Item = &'a mut #ty>,
+                    apply_scale: bool,
+                    apply_offset: bool,
+                    on_fill: __OnFill,
+                ) -> ::netcdf::Result<()> {
+                    let var = g
+                        .variable(name)
+                        .ok_or_else(|| ::netcdf::Error::NotFound(format!("variable: '{name}'")))?;
+
+                    let (fill, missing) = if on_fill == __OnFill::Ignore {
+                        (None, Vec::new())
+                    } else {
+                        (__fill_value_as_f64(&var)?, __missing_values_as_f64(&var)?)
+                    };
+
+                    let scale: Option<#ty> = if apply_scale {
+                        match var.attribute_value("scale_factor") {
+                            Some(v) => Some(f64::try_from(v?)? as #ty),
+                            None => None,
+                        }
+                    } else {
+                        None
+                    };
+                    let offset: Option<#ty> = if apply_offset {
+                        match var.attribute_value("add_offset") {
+                            Some(v) => Some(f64::try_from(v?)? as #ty),
+                            None => None,
+                        }
+                    } else {
+                        None
+                    };
+
+                    for (idx, val) in vals.into_iter().enumerate() {
+                        if on_fill != __OnFill::Ignore {
+                            // Compare in f64: widening the raw value and the fill
+                            // value to f64 is exact for every on-disk type that can
+                            // round-trip through this field.
+                            let raw = *val as f64;
+                            let matches = |target: f64| {
+                                if target.is_nan() { raw.is_nan() } else { raw == target }
+                            };
+                            if fill.is_some_and(&matches) || missing.iter().copied().any(matches) {
+                                match on_fill {
+                                    __OnFill::Nan => *val = #ty::NAN,
+                                    __OnFill::Keep => {}
+                                    __OnFill::Error => {
+                                        return Err(::netcdf::Error::Str(format!(
+                                            "variable '{name}' contains a fill or missing value \
+                                             at index {idx}, and this field is declared \
+                                             on_fill = \"error\""
+                                        )));
+                                    }
+                                    __OnFill::Ignore => {}
+                                }
+                                // Deliberately unscaled: a masked element is not data.
+                                continue;
+                            }
+                        }
+                        if let Some(s) = scale {
+                            *val *= s;
+                        }
+                        if let Some(o) = offset {
+                            *val += o;
+                        }
+                    }
+
+                    Ok(())
+                }
+            });
+        }
+
+        out
+    }
+}
+
+/// If the field has a `custom(...)`, check that nothing else that controls how
+/// it is read is present and return the read function. The function owns the
+/// whole read, so every variable-level option would be silently ignored.
+fn resolve_custom(field: &ReadNetcdfField) -> Result<Option<&syn::Path>, darling::Error> {
+    let Some(custom) = &field.custom else {
+        return Ok(None);
+    };
+    let ident = field.ident.as_ref().unwrap();
+    if field.kind.is_some()
+        || field.dimensions.is_some()
+        || field.attribute
+        || field.map.is_some()
+        || field.map_units.is_some()
+        || field.unpack.is_some()
+        || field.on_fill.is_some()
+    {
+        return Err(darling::Error::custom(
+            "`custom` is incompatible with `kind`, `dimensions`, `attribute`, `map`, \
+             `map_units`, `unpack`, and `on_fill`: the custom function does all the reading",
+        )
+        .with_span(ident));
+    }
+    custom.resolve(Direction::Read, ident).map(Some)
+}
+
+/// Validate the options on a field that `skip` or `skip(read)` leaves at
+/// `Default`.
+fn resolve_skip(field: &ReadNetcdfField, skip: SkipSpec) -> Result<(), darling::Error> {
+    // `dimensions` is not on this list, unlike in `WriteNetcdf`: a read-only
+    // struct may keep it as documentation of the expected shape.
+    let any_option = field.rename.is_some()
+        || field.kind.is_some()
+        || field.attribute
+        || field.map.is_some()
+        || field.map_units.is_some()
+        || field.custom.is_some()
+        || field.unpack.is_some()
+        || field.on_fill.is_some();
+    let dir = Direction::Read;
+    skip.check(
+        dir,
+        any_option,
+        &[
+            (
+                "map(read)",
+                field.map.as_ref().is_some_and(|m| m.covers(dir)),
+            ),
+            (
+                "map_units(read)",
+                field.map_units.as_ref().is_some_and(|m| m.covers(dir)),
+            ),
+            (
+                "custom(read)",
+                field.custom.as_ref().is_some_and(|c| c.covers(dir)),
+            ),
+            ("unpack", field.unpack.is_some()),
+            ("on_fill", field.on_fill.is_some()),
+        ],
+        field.ident.as_ref().unwrap(),
+    )
+}
+
+/// Resolve the netCDF kind of the field (array, string, skipped, etc.), the map
+/// functions that apply when reading, and the unpacking plan, checking the
+/// annotations for errors.
+fn resolve_field<'f>(
+    field: &'f ReadNetcdfField,
+    container_unpack: Option<&UnpackSpec>,
+    container_on_fill: Option<ContainerOnFill>,
+) -> Result<(NcKind, MapFns<'f>, Option<ValuePlan>), darling::Error> {
+    let ident = field.ident.as_ref().unwrap();
+    let err = |msg: &str| darling::Error::custom(msg).with_span(ident);
+
+    let has_dims = field.dimensions.as_ref().is_some_and(|d| !d.0.is_empty());
+
+    // `map` and `map_units` are mutually exclusive
+    if field.map.is_some() && field.map_units.is_some() {
+        return Err(err("`map` and `map_units` cannot be used together"));
+    }
+
+    // Narrow each `map(...)` spec down to the function this derive needs.
+    let map_fns = MapFns::resolve(
+        field.map.as_ref(),
+        field.map_units.as_ref(),
+        Direction::Read,
+        ident,
+    )?;
+
+    // A field written as a group attribute is not a variable, so variable-only
+    // options don't apply.
+    if field.attribute {
+        if field.kind.is_some() || field.map_units.is_some() || has_dims {
+            return Err(err(
+                "`attribute` is incompatible with `dimensions`, `kind`, `attr`, `map_units`, and `describe`",
+            ));
+        }
+        if field.unpack.is_some() || field.on_fill.is_some() {
+            return Err(err(
+                "`unpack`/`on_fill` do not apply to an `attribute` field: scale_factor, \
+                 add_offset, and _FillValue are variable attributes",
+            ));
+        }
+        return Ok((NcKind::Attribute, map_fns, None));
+    }
+
+    // With a `map`/`map_units` the read type is opaque, so `kind` is required.
+    let rk = if map_fns.any() {
+        let Some(kind) = &field.kind else {
+            return Err(err(
+                "`map`/`map_units` requires an explicit `kind = \"values\"|\"array\"|\"string\"`",
+            ));
+        };
+        kind_from_str(kind, &field.ty).map_err(|e| e.with_span(ident))?
+    } else if let Some(kind) = &field.kind {
+        // Explicit `kind`, else infer from the type.
+        kind_from_str(kind, &field.ty).map_err(|e| e.with_span(ident))?
+    } else {
+        infer_kind(&field.ty).map_err(|e| e.with_span(ident))?
+    };
+    validate_dims(rk, has_dims, &field.dimensions, ident)?;
+
+    let plan = resolve_value_plan(field, rk, container_unpack, container_on_fill)?;
+    Ok((rk, map_fns, plan))
+}
+
+/// Work out whether and how this field unpacks or checks fill values.
+///
+/// Returns `None` — meaning "emit nothing" — when the field holds strings, when
+/// its elements are neither a recognizable float nor a checkable integer, or
+/// when the resolved settings leave nothing to do. A *field-level* opt-in on a
+/// type that cannot honour it is an error; a container-level one is not,
+/// because a struct that mixes field types has to be able to set a container
+/// default without every other field failing to compile.
+fn resolve_value_plan(
+    field: &ReadNetcdfField,
+    read_kind: NcKind,
+    container_unpack: Option<&UnpackSpec>,
+    container_on_fill: Option<ContainerOnFill>,
+) -> Result<Option<ValuePlan>, darling::Error> {
+    let ident = field.ident.as_ref().unwrap();
+    let err = |msg: String| darling::Error::custom(msg).with_span(ident);
+    let container = container_on_fill.unwrap_or_default();
+    let flags = resolve_unpack(
+        container_unpack,
+        field.unpack.as_ref(),
+        container.float,
+        field.on_fill,
+    );
+
+    // Strings have no numeric packing; `Attribute` returned earlier.
+    if matches!(read_kind, NcKind::StringScalar | NcKind::StringVec) {
+        if flags.explicit_field_optin() {
+            return Err(err(
+                "`unpack`/`on_fill` do not apply to a string field".to_string()
+            ));
+        }
+        return Ok(None);
+    }
+
+    // With a `map`, the field's declared type is the mapper's *output*, which
+    // says nothing about what came out of the file, so the float check can't be
+    // made. Unpacking still runs on the physical values before the mapper, so
+    // trust the annotation and use the widest float.
+    let mapped = field.map.is_some() || field.map_units.is_some();
+
+    let float_ty = if mapped {
+        if !flags.explicit_field_optin() {
+            return Ok(None);
+        }
+        FloatTy::F64
+    } else if let Some(ft) = float_element_type(&field.ty) {
+        ft
+    } else if flags.field_unpack_optin {
+        // Scaling an integer would truncate the scale factor.
+        return Err(err(not_float_message("unpack", &field.ty)));
+    } else if is_fill_checkable_int(&field.ty) {
+        return match field.on_fill.or(container.int).unwrap_or(OnFill::Keep) {
+            OnFill::Nan => Err(err(
+                "`on_fill = \"nan\"` does not apply to an integer field, which cannot \
+                 hold NaN; use \"keep\", \"ignore\", or \"error\""
+                    .to_string(),
+            )),
+            OnFill::Error => Ok(Some(ValuePlan::IntFillCheck)),
+            // Both leave the stored value as it is, so there is nothing to emit.
+            OnFill::Keep | OnFill::Ignore => Ok(None),
+        };
+    } else if flags.field_on_fill_optin {
+        return Err(err(not_fill_checkable_message(&field.ty)));
+    } else {
+        // Opaque (or non-numeric) field inheriting a container default: skip.
+        return Ok(None);
+    };
+
+    if !flags.any() {
+        return Ok(None);
+    }
+
+    Ok(Some(ValuePlan::Float(UnpackPlan {
+        float_ty,
+        scale: flags.scale,
+        offset: flags.offset,
+        on_fill: flags.on_fill,
+    })))
+}
+
+/// Return code that assigns a variable named with the field's name to the result
+/// of reading the variable from the netCDF file.
+fn field_block(
+    field: &ReadNetcdfField,
+    read_kind: NcKind,
+    varname: &str,
+    map_fns: MapFns<'_>,
+    value_plan: Option<ValuePlan>,
+    ctx_arg: Option<&TokenStream2>,
+    arity: &mut ArityChecks<'_>,
+) -> TokenStream2 {
+    let fieldname = field.ident.as_ref().unwrap();
+    // `map`/`map_units` receive the struct field name and then the netCDF
+    // variable name. `String` tokenizes as a string literal; note that quote!
+    // does not interpolate inside a literal, so `"#fieldname"` would emit the
+    // text `#fieldname` verbatim.
+    let fieldname_str = fieldname.to_string();
+
+    // Generate the call to read in the values from the netcdf file. `grp` will be a &netcdf::Group<'_>.
+    let call = match read_kind {
+        NcKind::Values => quote! {
+            __get_values(grp, #varname)
+        },
+        NcKind::Array => quote! {
+            __get_array(grp, #varname)
+        },
+        NcKind::StringScalar => quote! {
+            __get_scalar_string(grp, #varname)
+        },
+        NcKind::StringVec => quote! {
+            __get_strings(grp, #varname)
+        },
+        NcKind::Scalar => quote! {
+            __get_scalar(grp, #varname)
+        },
+        NcKind::Attribute => quote! {
+            __get_attribute(grp, #varname)
+        },
+    };
+
+    // If we need to map values, include that here. Remember that read map functions
+    // take (value, field_name, nc_name, var) and read map_units functions add the
+    // units string after `var`; both gain a final `&Ctx` with a read context.
+    // Both are fallible, so their calls take a `?`.
+    let remap = if let (Some(map_fxn), NcKind::Attribute) = (map_fns.map, read_kind) {
+        // A group attribute has no variable; hand over the attribute itself.
+        // `__get_attribute` has already reported a missing one, so this lookup
+        // only fails if the file changes underneath us.
+        let map_fxn = arity.checked(CheckedFn::MapReadAttribute, map_fxn);
+        quote! {
+            let __attr = grp.attribute(#varname).ok_or_else(|| {
+                ::netcdf::Error::NotFound(format!("group attribute: '{}'", #varname))
+            })?;
+            #map_fxn(__val, #fieldname_str, #varname, &__attr #ctx_arg)?
+        }
+    } else if let Some(map_fxn) = map_fns.map {
+        let map_fxn = arity.checked(CheckedFn::MapRead, map_fxn);
+        quote! {
+            let __var = grp
+                .variable(#varname)
+                .ok_or_else(|| ::netcdf::Error::NotFound(format!("variable: '{}'", #varname)))?;
+            #map_fxn(__val, #fieldname_str, #varname, &__var #ctx_arg)?
+        }
+    } else if let Some((map_fxn, unit_attr)) = map_fns.map_units {
+        let map_fxn = arity.checked(CheckedFn::MapUnitsRead, map_fxn);
+        quote! {
+            let __var = grp
+                .variable(#varname)
+                .ok_or_else(|| ::netcdf::Error::NotFound(format!("variable: '{}'", #varname)))?;
+            let __units = __get_units(grp, #varname, #unit_attr)?;
+            #map_fxn(__val, #fieldname_str, #varname, &__var, __units.as_deref() #ctx_arg)?
+        }
+    } else {
+        quote!(__val)
+    };
+
+    // Unpacking mutates the values read from the file, so it happens between the
+    // read and the `map` call — the map function receives physical values.
+    let (binding, unpack_stmt) = match value_plan {
+        None => (quote!(let __val), TokenStream2::new()),
+        Some(ValuePlan::IntFillCheck) => {
+            let vals = match read_kind {
+                NcKind::Scalar => quote!(::core::slice::from_ref(&__val)),
+                _ => quote!(__val.iter()),
+            };
+            (
+                quote!(let __val),
+                quote! { __check_int_fill(grp, #varname, #vals)?; },
+            )
+        }
+        Some(ValuePlan::Float(plan)) => {
+            let unpack_fn = plan.float_ty.unpack_fn();
+            let scale = plan.scale;
+            let offset = plan.offset;
+            let on_fill = plan.on_fill.variant();
+            // A scalar has no `iter_mut`, so hand over a one-element slice.
+            let vals = match read_kind {
+                NcKind::Scalar => quote!(::core::slice::from_mut(&mut __val)),
+                _ => quote!(__val.iter_mut()),
+            };
+            (
+                quote!(let mut __val),
+                quote! {
+                    #unpack_fn(grp, #varname, #vals, #scale, #offset, __OnFill::#on_fill)?;
+                },
+            )
+        }
+    };
+
+    let read_and_remap = quote! {
+        let #fieldname = {
+            #binding = #call?;
+            #unpack_stmt
+            #remap
+        };
+    };
+
+    // If we are to check dimensions, include that before we read the variable
+    if let Some(dims) = field.dimensions.as_ref() {
+        let expected: Vec<&str> = dims.0.iter().map(|d| d.as_str()).collect();
+        quote! {
+            __check_dims(grp, #varname, &[#(#expected),*])?;
+            #read_and_remap
+        }
+    } else {
+        read_and_remap
+    }
+}
