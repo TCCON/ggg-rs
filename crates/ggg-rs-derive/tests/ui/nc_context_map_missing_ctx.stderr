@@ -1,0 +1,41 @@
+error[E0277]: this `map(write = ...)` function does not take the write context, `&Scale`
+  --> tests/ui/nc_context_map_missing_ctx.rs:14:46
+   |
+11 | #[derive(WriteNetcdf)]
+   |          ----------- required by a bound introduced by this call
+...
+14 |     #[netcdf(dimensions("time"), map(write = scale), kind = "values")]
+   |                                              ^^^^^ add a final `&Scale` parameter to this function
+   |
+help: the trait `__ExpectMapWrite` is not implemented for `__TakesNoContext`
+  --> tests/ui/nc_context_map_missing_ctx.rs:11:10
+   |
+11 | #[derive(WriteNetcdf)]
+   |          ^^^^^^^^^^^
+   = note: `context(...)` declares a write context, so `WriteNetcdf` passes `&Scale` as the final argument to every `map(write = ...)` function
+help: the trait `__ExpectMapWrite` is implemented for `__TakesContext`
+  --> tests/ui/nc_context_map_missing_ctx.rs:11:10
+   |
+11 | #[derive(WriteNetcdf)]
+   |          ^^^^^^^^^^^
+note: required by a bound in `__check_MapWrite`
+  --> tests/ui/nc_context_map_missing_ctx.rs:11:10
+   |
+11 | #[derive(WriteNetcdf)]
+   |          ^^^^^^^^^^^ required by this bound in `__check_MapWrite`
+   = note: this error originates in the derive macro `WriteNetcdf` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0061]: this function takes 4 arguments but 5 arguments were supplied
+  --> tests/ui/nc_context_map_missing_ctx.rs:14:46
+   |
+11 | #[derive(WriteNetcdf)]
+   |          ----------- unexpected argument #5 of type `&Scale`
+...
+14 |     #[netcdf(dimensions("time"), map(write = scale), kind = "values")]
+   |                                              ^^^^^
+   |
+note: function defined here
+  --> tests/ui/nc_context_map_missing_ctx.rs:7:4
+   |
+ 7 | fn scale(_d: &Bad, v: &Vec<f64>, _f: &str, _n: &str) -> Vec<f64> {
+   |    ^^^^^

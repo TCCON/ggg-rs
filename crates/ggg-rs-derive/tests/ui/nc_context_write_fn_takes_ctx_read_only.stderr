@@ -1,0 +1,48 @@
+error[E0277]: this `custom(write = ...)` function takes a context argument, but this struct has no write context
+  --> tests/ui/nc_context_write_fn_takes_ctx_read_only.rs:20:29
+   |
+17 | #[derive(WriteNetcdf)]
+   |          ----------- required by a bound introduced by this call
+...
+20 |     #[netcdf(custom(write = to_nc))]
+   |                             ^^^^^ remove the final context parameter from this function
+   |
+help: the trait `__ExpectCustomWrite` is not implemented for `__TakesContext`
+  --> tests/ui/nc_context_write_fn_takes_ctx_read_only.rs:17:10
+   |
+17 | #[derive(WriteNetcdf)]
+   |          ^^^^^^^^^^^
+   = note: `context(...)` declares a context for reading only, so `WriteNetcdf` does not pass one; add `write = "..."` to `context(...)` if this function needs it
+help: the trait `__ExpectCustomWrite` is implemented for `__TakesNoContext`
+  --> tests/ui/nc_context_write_fn_takes_ctx_read_only.rs:17:10
+   |
+17 | #[derive(WriteNetcdf)]
+   |          ^^^^^^^^^^^
+note: required by a bound in `__check_CustomWrite`
+  --> tests/ui/nc_context_write_fn_takes_ctx_read_only.rs:17:10
+   |
+17 | #[derive(WriteNetcdf)]
+   |          ^^^^^^^^^^^ required by this bound in `__check_CustomWrite`
+   = note: this error originates in the derive macro `WriteNetcdf` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0061]: this function takes 6 arguments but 5 arguments were supplied
+  --> tests/ui/nc_context_write_fn_takes_ctx_read_only.rs:20:29
+   |
+17 | #[derive(WriteNetcdf)]
+   |          ----------- argument #6 of type `&Ctx` is missing
+...
+20 |     #[netcdf(custom(write = to_nc))]
+   |                             ^^^^^
+   |
+note: function defined here
+  --> tests/ui/nc_context_write_fn_takes_ctx_read_only.rs:6:4
+   |
+ 6 | fn to_nc(
+   |    ^^^^^
+...
+12 |     _c: &Ctx,
+   |     --------
+help: provide the argument
+   |
+20 |     #[netcdf(custom(write = to_nc(WriteNetcdf, WriteNetcdf, WriteNetcdf, WriteNetcdf, WriteNetcdf, /* &Ctx */)))]
+   |                                  +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++

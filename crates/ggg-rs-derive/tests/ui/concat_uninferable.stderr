@@ -1,0 +1,5 @@
+error: couldn't infer field kind — annotate with #[concat(kind = "vec")], #[concat(kind = "array")], or #[concat(skip)]
+ --> tests/ui/concat_uninferable.rs:7:5
+  |
+7 |     values: Hidden,
+  |     ^^^^^^

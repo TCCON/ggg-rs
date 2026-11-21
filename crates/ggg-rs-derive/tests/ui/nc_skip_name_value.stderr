@@ -1,0 +1,5 @@
+error: `skip` takes no value, or a list of directions: `skip` or `skip(read, write)` for both, `skip(read)` or `skip(write)` for one
+ --> tests/ui/nc_skip_name_value.rs:6:14
+  |
+6 |     #[netcdf(skip = "read")]
+  |              ^^^^

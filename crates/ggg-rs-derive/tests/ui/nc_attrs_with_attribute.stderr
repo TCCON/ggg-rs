@@ -1,0 +1,5 @@
+error: `attribute` is incompatible with `dimensions`, `kind`, `attr`, `attrs`, `map_units`, `scale_offset`, and `describe`
+  --> tests/ui/nc_attrs_with_attribute.rs:17:5
+   |
+17 |     site: String,
+   |     ^^^^

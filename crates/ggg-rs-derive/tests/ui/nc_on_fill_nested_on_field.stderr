@@ -1,0 +1,5 @@
+error: the `on_fill(float = .., int = ..)` form is only accepted on the container; on a field, use `on_fill = "..."`
+ --> tests/ui/nc_on_fill_nested_on_field.rs:6:34
+  |
+6 |     #[netcdf(dimensions("time"), on_fill(float = "nan", int = "error"))]
+  |                                  ^^^^^^^
