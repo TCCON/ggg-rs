@@ -1,0 +1,1065 @@
+//! Implementation of the `#[derive(WriteNetcdf)]` macro.
+//!
+//! The derive generates an inherent method
+//!
+//! ```ignore
+//! pub fn write_netcdf(&self, grp: &mut ::netcdf::GroupMut<'_>) -> ::netcdf::Result<()>
+//! ```
+//!
+//! that writes each field of the struct into a netCDF group (either the file
+//! root, obtained with `FileMut::root_mut()`, or a subgroup created with
+//! `FileMut::add_group()`). Every field becomes either a netCDF *variable* or a
+//! *group attribute*, according to its type and the `#[netcdf(...)]` field
+//! attributes.
+//!
+//! ## How the generated code is structured
+//!
+//! netCDF's `add_variable::<T>(name, dims)` needs the element type `T` and the
+//! dimension *names* up front, and a variable's dimensions must already exist in
+//! the file. Rather than try to recover the element type syntactically (which
+//! breaks the moment a `map` function changes the type), the generated method
+//! begins by defining a handful of **local helper `fn`s**. Their type
+//! parameters are inferred from their arguments, so `map`ped and un-`map`ped
+//! fields flow through the exact same code path. The helpers reference only
+//! `::netcdf` and `::ndarray`, so no runtime support crate is required — the
+//! whole thing is self-contained like the sibling `Subset` derive.
+//!
+//! Only the helpers actually needed by the struct's fields are emitted. This
+//! matters for two reasons: it avoids dead-code warnings, and it means a struct
+//! made only of `Vec` fields never references `::ndarray` (which such a crate
+//! may not even depend on).
+
+use darling::ast::NestedMeta;
+use darling::util::Override;
+use darling::{FromDeriveInput, FromField, FromMeta, ast};
+use proc_macro::TokenStream;
+use proc_macro2::TokenStream as TokenStream2;
+use quote::quote;
+
+use crate::common_netcdf::{
+    ArityChecks, AttrsSpec, CheckedFn, ContextSpec, CustomSpec, DimList, Direction, FloatTy,
+    MapFns, MapSpec, NcKind, ScaleOffsetSpec, SkipSpec, apply_rename_all, float_element_type,
+    infer_kind, kind_from_str, nc_name, not_float_message, validate_dims,
+};
+
+// ---------------------------------------------------------------------------
+// darling input models
+// ---------------------------------------------------------------------------
+
+impl FromMeta for DimList {
+    fn from_list(items: &[NestedMeta]) -> darling::Result<Self> {
+        // Accumulate so that *all* malformed entries are reported at once.
+        let mut errors = darling::Error::accumulator();
+        let mut names = Vec::with_capacity(items.len());
+        for item in items {
+            if let Some(name) = errors.handle(String::from_nested_meta(item)) {
+                names.push(name);
+            }
+        }
+        errors.finish()?;
+        Ok(DimList(names))
+    }
+}
+
+/// A single `#[netcdf(attr(name = "...", value = ...))]` or
+/// `#[netcdf(attr(name = "...", func = path::to::fn))]` entry, attaching an
+/// attribute to the variable created for the field.
+///
+/// Exactly one of `value` / `func` must be given (validated in [`resolve_field`]).
+/// `with` adapter: keep a string literal verbatim (see the `value` field).
+fn keep_expr(meta: &syn::Meta) -> darling::Result<Option<syn::Expr>> {
+    darling::util::parse_expr::preserve_str_literal(meta).map(Some)
+}
+
+#[derive(Debug, FromMeta)]
+struct NcVarAttr {
+    /// The netCDF attribute name.
+    name: String,
+    /// A constant expression to use as the attribute value. Must be
+    /// `Into<netcdf::AttributeValue>` (e.g. a string, number, or `Vec` thereof).
+    ///
+    /// Parsed with `preserve_str_literal` so `value = "K"` stays the string
+    /// literal `"K"` rather than being re-parsed as the identifier `K`.
+    #[darling(default, with = keep_expr)]
+    value: Option<syn::Expr>,
+    /// A function `fn(&Self, &FieldTy, &str, &str) -> V` (with
+    /// `V: Into<AttributeValue>`) producing the attribute value from the whole
+    /// struct, the field value, the Rust field name, and the netCDF name, plus
+    /// a final `&Ctx` with a write context.
+    #[darling(default)]
+    func: Option<syn::Path>,
+}
+
+#[derive(FromField)]
+#[darling(attributes(netcdf), forward_attrs(doc))]
+struct WriteNetcdfField {
+    ident: Option<syn::Ident>,
+    ty: syn::Type,
+
+    /// Do not write this field: `skip` or `skip(write)` (`skip(read)` writes it
+    /// normally). See [`SkipSpec`].
+    #[darling(default)]
+    skip: Option<SkipSpec>,
+
+    /// Override the netCDF name for this field (takes precedence over the
+    /// container-level `rename_all`).
+    #[darling(default)]
+    rename: Option<String>,
+
+    /// Force a write strategy: `"values"`, `"array"`, or `"string"`. Required
+    /// when `map`/`map_units` is present (the output type can't be inferred).
+    #[darling(default)]
+    kind: Option<String>,
+
+    /// Dimension names for this variable, auto-created if missing.
+    #[darling(default)]
+    dimensions: Option<DimList>,
+
+    /// Write the field as a *group attribute* instead of a variable.
+    #[darling(default)]
+    attribute: bool,
+
+    /// Map the field value before writing. The direction is mandatory, since
+    /// reading needs a different function: `map(write = path::to::fn)`, where
+    /// the function is `fn(&Self, &FieldTy, &str, &str) -> Out` (Rust field
+    /// name, then netCDF name, plus a final `&Ctx` with a write context). A
+    /// `read = ...` may also be present for `ReadNetcdf`; it is ignored here.
+    #[darling(default)]
+    map: Option<MapSpec>,
+
+    /// Like `map`, but the write function also returns the `units` attribute:
+    /// `map_units(write = path::to::fn)` with
+    /// `fn(&Self, &FieldTy, &str, &str) -> (Out, U)`, `U: Into<AttributeValue>`.
+    #[darling(default)]
+    map_units: Option<MapSpec>,
+
+    /// Write the field with a user function instead of the derived helpers:
+    /// `custom(write = path::to::fn)`, where the function is
+    /// `fn(&Self, &FieldTy, &str, &str, &mut netcdf::GroupMut<'_>) -> netcdf::Result<()>`.
+    /// Its arguments are the struct, the field value, the Rust field name, the
+    /// netCDF name (after `rename`/`rename_all`), and the group to write into.
+    /// A `read = ...` may also be present for `ReadNetcdf`; it is ignored here.
+    #[darling(default)]
+    custom: Option<CustomSpec>,
+
+    /// Pack the field into a smaller on-disk type:
+    /// `scale_offset(scale = 0.01, offset = 400.0, nc_type = "i16")`. Values are
+    /// stored as `(value - offset) / scale`, rounded, and the `scale_factor` /
+    /// `add_offset` attributes are written so a reader can invert it. `scale` and
+    /// `offset` are individually optional; `nc_type` is not.
+    #[darling(default)]
+    scale_offset: Option<ScaleOffsetSpec>,
+
+    /// Accepted and ignored: `unpack` and `on_fill` are `ReadNetcdf` options.
+    /// Both derives read the same `netcdf` attribute, so each has to tolerate
+    /// the other's keys — otherwise a struct deriving both could not be
+    /// annotated at all. Declared explicitly rather than using
+    /// `allow_unknown_fields` so that genuine typos stay an error.
+    #[darling(default)]
+    #[allow(dead_code)]
+    unpack: Option<crate::common_netcdf::UnpackSpec>,
+
+    #[darling(default)]
+    #[allow(dead_code)]
+    on_fill: Option<crate::common_netcdf::OnFill>,
+
+    /// Zero or more attributes to attach to the created variable.
+    ///
+    /// Not named `attrs`: darling reserves that field name on `FromField`
+    /// structs for the raw `Vec<syn::Attribute>`. We map the `attr(...)` key to
+    /// this field explicitly.
+    #[darling(default, multiple, rename = "attr")]
+    var_attrs: Vec<NcVarAttr>,
+
+    /// Zero or more functions that each write any number of attributes onto
+    /// the created variable: `attrs(func = path::to::fn)` with
+    /// `fn(&Self, &FieldTy, &str, &str, &mut netcdf::VariableMut<'_>) -> netcdf::Result<()>`
+    /// (plus a final `&Ctx` with a container `context`). The `&str`s are the
+    /// Rust field name and the netCDF name. They run after every other
+    /// attribute, in the order written. Renamed for the same reason as
+    /// `var_attrs`.
+    #[darling(default, multiple, rename = "attrs")]
+    attrs_fns: Vec<AttrsSpec>,
+
+    /// The raw field attributes, filled by darling because of the magic name
+    /// `attrs`. Used only to read `///` doc comments (which the compiler lowers
+    /// to `#[doc = "..."]`) for the description feature.
+    attrs: Vec<syn::Attribute>,
+
+    /// Per-field override of the container-level `describe`. `#[netcdf(describe)]`
+    /// turns descriptions on for this field using the inherited attribute name;
+    /// `#[netcdf(describe = "notes")]` also overrides the attribute name (as with
+    /// `rename`).
+    #[darling(default)]
+    describe: Option<Override<String>>,
+
+    /// Disable the field's doc-comment description even when the container turns
+    /// descriptions on for every field.
+    #[darling(default)]
+    no_describe: bool,
+}
+
+#[derive(FromDeriveInput)]
+#[darling(attributes(netcdf), supports(struct_named))]
+struct WriteNetcdfInput {
+    ident: syn::Ident,
+    generics: syn::Generics,
+    data: ast::Data<darling::util::Ignored, WriteNetcdfField>,
+
+    /// serde-style case convention applied to every field's netCDF name.
+    #[darling(default)]
+    rename_all: Option<String>,
+
+    /// Write each field's `///` doc comment as a variable attribute. The word
+    /// form `#[netcdf(describe)]` uses the default attribute name `"description"`;
+    /// `#[netcdf(describe = "long_name")]` chooses the attribute name. Individual
+    /// fields can override the name or opt out with `#[netcdf(no_describe)]`.
+    #[darling(default)]
+    describe: Option<Override<String>>,
+
+    /// A run-time value passed to every `custom` and `attrs` function as its
+    /// last argument; see [`ContextSpec`] for the forms. Only the write half is
+    /// used.
+    #[darling(default)]
+    context: Option<ContextSpec>,
+
+    /// Zero or more functions that each write any number of *group*
+    /// attributes: `attrs(func = path::to::fn)` with
+    /// `fn(&Self, &mut netcdf::GroupMut<'_>) -> netcdf::Result<()>` (plus a
+    /// final `&Ctx` with `context`). They run after every field is written,
+    /// in the order written.
+    #[darling(default, multiple, rename = "attrs")]
+    attrs_fns: Vec<AttrsSpec>,
+
+    /// Accepted and ignored: container-level `ReadNetcdf` options. See the note
+    /// on `WriteNetcdfField::unpack`.
+    #[darling(default)]
+    #[allow(dead_code)]
+    unpack: Option<crate::common_netcdf::UnpackSpec>,
+
+    #[darling(default)]
+    #[allow(dead_code)]
+    on_fill: Option<crate::common_netcdf::ContainerOnFill>,
+}
+
+// ---------------------------------------------------------------------------
+// Field classification
+// ---------------------------------------------------------------------------
+
+/// If the field has a `custom(...)`, check that nothing else that controls how
+/// it is written is present and return the write function. The function owns
+/// the whole write, so every variable-level option would be silently ignored.
+fn resolve_custom(f: &WriteNetcdfField) -> Result<Option<&syn::Path>, darling::Error> {
+    let Some(custom) = &f.custom else {
+        return Ok(None);
+    };
+    let ident = f.ident.as_ref().unwrap();
+    if f.kind.is_some()
+        || f.dimensions.is_some()
+        || f.attribute
+        || f.map.is_some()
+        || f.map_units.is_some()
+        || f.scale_offset.is_some()
+        || !f.var_attrs.is_empty()
+        || !f.attrs_fns.is_empty()
+        || f.describe.is_some()
+        || f.no_describe
+    {
+        return Err(darling::Error::custom(
+            "`custom` is incompatible with `kind`, `dimensions`, `attribute`, `map`, \
+             `map_units`, `scale_offset`, `attr`, `attrs`, `describe`, and `no_describe`: the \
+             custom function does all the writing",
+        )
+        .with_span(ident));
+    }
+    custom.resolve(Direction::Write, ident).map(Some)
+}
+
+/// Validate the options on a field that `skip` or `skip(write)` leaves out.
+fn resolve_skip(f: &WriteNetcdfField, skip: SkipSpec) -> Result<(), darling::Error> {
+    let has_dims = f.dimensions.as_ref().is_some_and(|d| !d.0.is_empty());
+    let any_option = f.rename.is_some()
+        || f.kind.is_some()
+        || has_dims
+        || f.attribute
+        || f.map.is_some()
+        || f.map_units.is_some()
+        || f.custom.is_some()
+        || !f.var_attrs.is_empty()
+        || !f.attrs_fns.is_empty()
+        || f.describe.is_some()
+        || f.no_describe
+        || f.scale_offset.is_some();
+    let dir = Direction::Write;
+    skip.check(
+        dir,
+        any_option,
+        &[
+            ("map(write)", f.map.as_ref().is_some_and(|m| m.covers(dir))),
+            (
+                "map_units(write)",
+                f.map_units.as_ref().is_some_and(|m| m.covers(dir)),
+            ),
+            (
+                "custom(write)",
+                f.custom.as_ref().is_some_and(|c| c.covers(dir)),
+            ),
+            ("scale_offset", f.scale_offset.is_some()),
+            ("attr", !f.var_attrs.is_empty()),
+            ("attrs", !f.attrs_fns.is_empty()),
+            ("describe", f.describe.is_some()),
+            ("no_describe", f.no_describe),
+        ],
+        f.ident.as_ref().unwrap(),
+    )
+}
+
+/// Validate a field's attributes and determine its [`NcKind`] plus the map
+/// functions that apply when writing. All errors are spanned on the field ident
+/// so the compiler points at the right place.
+fn resolve_field(f: &WriteNetcdfField) -> Result<(NcKind, MapFns<'_>), darling::Error> {
+    let ident = f.ident.as_ref().unwrap();
+    let err = |msg: &str| darling::Error::custom(msg).with_span(ident);
+
+    let has_dims = f.dimensions.as_ref().is_some_and(|d| !d.0.is_empty());
+
+    // `map` and `map_units` are mutually exclusive.
+    if f.map.is_some() && f.map_units.is_some() {
+        return Err(err("`map` and `map_units` cannot be used together"));
+    }
+
+    // `describe` and `no_describe` contradict each other.
+    if f.describe.is_some() && f.no_describe {
+        return Err(err("`describe` and `no_describe` cannot be used together"));
+    }
+
+    // Each `attr(...)` needs exactly one of `value` / `func`.
+    for a in &f.var_attrs {
+        match (&a.value, &a.func) {
+            (Some(_), Some(_)) => {
+                return Err(err("`attr(...)` cannot set both `value` and `func`"));
+            }
+            (None, None) => {
+                return Err(err("`attr(...)` needs either `value` or `func`"));
+            }
+            _ => {}
+        }
+    }
+
+    // Narrow each `map(...)` spec down to the function this derive needs.
+    let map_fns = MapFns::resolve(
+        f.map.as_ref(),
+        f.map_units.as_ref(),
+        Direction::Write,
+        ident,
+    )?;
+
+    // Packing rewrites the values and changes the on-disk type, so it needs to
+    // know it is dealing with floats. A `map` makes the written type opaque, so
+    // the check cannot be made and the combination is refused rather than guessed
+    // at.
+    if f.scale_offset.is_some() {
+        if map_fns.any() {
+            return Err(err(
+                "`scale_offset` cannot be combined with `map`/`map_units`: the mapped type \
+                 is opaque, so there is no way to check that it is floating-point. Pack \
+                 inside the map function instead.",
+            ));
+        }
+        if float_element_type(&f.ty).is_none() {
+            return Err(
+                darling::Error::custom(not_float_message("scale_offset", &f.ty)).with_span(ident),
+            );
+        }
+    }
+
+    // A field written as a group attribute is not a variable, so variable-only
+    // options don't apply.
+    if f.attribute {
+        if has_dims
+            || f.kind.is_some()
+            || !f.var_attrs.is_empty()
+            || !f.attrs_fns.is_empty()
+            || f.map_units.is_some()
+            || f.describe.is_some()
+            || f.no_describe
+            || f.scale_offset.is_some()
+        {
+            return Err(err(
+                "`attribute` is incompatible with `dimensions`, `kind`, `attr`, `attrs`, `map_units`, `scale_offset`, and `describe`",
+            ));
+        }
+        return Ok((NcKind::Attribute, map_fns));
+    }
+
+    // With a `map`/`map_units` the written type is opaque, so `kind` is required.
+    if map_fns.any() {
+        let Some(kind) = &f.kind else {
+            return Err(err(
+                "`map`/`map_units` requires an explicit `kind = \"values\"|\"array\"|\"string\"`",
+            ));
+        };
+        let wk = kind_from_str(kind, &f.ty).map_err(|e| e.with_span(ident))?;
+        return validate_dims(wk, has_dims, &f.dimensions, ident).map(|()| (wk, map_fns));
+    }
+
+    // Explicit `kind`, else infer from the type.
+    let wk = if let Some(kind) = &f.kind {
+        kind_from_str(kind, &f.ty).map_err(|e| e.with_span(ident))?
+    } else {
+        infer_kind(&f.ty).map_err(|e| e.with_span(ident))?
+    };
+    if f.scale_offset.is_some() && matches!(wk, NcKind::StringScalar | NcKind::StringVec) {
+        return Err(err("`scale_offset` does not apply to a string field"));
+    }
+    validate_dims(wk, has_dims, &f.dimensions, ident).map(|()| (wk, map_fns))
+}
+
+// ---------------------------------------------------------------------------
+// Descriptions from doc comments
+// ---------------------------------------------------------------------------
+
+/// Collect a field's `///` doc comment into a single trimmed string. The
+/// compiler lowers each `///` line to a `#[doc = "..."]` attribute, so we glue
+/// those back together. Returns `None` when the field has no doc comment.
+fn extract_doc(attrs: &[syn::Attribute]) -> Option<String> {
+    let mut lines = Vec::new();
+    for attr in attrs {
+        if !attr.path().is_ident("doc") {
+            continue;
+        }
+        if let syn::Meta::NameValue(nv) = &attr.meta
+            && let syn::Expr::Lit(syn::ExprLit {
+                lit: syn::Lit::Str(s),
+                ..
+            }) = &nv.value
+        {
+            let line = s.value();
+            // rustdoc keeps the single space after `///`; drop it so the
+            // stored text isn't uniformly indented.
+            lines.push(line.strip_prefix(' ').unwrap_or(&line).to_string());
+        }
+    }
+    let text = lines.join(" ");
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+/// Decide whether a field gets a description attribute and, if so, its name.
+/// Mirrors rename resolution: the container sets the default, each field may
+/// override the name or opt out.
+fn resolve_describe(
+    container: Option<&Override<String>>,
+    field: Option<&Override<String>>,
+    no_describe: bool,
+) -> Option<String> {
+    // The container default is a pair of (enabled, attribute name).
+    let (container_on, container_name): (bool, String) = match container {
+        None => (false, "description".to_string()),
+        Some(Override::Inherit) => (true, "description".to_string()),
+        Some(Override::Explicit(name)) => (true, name.clone()),
+    };
+    if no_describe {
+        return None;
+    }
+    match field {
+        None => container_on.then_some(container_name),
+        Some(Override::Inherit) => Some(container_name),
+        Some(Override::Explicit(name)) => Some(name.clone()),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Which local helpers to emit
+// ---------------------------------------------------------------------------
+
+/// Tracks which helper `fn`s the generated method needs, so we only emit (and
+/// therefore only reference `::ndarray` for) what's actually used.
+#[derive(Default)]
+struct HelpersNeeded {
+    ensure_dim: bool,
+    ensure_dims: bool,
+    values: bool,
+    array: bool,
+    strings: bool,
+    scalar: bool,
+    string_scalar: bool,
+}
+
+impl HelpersNeeded {
+    fn note(&mut self, wk: NcKind) {
+        match wk {
+            NcKind::Values => {
+                self.values = true;
+                self.ensure_dim = true;
+            }
+            NcKind::StringVec => {
+                self.strings = true;
+                self.ensure_dim = true;
+            }
+            NcKind::Array => {
+                self.array = true;
+                self.ensure_dim = true;
+                self.ensure_dims = true;
+            }
+            NcKind::Scalar => self.scalar = true,
+            NcKind::StringScalar => self.string_scalar = true,
+            NcKind::Attribute => {}
+        }
+    }
+
+    /// The token block of local helper `fn`s for the top of `write_netcdf`.
+    fn tokens(&self) -> TokenStream2 {
+        let mut out = TokenStream2::new();
+        if self.ensure_dim {
+            out.extend(quote! {
+                // Create `name` with length `len` if it doesn't exist yet.
+                fn __ensure_dim(g: &mut ::netcdf::GroupMut<'_>, name: &str, len: usize)
+                    -> ::netcdf::Result<()>
+                {
+                    if g.dimension(name).is_none() {
+                        g.add_dimension(name, len)?;
+                        log::trace!("Created dimension {name} with length {len}");
+                    }
+                    Ok(())
+                }
+            });
+        }
+        if self.ensure_dims {
+            out.extend(quote! {
+                // Ensure one dimension per array axis, sized from the array shape.
+                fn __ensure_dims(g: &mut ::netcdf::GroupMut<'_>, names: &[&str], shape: &[usize])
+                    -> ::netcdf::Result<()>
+                {
+                    for (nm, ln) in names.iter().zip(shape.iter()) {
+                        __ensure_dim(g, nm, *ln)?;
+                    }
+                    Ok(())
+                }
+            });
+        }
+        if self.values {
+            out.extend(quote! {
+                // Element type `T` is inferred from `vals`, so `map`ped and
+                // un-`map`ped fields share this path.
+                fn __put_values<'g, T: ::netcdf::NcTypeDescriptor>(
+                    g: &'g mut ::netcdf::GroupMut<'_>, name: &str, dims: &[&str], vals: &[T],
+                ) -> ::netcdf::Result<::netcdf::VariableMut<'g>> {
+                    log::trace!("Writing to variable '{name}' with __put_values");
+                    let mut v = g.add_variable::<T>(name, dims)?;
+                    v.put_values(vals, ..)?;
+                    Ok(v)
+                }
+            });
+        }
+        if self.array {
+            out.extend(quote! {
+                fn __put_array<'g, T: ::netcdf::NcTypeDescriptor, D: ::ndarray::Dimension>(
+                    g: &'g mut ::netcdf::GroupMut<'_>, name: &str, dims: &[&str],
+                    arr: ::ndarray::ArrayView<'_, T, D>,
+                ) -> ::netcdf::Result<::netcdf::VariableMut<'g>> {
+                    if dims.len() != arr.ndim() {
+                        return Err(netcdf::Error::Str(format!(
+                            "{} dimension(s) were defined for variable {}, but the array has {} dimension(s)",
+                            dims.len(), name, arr.ndim()
+                        )))
+                    }
+                    log::trace!("Writing to variable '{name}' with __put_array");
+                    let mut v = g.add_variable::<T>(name, dims)?;
+                    v.put(arr, ..)?;
+                    Ok(v)
+                }
+            });
+        }
+        if self.strings {
+            out.extend(quote! {
+                // netCDF writes one string at a time, so loop over the slice.
+                fn __put_strings<'g>(
+                    g: &'g mut ::netcdf::GroupMut<'_>, name: &str, dims: &[&str], vals: &[String],
+                ) -> ::netcdf::Result<::netcdf::VariableMut<'g>> {
+                    log::trace!("Writing to variable '{name}' with __put_strings");
+                    let mut v = g.add_string_variable(name, dims)?;
+                    for (i, s) in vals.iter().enumerate() {
+                        v.put_string(s, [i])?;
+                    }
+                    Ok(v)
+                }
+            });
+        }
+        if self.scalar {
+            out.extend(quote! {
+                fn __put_scalar<'g, T: ::netcdf::NcTypeDescriptor>(
+                    g: &'g mut ::netcdf::GroupMut<'_>, name: &str, val: T,
+                ) -> ::netcdf::Result<::netcdf::VariableMut<'g>> {
+                    log::trace!("Writing to variable '{name}' with __put_scalar");
+                    let mut v = g.add_variable::<T>(name, &[])?;
+                    v.put_value(val, ())?;
+                    Ok(v)
+                }
+            });
+        }
+        if self.string_scalar {
+            out.extend(quote! {
+                fn __put_string_scalar<'g>(
+                    g: &'g mut ::netcdf::GroupMut<'_>, name: &str, s: &str,
+                ) -> ::netcdf::Result<::netcdf::VariableMut<'g>> {
+                    log::trace!("Writing to variable '{name}' with __put_string_scalar");
+                    let mut v = g.add_string_variable(name, &[])?;
+                    v.put_string(s, ())?;
+                    Ok(v)
+                }
+            });
+        }
+        out
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Per-field code generation
+// ---------------------------------------------------------------------------
+
+/// Statements that turn `place` into a `__packed` value of the requested on-disk
+/// type, following the netCDF attribute convention `packed = (value - add_offset)
+/// / scale_factor`.
+///
+/// Emitted inline rather than as a shared helper: both the float type and the
+/// storage type are known here, so no generics, trait bounds, or
+/// `HelpersNeeded` bookkeeping are required.
+fn pack_prelude(
+    so: &ScaleOffsetSpec,
+    float_ty: FloatTy,
+    write_kind: NcKind,
+    place: &TokenStream2,
+    name: &str,
+) -> TokenStream2 {
+    let out_ty = so.nc_type.rust_ty();
+    let out_ty_name = so.nc_type.name();
+    let float = syn::Ident::new(float_ty.name(), proc_macro2::Span::call_site());
+
+    // Subtract the offset and divide by the scale, skipping whichever was not
+    // given rather than multiplying by 1 or adding 0.
+    let mut adjust = TokenStream2::new();
+    if let Some(offset) = so.offset {
+        adjust.extend(quote! { __p -= #offset as #float; });
+    }
+    if let Some(scale) = so.scale {
+        adjust.extend(quote! { __p /= #scale as #float; });
+    }
+
+    // Integers need rounding and a range check. `round_ties_even` rather than
+    // `round` so packing agrees with `numpy.around`, which is what
+    // netCDF4-python's `_pack` uses, on exact .5 boundaries. The explicit range
+    // check is because Rust's float->int cast saturates silently, which would
+    // turn an out-of-range value into a plausible-looking extreme.
+    // NaN needs its own check: it fails both range comparisons, and `NaN as i16`
+    // is 0, which would unpack to the offset — a plausible value.
+    // Note the extra braces: this is interpolated into `Ok(#finish)`, so it has
+    // to be a block *expression*, not a run of statements.
+    let finish = if so.nc_type.is_integer() {
+        quote! {{
+            if __p.is_nan() {
+                return Err(::netcdf::Error::Str(format!(
+                    "variable '{}' contains NaN, which cannot be packed into {}",
+                    #name, #out_ty_name
+                )));
+            }
+            let __p = __p.round_ties_even();
+            if __p < #out_ty::MIN as #float || __p > #out_ty::MAX as #float {
+                return Err(::netcdf::Error::Str(format!(
+                    "value {__v} of variable '{}' does not fit in {} once packed \
+                     (packed value {__p} is outside {}..={})",
+                    #name, #out_ty_name, #out_ty::MIN, #out_ty::MAX
+                )));
+            }
+            __p as #out_ty
+        }}
+    } else {
+        quote! { __p as #out_ty }
+    };
+
+    // `?` inside a closure would return from the closure, so pack through a
+    // `Result`-yielding map and collect, which propagates out of `write_netcdf`.
+    let pack_one = quote! {
+        |&__v: &#float| -> ::netcdf::Result<#out_ty> {
+            let mut __p = __v;
+            #adjust
+            Ok(#finish)
+        }
+    };
+
+    match write_kind {
+        NcKind::Array => quote! {
+            // `.iter()` yields logical order, which is what `from_shape_vec` expects.
+            let __packed_vec = #place
+                .iter()
+                .map(#pack_one)
+                .collect::<::netcdf::Result<::std::vec::Vec<#out_ty>>>()?;
+            let __packed = ::ndarray::Array::from_shape_vec(#place.raw_dim(), __packed_vec)
+                .map_err(|e| ::netcdf::Error::Str(format!(
+                    "could not rebuild packed array for variable '{}': {e}", #name
+                )))?;
+        },
+        NcKind::Scalar => quote! {
+            let __packed = (#pack_one)(& #place)?;
+        },
+        // `Values`; the string and attribute kinds were rejected in `resolve_field`.
+        _ => quote! {
+            let __packed = #place
+                .iter()
+                .map(#pack_one)
+                .collect::<::netcdf::Result<::std::vec::Vec<#out_ty>>>()?;
+        },
+    }
+}
+
+/// Build the `{ ... }` statement block that writes one field. `description`, if
+/// present, is the `(attribute name, text)` to attach to the created variable.
+fn field_block(
+    field: &WriteNetcdfField,
+    write_kind: NcKind,
+    name: &str,
+    description: Option<(String, String)>,
+    map_fns: MapFns<'_>,
+    ctx_arg: Option<&TokenStream2>,
+    arity: &mut ArityChecks<'_>,
+) -> TokenStream2 {
+    let ident = field.ident.as_ref().unwrap();
+    let field_str = ident.to_string();
+    let mapped = map_fns.any();
+
+    // `prelude` computes the value to write; `place` names it afterwards.
+    // Without a map we operate directly on `self.<field>`.
+    let (mut prelude, mut place): (TokenStream2, TokenStream2) = if let Some(m) = map_fns.map {
+        let m = arity.checked(CheckedFn::MapWrite, m);
+        (
+            quote! { let __val = #m(self, &self.#ident, #field_str, #name #ctx_arg); },
+            quote!(__val),
+        )
+    } else if let Some((m, _)) = map_fns.map_units {
+        let m = arity.checked(CheckedFn::MapUnitsWrite, m);
+        (
+            quote! { let (__val, __units) = #m(self, &self.#ident, #field_str, #name #ctx_arg); },
+            quote!(__val),
+        )
+    } else {
+        (quote! {}, quote!(self.#ident))
+    };
+
+    // Packing hooks into the same seam as `map`: rewrite the values in the
+    // prelude and point `place` at the result. Because `__put_values::<T>` infers
+    // `T` from its slice, handing it a `Vec<i16>` is all it takes to get
+    // `add_variable::<i16>` — none of the `__put_*` helpers need to know.
+    if let Some(so) = &field.scale_offset {
+        // `resolve_field` has already rejected a non-float field here.
+        let float_ty = float_element_type(&field.ty).unwrap_or(FloatTy::F64);
+        prelude.extend(pack_prelude(so, float_ty, write_kind, &place, name));
+        place = quote!(__packed);
+    }
+
+    // A scalar/attribute value must be owned; clone only when we can't move.
+    let owned = if field.scale_offset.is_some() {
+        quote!(__packed)
+    } else if mapped {
+        quote!(__val)
+    } else {
+        quote!(self.#ident.clone())
+    };
+
+    // Attribute statements applied to the created variable (`__var`).
+    let mut attr_stmts = TokenStream2::new();
+    // The doc-comment description is written first so an explicit `attr(...)`
+    // could intentionally shadow it if desired.
+    if let Some((desc_attr, desc_text)) = &description {
+        attr_stmts.extend(quote! { __var.put_attribute(#desc_attr, #desc_text)?; });
+    }
+    // The packing attributes go on before any explicit `attr(...)`, for the same
+    // reason: a hand-written `attr(name = "scale_factor", ...)` can still shadow
+    // them. They are written in the field's own float type, since the convention
+    // is that they match the *unpacked* data rather than the stored data.
+    if let Some(so) = &field.scale_offset {
+        let float = syn::Ident::new(
+            float_element_type(&field.ty).unwrap_or(FloatTy::F64).name(),
+            proc_macro2::Span::call_site(),
+        );
+        if let Some(scale) = so.scale {
+            attr_stmts.extend(quote! { __var.put_attribute("scale_factor", #scale as #float)?; });
+        }
+        if let Some(offset) = so.offset {
+            attr_stmts.extend(quote! { __var.put_attribute("add_offset", #offset as #float)?; });
+        }
+    }
+    for a in &field.var_attrs {
+        let an = &a.name;
+        if let Some(v) = &a.value {
+            attr_stmts.extend(quote! { __var.put_attribute(#an, #v)?; });
+        } else if let Some(func) = &a.func {
+            let func = arity.checked(CheckedFn::AttrFunc, func);
+            attr_stmts.extend(quote! {
+                __var.put_attribute(#an, #func(self, &self.#ident, #field_str, #name #ctx_arg))?;
+            });
+        }
+    }
+    if let Some((_, unit_attr)) = map_fns.map_units {
+        attr_stmts.extend(quote! { __var.put_attribute(#unit_attr, __units)?; });
+    }
+    // `attrs(func = ...)` functions go last, so they can overwrite any of the
+    // above.
+    for a in &field.attrs_fns {
+        let func = arity.checked(CheckedFn::FieldAttrs, &a.func);
+        attr_stmts.extend(quote! {
+            #func(self, &self.#ident, #field_str, #name, &mut __var #ctx_arg)?;
+        });
+    }
+    let needs_var = !attr_stmts.is_empty();
+
+    // The dimension-name list literal (`["time", "level"]`), if given explicitly.
+    let dim_names: Vec<String> = field
+        .dimensions
+        .as_ref()
+        .map(|d| d.0.clone())
+        .unwrap_or_default();
+
+    // Produce the `helper(...)` call that creates + writes the variable.
+    let call: TokenStream2 = match write_kind {
+        NcKind::Values => {
+            let d0 = dim_names
+                .first()
+                .cloned()
+                .unwrap_or_else(|| name.to_string());
+            quote! {{
+                __ensure_dim(grp, #d0, #place.len())?;
+                __put_values(grp, #name, &[#d0], & #place)
+            }}
+        }
+        NcKind::StringVec => {
+            let d0 = dim_names
+                .first()
+                .cloned()
+                .unwrap_or_else(|| name.to_string());
+            quote! {{
+                __ensure_dim(grp, #d0, #place.len())?;
+                __put_strings(grp, #name, &[#d0], & #place)
+            }}
+        }
+        NcKind::Array => {
+            if dim_names.is_empty() {
+                // No names given: derive one per axis at runtime as `name_0`, ...
+                quote! {{
+                    let __shape = #place.shape().to_vec();
+                    let __names: ::std::vec::Vec<String> =
+                        (0..__shape.len()).map(|__i| format!("{}_{}", #name, __i)).collect();
+                    let __nrefs: ::std::vec::Vec<&str> =
+                        __names.iter().map(|__s| __s.as_str()).collect();
+                    __ensure_dims(grp, &__nrefs, &__shape)?;
+                    __put_array(grp, #name, &__nrefs, #place.view())
+                }}
+            } else {
+                quote! {{
+                    __ensure_dims(grp, &[#(#dim_names),*], #place.shape())?;
+                    __put_array(grp, #name, &[#(#dim_names),*], #place.view())
+                }}
+            }
+        }
+        NcKind::StringScalar => quote! { __put_string_scalar(grp, #name, & #place) },
+        NcKind::Scalar => quote! { __put_scalar(grp, #name, #owned) },
+        NcKind::Attribute => {
+            // A group attribute: no variable, no dimensions.
+            return quote! {{
+                #prelude
+                grp.add_attribute(#name, #owned)?;
+            }};
+        }
+    };
+
+    // Bind `__var` only when there are attributes to attach (avoids unused
+    // variable/`mut` warnings); the block scope releases the borrow of `grp`
+    // before the next field runs.
+    if needs_var {
+        quote! {{
+            #prelude
+            let mut __var = #call?;
+            #attr_stmts
+        }}
+    } else {
+        quote! {{
+            #prelude
+            #call?;
+        }}
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Entry point
+// ---------------------------------------------------------------------------
+
+pub(crate) fn expand(input: TokenStream) -> TokenStream {
+    let derive_input = syn::parse_macro_input!(input as syn::DeriveInput);
+    let parsed = match WriteNetcdfInput::from_derive_input(&derive_input) {
+        Ok(p) => p,
+        Err(e) => return e.write_errors().into(),
+    };
+
+    let name = &parsed.ident;
+    let rename_all = parsed.rename_all.as_deref();
+    let fields = parsed
+        .data
+        .take_struct()
+        .expect("darling's supports(struct_named) guarantees this")
+        .fields;
+
+    // Validate `rename_all` once up front (with an empty field name) so an
+    // unknown rule is reported even on an empty struct.
+    let mut errors = darling::Error::accumulator();
+    if let Some(rule) = rename_all
+        && let Err(e) = apply_rename_all("x", rule)
+    {
+        errors.push(e);
+    }
+
+    let mut helpers = HelpersNeeded::default();
+    let mut field_blocks: Vec<TokenStream2> = Vec::new();
+    // With a context, every `custom` function takes it as a final argument.
+    let context = parsed
+        .context
+        .as_ref()
+        .and_then(|c| c.for_direction(Direction::Write));
+    let ctx_arg = context.map(|_| quote!(, __ctx));
+    let mut arity = ArityChecks::new(parsed.context.as_ref());
+
+    for f in &fields {
+        let ident = f.ident.as_ref().unwrap();
+
+        // A skipped field generates no code at all.
+        if let Some(skip) = f.skip
+            && skip.skips(Direction::Write)
+        {
+            errors.handle(resolve_skip(f, skip));
+            continue;
+        }
+
+        // A `custom` field bypasses all the derived machinery: no helpers, no
+        // description, just a call to the user's function.
+        match errors.handle(resolve_custom(f)) {
+            None => continue,
+            Some(Some(write_fn)) => {
+                let Some(name) = errors.handle(nc_name(ident, f.rename.as_deref(), rename_all))
+                else {
+                    continue;
+                };
+                let field_str = ident.to_string();
+                let write_fn = arity.checked(CheckedFn::CustomWrite, write_fn);
+                field_blocks.push(quote! {
+                    #write_fn(self, &self.#ident, #field_str, #name, grp #ctx_arg)?;
+                });
+                continue;
+            }
+            Some(None) => {}
+        }
+
+        // Resolve the write strategy and the netCDF name, collecting errors so
+        // every problem is reported in one compile.
+        let Some((wk, map_fns)) = errors.handle(resolve_field(f)) else {
+            continue;
+        };
+        let Some(name) = errors.handle(nc_name(ident, f.rename.as_deref(), rename_all)) else {
+            continue;
+        };
+        // Descriptions only apply to variables, not to group-attribute fields.
+        let description = if wk == NcKind::Attribute {
+            None
+        } else {
+            resolve_describe(parsed.describe.as_ref(), f.describe.as_ref(), f.no_describe)
+                .and_then(|attr| extract_doc(&f.attrs).map(|doc| (attr, doc)))
+        };
+        helpers.note(wk);
+        field_blocks.push(field_block(
+            f,
+            wk,
+            &name,
+            description,
+            map_fns,
+            ctx_arg.as_ref(),
+            &mut arity,
+        ));
+    }
+
+    if let Err(e) = errors.finish() {
+        return e.write_errors().into();
+    }
+
+    let (impl_generics, ty_generics, where_clause) = parsed.generics.split_for_impl();
+    // Group-attribute functions run after the fields, so they can inspect what
+    // was written.
+    let group_attrs: Vec<TokenStream2> = parsed
+        .attrs_fns
+        .iter()
+        .map(|a| {
+            let func = arity.checked(CheckedFn::GroupAttrs, &a.func);
+            quote! { #func(self, grp #ctx_arg)?; }
+        })
+        .collect();
+    let group_attrs = quote! { #(#group_attrs)* };
+    // Emitted last: every checked call above registers what it needs.
+    let mut helper_fns = helpers.tokens();
+    helper_fns.extend(arity.defs());
+
+    let methods = match context {
+        None => quote! {
+            /// Write this struct's fields into `grp` as netCDF variables and
+            /// group attributes. Pass a file root (`FileMut::root_mut()`) or a
+            /// subgroup. Missing dimensions are created automatically.
+            pub fn write_netcdf(&self, grp: &mut ::netcdf::GroupMut<'_>) -> ::netcdf::Result<()> {
+                #helper_fns
+                #(#field_blocks)*
+                #group_attrs
+                Ok(())
+            }
+        },
+        Some(ctx) => {
+            let ctx_ty = &ctx.ty;
+            // Rebinding `ctx` up front keeps the generated code's name for it
+            // out of the way of anything the field blocks define.
+            let with_ctx = quote! {
+                /// Write this struct's fields into `grp` as netCDF variables and
+                /// group attributes, passing `ctx` to each `custom` and `attrs`
+                /// function. Pass a file root (`FileMut::root_mut()`) or a
+                /// subgroup. Missing dimensions are created automatically.
+                pub fn write_netcdf_context(
+                    &self,
+                    grp: &mut ::netcdf::GroupMut<'_>,
+                    ctx: &#ctx_ty,
+                ) -> ::netcdf::Result<()> {
+                    let __ctx = ctx;
+                    let _ = __ctx;
+                    #helper_fns
+                    #(#field_blocks)*
+                    #group_attrs
+                    Ok(())
+                }
+            };
+            let plain = ctx.default.then(|| {
+                let default_ctx = ctx.default_expr();
+                quote! {
+                    /// Like `write_netcdf_context`, with the context's
+                    /// `Default::default()`.
+                    pub fn write_netcdf(&self, grp: &mut ::netcdf::GroupMut<'_>) -> ::netcdf::Result<()> {
+                        self.write_netcdf_context(grp, #default_ctx)
+                    }
+                }
+            });
+            quote! { #with_ctx #plain }
+        }
+    };
+
+    let expanded = quote! {
+        impl #impl_generics #name #ty_generics #where_clause {
+            #methods
+        }
+    };
+
+    TokenStream::from(expanded)
+}

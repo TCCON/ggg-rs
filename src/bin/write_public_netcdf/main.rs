@@ -181,6 +181,11 @@ struct Cli {
     #[clap(long, group = "data_latency")]
     data_latency_file: Option<PathBuf>,
 
+    /// The date from which to compute the cutoff of data from the latency given
+    /// in the other --data-latency-* options. Defaults to today if not given.
+    #[clap(long, group = "data_latency")]
+    data_latency_from: Option<NaiveDate>,
+
     /// Disable reordering of data by time. The default behavior is to reorder
     /// arrays with a `time` dimension so that the time dimension is ordered
     /// chronologically
@@ -220,8 +225,8 @@ impl Cli {
             return Ok(Some(date));
         }
 
-        // Either of the last two options need today's date, so go ahead and get that now.
-        let today = chrono::Utc::now().date_naive();
+        // Either of the last two options need a date to be relative to, so go ahead and get that now.
+        let latency_base_date = self.get_data_latency_from();
         let ndays = if let Some(days) = self.data_latency_days {
             days
         } else if self.data_latency_file.is_some() {
@@ -230,7 +235,7 @@ impl Cli {
             return Ok(None);
         };
 
-        let date = today - chrono::Days::new(ndays as u64);
+        let date = latency_base_date - chrono::Days::new(ndays as u64);
         log::debug!("Calculated data end date {date} from latency number of days {ndays}");
         return Ok(Some(date));
     }
@@ -260,6 +265,11 @@ impl Cli {
         })?;
 
         Ok(site_meta.release_lag)
+    }
+
+    fn get_data_latency_from(&self) -> chrono::NaiveDate {
+        self.data_latency_from
+            .unwrap_or_else(|| chrono::Utc::now().date_naive())
     }
 }
 
@@ -476,8 +486,13 @@ fn add_aux_vars(
     time_subsetter: &Subsetter,
 ) -> error_stack::Result<(), CliError> {
     for var in config.aux.iter() {
-        var.copy(private_ds, public_ds, time_subsetter)
-            .change_context(CliError::WritingAux)?;
+        var.copy(
+            private_ds,
+            public_ds,
+            time_subsetter,
+            &config.var_attrs_to_omit,
+        )
+        .change_context(CliError::WritingAux)?;
     }
 
     Ok(())
@@ -490,8 +505,13 @@ fn add_extra_priors(
     time_subsetter: &Subsetter,
 ) -> error_stack::Result<(), CliError> {
     for var in config.extra_priors.iter() {
-        var.copy(private_ds, public_ds, time_subsetter)
-            .change_context(CliError::WritingExtraPriors)?;
+        var.copy(
+            private_ds,
+            public_ds,
+            time_subsetter,
+            &config.var_attrs_to_omit,
+        )
+        .change_context(CliError::WritingExtraPriors)?;
     }
     Ok(())
 }
@@ -517,8 +537,13 @@ fn add_xgas_vars(
 
     for var in it {
         log::trace!("Xgas variable: {var:?}");
-        var.copy(private_ds, public_ds, time_subsetter)
-            .change_context(CliError::WritingXgas)?;
+        var.copy(
+            private_ds,
+            public_ds,
+            time_subsetter,
+            &config.var_attrs_to_omit,
+        )
+        .change_context(CliError::WritingXgas)?;
     }
 
     Ok(())
@@ -531,8 +556,13 @@ fn add_computed_vars(
     time_subsetter: &Subsetter,
 ) -> error_stack::Result<(), CliError> {
     for var in config.computed.iter() {
-        var.copy(private_ds, public_ds, time_subsetter)
-            .change_context(CliError::WritingComputed)?;
+        var.copy(
+            private_ds,
+            public_ds,
+            time_subsetter,
+            &config.var_attrs_to_omit,
+        )
+        .change_context(CliError::WritingComputed)?;
     }
 
     Ok(())

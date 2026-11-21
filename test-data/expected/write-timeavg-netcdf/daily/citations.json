@@ -1,0 +1,21 @@
+{
+  "__comment__": "This file contains the plain text citations and DOIs for the TCCON datasets included in the time-averaged files in JSON format. Please cite the station-specific datasets for all stations' datasets used as well as the time-averaged collection. Because each TCCON site is responsible for securing its own funding, it is essential to demonstrate the value of the data to secure ongoing funding.",
+  "citations": [
+    {
+      "tccon_site_id": "ci",
+      "tccon_name": "pasadena01",
+      "mip_id": 6,
+      "mip_name": "caltech",
+      "doi": "10.14291/tccon.ggg2020p1.pasadena01.R0",
+      "text_citation": "Wennberg, P. O., Roehl, C. M., Wunch, D., Blavier, J.-F., Toon, G. C., Allen, N. T., Treffers, R., and Laughner, J. (2022). TCCON data from Caltech (US), Release GGG2020.1.R0 (Version R0) [Dataset]. CaltechDATA. https://doi.org/10.14291/TCCON.GGG2020p1.PASADENA01.R0"
+    },
+    {
+      "tccon_site_id": "pa",
+      "tccon_name": "parkfalls01",
+      "mip_id": 29,
+      "mip_name": "parkfalls",
+      "doi": "10.14291/tccon.ggg2020p1.parkfalls01.R1",
+      "text_citation": "Wennberg, P. O., Roehl, C. M., Wunch, D., Toon, G. C., Blavier, J.-F., Washenfelder, R., Keppel-Aleks, G., and Allen, N. T. (2022). TCCON data from Park Falls (US), Release GGG2020.1.R1 (Version R1) [Dataset]. CaltechDATA. https://doi.org/10.14291/TCCON.GGG2020p1.PARKFALLS01.R1"
+    }
+  ]
+}

@@ -1,0 +1,5 @@
+error: `on_fill(int = "nan")` is not allowed: integer fields cannot hold NaN; use "keep", "ignore", or "error"
+ --> tests/ui/nc_on_fill_int_nan.rs:5:10
+  |
+5 | #[netcdf(on_fill(int = "nan"))]
+  |          ^^^^^^^

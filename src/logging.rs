@@ -5,13 +5,14 @@ use log4rs::{
     Config,
 };
 
+pub(crate) static LOG_PATTERN: &'static str =
+    "{h({d(%Y-%m-%d %H:%M:%S)} [{l}] from line {L} in {M})} - {m}{n}";
+
 pub fn init_logging(level: log::LevelFilter) {
     // Eventually it might make sense to log to a file as well, so that
     // ALL of the issues that happened during post processing are captured.
     let stderr = ConsoleAppender::builder()
-        .encoder(Box::new(PatternEncoder::new(
-            "{h({d(%Y-%m-%d %H:%M:%S)} [{l}] from line {L} in {M})} - {m}{n}",
-        )))
+        .encoder(Box::new(PatternEncoder::new(LOG_PATTERN)))
         .target(Target::Stderr)
         .build();
 

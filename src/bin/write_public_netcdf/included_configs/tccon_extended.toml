@@ -13,7 +13,6 @@ extra_extension = "extended."
 private_name = "column_ao2_si"
 public_name = "column_ao2_visible"
 long_name = "oxygen column density"
-attr_to_remove = ["precision"]
 required = false
 [aux.attr_overrides]
 description = "column density of oxygen retrieved from the A-band"
@@ -33,7 +32,6 @@ description = "one-sigma precision"
 private_name = "column_bo2_si"
 public_name = "column_bo2_visible"
 long_name = "oxygen column density"
-attr_to_remove = ["precision"]
 required = false
 [aux.attr_overrides]
 description = "column density of oxygen retrieved from the B-band"
@@ -101,3 +99,10 @@ averaging_kernels = "Per spectrum averaging kernels are not yet available for mi
 # If we ever add other variables retrieved on the Si detectors, we want to include
 # them, but the O2 column averages are less useful than their column densities.
 excluded_xgas_variables = ["xao2_si", "xbo2_si"]
+
+[global_attributes]
+copy_if_present = ["long_name", "location", "site_reference", "short_location"]
+
+[global_attributes.copy_and_edit]
+data_doi = { type = "doi_to_extended" }
+data_reference = { type = "doi_to_extended" }

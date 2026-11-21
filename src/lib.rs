@@ -1,9 +1,13 @@
+/// Utilities for array math
+pub mod array_ops;
 /// Common code for averaging windows
 pub mod averaging;
 /// Utilities for interpreting spectra named following the Caltech TCCON convention
 pub mod cit_spectrum_name;
 /// Common code for `collate-*-results` programs.
 pub mod collation;
+/// Common constants used throughout the programs.
+pub mod constants;
 /// Common error types
 pub mod error;
 /// Utilities for handling I2S configuration
@@ -12,6 +16,10 @@ pub mod i2s;
 pub mod interpolation;
 /// Helper functions for consistent logging
 pub mod logging;
+/// A module with common functions that Lua scripts can use
+pub mod lua;
+/// A module with mathematical/statistical utilities
+pub mod math_utils;
 /// Utilities for netCDF files
 #[cfg(feature = "netcdf")]
 pub mod nc_utils;
@@ -24,10 +32,17 @@ pub mod o2_dmf;
 pub mod opus;
 /// Utilities for reading GGG files.
 pub mod readers;
+/// Utilities for serializing and deserializing files
+pub mod serde_utils;
+/// Utilities for working with the sunrun files.
+pub mod sunrun;
 /// Code supporting TCCON-focused programs
 pub mod tccon;
 /// Code used in multiple tests
+#[cfg(any(test, feature = "test-utils"))]
 pub mod test_utils;
+/// Utils for calculating time-related quantities
+pub mod time_utils;
 /// Helper functions for unit conversions
 pub mod units;
 /// General common utilities

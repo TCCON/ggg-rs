@@ -1,0 +1,5 @@
+error: `map(read)` has no effect with `skip(read)`, since `ReadNetcdf` never sees this field
+  --> tests/ui/nc_skip_read_with_map_read.rs:16:5
+   |
+16 |     values: Vec<f64>,
+   |     ^^^^^^

@@ -1,0 +1,34 @@
+error[E0277]: this `custom(read = ...)` function does not have the expected signature `fn(&str, &str, &netcdf::Group<'_>) -> netcdf::Result<FieldTy>`
+  --> tests/ui/nc_custom_wrong_arity.rs:10:28
+   |
+ 8 | #[derive(ReadNetcdf)]
+   |          ---------- required by a bound introduced by this call
+ 9 | struct Bad {
+10 |     #[netcdf(custom(read = from_nc))]
+   |                            ^^^^^^^ `custom(read = ...)` expects `fn(&str, &str, &netcdf::Group<'_>) -> netcdf::Result<FieldTy>`
+   |
+   = help: the trait `__ArityCustomRead<_, _>` is not implemented for fn item `for<'a> fn(&'a str) -> Result<f64, netcdf::Error> {from_nc}`
+note: required by a bound in `__check_CustomRead`
+  --> tests/ui/nc_custom_wrong_arity.rs:8:10
+   |
+ 8 | #[derive(ReadNetcdf)]
+   |          ^^^^^^^^^^ required by this bound in `__check_CustomRead`
+   = note: this error originates in the derive macro `ReadNetcdf` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0061]: this function takes 1 argument but 3 arguments were supplied
+  --> tests/ui/nc_custom_wrong_arity.rs:10:28
+   |
+ 8 | #[derive(ReadNetcdf)]
+   |          ----------
+   |          |
+   |          unexpected argument #2 of type `&'static str`
+   |          unexpected argument #3 of type `&Group<'_>`
+ 9 | struct Bad {
+10 |     #[netcdf(custom(read = from_nc))]
+   |                            ^^^^^^^
+   |
+note: function defined here
+  --> tests/ui/nc_custom_wrong_arity.rs:4:4
+   |
+ 4 | fn from_nc(_n: &str) -> netcdf::Result<f64> {
+   |    ^^^^^^^

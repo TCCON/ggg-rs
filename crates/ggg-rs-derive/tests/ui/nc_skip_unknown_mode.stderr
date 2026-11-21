@@ -1,0 +1,5 @@
+error: Unknown field: `both`. Available values: `read`, `write`
+ --> tests/ui/nc_skip_unknown_mode.rs:6:19
+  |
+6 |     #[netcdf(skip(both))]
+  |                   ^^^^

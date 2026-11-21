@@ -1,0 +1,11 @@
+error[E0277]: the trait bound `NoDefault: Default` is not satisfied
+  --> tests/ui/nc_context_default_not_default.rs:12:23
+   |
+12 | #[netcdf(context(ty = "NoDefault", default))]
+   |                       ^^^^^^^^^^^ the trait `Default` is not implemented for `NoDefault`
+   |
+help: consider annotating `NoDefault` with `#[derive(Default)]`
+   |
+ 5 + #[derive(Default)]
+ 6 | struct NoDefault;
+   |

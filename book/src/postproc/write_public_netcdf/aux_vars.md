@@ -26,23 +26,27 @@ long_name = "solar zenith angle"
 
 This would rename the variable to `solar_zenith_angle` in the public file, but otherwise behave identically to above.
 
-You can also control the attributes copied through two more fields, `attr_overrides` and `attr_to_remove`.
+You can also control the attributes copied through the field `attr_overrides`.
 `attr_overrides` is a TOML table of attibute names and values that will be added to the public variable.
+If given a value that is a boolean, integer, float, string, datetime, or array, that value will be
+written to the attribute.
 If an attribute is listed in the private file with the same name as an override, the override value in the config takes precedence.
-The latter is an array of attribute names to skip copying if present.
-(If one of these attributes is not present in the private file, nothing happens.)
+If an attribute is given a value of a TOML table, this permits you to define options about how that attribute is handled.
 An example:
 
 ```toml
 [[aux]]
 private_name = "day"
 long_name = "day of year"
-attr_overrides = {units = "Julian day", description = "1-based day of year"}
-attr_to_remove = ["vmin", "vmax"]
+[aux.attr_overrides]
+units = "Julian day"
+description = "1-based day of year"
+vmin = {omit = true}
+vmax = {omit = true}
 ```
 
 This will add or replace the attributes `units` and `description` in the public file with those given here, and ensure that the `vmin` and `vmax` attributes are not copied.
-Take note, specifying `attr_to_remove` overrides the default list of `standard_name` and `precision`; this can be useful if you want to retain those (you can do so by specifying `attr_to_remove = []`), but if you want to exclude them, you must add them to your list.
+For more details, see [the variable attributes section](./variable_attributes.md#attribute-overrides)
 
 Finally, by default any auxiliary variable listed here must be found in the private netCDF file, or the public writer stops with an error.
 To change this behavior so that a variable is optional, add the `required = false` field to an aux variable:

@@ -1,0 +1,45 @@
+# Quantities whose modules are generated from quantity_template.rs.in.
+#
+# Each [[quantity]] entry produces src/units/<quantity>.rs. After editing
+# this file or the template, regenerate the modules with:
+#
+#   make sourcegen
+#
+# Fields:
+#   quantity   - module name in both uom::si and ggg_rs::units; also used as
+#                the argument name in the generated functions
+#   type_name  - uom quantity type name
+#   unit       - uom unit used in the doc examples
+#   value      - value used in the scalar doc example
+#   abbr       - the abbreviation uom gives for `unit`
+#   field      - struct field name used in the doc examples
+#   units_attr - value of the "units" attribute in the `map` doc example
+#
+# You must also add `pub mod <quantity>;` to src/units/mod.rs for a new entry.
+
+[[quantity]]
+quantity = "angle"
+type_name = "Angle"
+unit = "degree"
+value = "90.0"
+abbr = "°"
+field = "solzen"
+units_attr = "degrees"
+
+[[quantity]]
+quantity = "pressure"
+type_name = "Pressure"
+unit = "pascal"
+value = "101325.0"
+abbr = "Pa"
+field = "p_surf"
+units_attr = "Pascals"
+
+[[quantity]]
+quantity = "ratio"
+type_name = "Ratio"
+unit = "part_per_million"
+value = "400.0"
+abbr = "ppm"
+field = "xco2"
+units_attr = "parts_per_million"

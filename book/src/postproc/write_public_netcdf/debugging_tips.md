@@ -15,7 +15,7 @@ If you seem to be missing variables in the output, have the same variable try to
 or other problems when using a custom configuration, first run the writer with the `--check-config-only`
 flag and carefully examine the printed parsed version of the configuration.
 This can help check if the configuration is being interpreted as you intended,
-especially when using the [include feature](/postproc/write_public_netcdf/includes.html)
+especially when using the [include feature](./includes.md)
 
 ## Checking on Xgas discovery
 

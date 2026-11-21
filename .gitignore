@@ -1,3 +1,4 @@
 /target
 .condaenv
 .DS_Store
+**/*.npy

@@ -1,0 +1,5 @@
+error: `context` needs a type: `context(ty = "Ctx")` for both directions, or `context(read = "R", write = "W")` with either half optional
+ --> tests/ui/nc_context_empty.rs:5:10
+  |
+5 | #[netcdf(context(default))]
+  |          ^^^^^^^

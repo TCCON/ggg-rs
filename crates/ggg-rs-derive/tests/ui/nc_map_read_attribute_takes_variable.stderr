@@ -1,0 +1,20 @@
+error[E0308]: mismatched types
+  --> tests/ui/nc_map_read_attribute_takes_variable.rs:14:10
+   |
+14 | #[derive(ReadNetcdf)]
+   |          ^^^^^^^^^^ expected `&Variable<'_>`, found `&Attribute<'_>`
+15 | struct Bad {
+16 |     #[netcdf(attribute, map(read = parse))]
+   |                                    ----- arguments to this function are incorrect
+   |
+   = note: expected reference `&Variable<'_>`
+              found reference `&Attribute<'_>`
+note: function defined here
+  --> tests/ui/nc_map_read_attribute_takes_variable.rs:5:4
+   |
+ 5 | fn parse(
+   |    ^^^^^
+...
+ 9 |     _var: &netcdf::Variable<'_>,
+   |     ---------------------------
+   = note: this error originates in the derive macro `ReadNetcdf` (in Nightly builds, run with -Z macro-backtrace for more info)

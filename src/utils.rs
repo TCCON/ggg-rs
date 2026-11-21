@@ -1,4 +1,5 @@
 //! General GGG utilities, not particular to any program or I/O step.
+use std::borrow::Cow;
 use std::error::Error;
 use std::ffi::{OsStr, OsString};
 use std::fmt::Display;
@@ -19,7 +20,7 @@ use ndarray::{Array1, ArrayView1};
 use serde::Serialize;
 use serde::{de::Error as DeserError, Deserialize, Deserializer};
 
-use crate::error::{BodyError, DateTimeError};
+use crate::error::{BodyError, DateTimeError, FileLocation, LocationErr};
 
 use crate::error::HeaderError;
 
@@ -67,6 +68,9 @@ pub enum GggError {
     },
     /// Indicates that an iterative process failed to convege
     ConvergenceError(String),
+    /// A wrapper error for Lua errors, since mlua::Error does not satisfy error_stack::ResultExt requirements.
+    /// The inner Lua error is converted into part of the string with the [`GggError::lua`] method.
+    Lua(String),
     /// A generic error for an unimplemented case in the code
     NotImplemented(String),
     /// A general error for one-off cases that don't need their own variant
@@ -79,51 +83,45 @@ pub enum GggError {
 impl Display for GggError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::GggPathError(inner) => {
-                write!(f, "Error getting GGGPATH: {inner}")
-            }
-            Self::UnknownApodization(a) => {
-                write!(f, "Unknown apodization type: '{a}'")
-            }
+            Self::GggPathError(inner) => write!(f, "Error getting GGGPATH: {inner}"),
+            Self::UnknownApodization(a) => write!(f, "Unknown apodization type: '{a}'"),
+
             Self::CouldNotOpen {
                 descr,
                 path,
                 reason,
-            } => {
-                write!(
-                    f,
-                    "Could not open {descr} at {} because: {reason}",
-                    path.display()
-                )
-            }
-            Self::CouldNotRead { path, reason } => {
-                write!(
-                    f,
-                    "Could not read from {} because: {reason}",
-                    path.display()
-                )
-            }
+            } => write!(
+                f,
+                "Could not open {descr} at {} because: {reason}",
+                path.display()
+            ),
+
+            Self::CouldNotRead { path, reason } => write!(
+                f,
+                "Could not read from {} because: {reason}",
+                path.display()
+            ),
+
             Self::CouldNotWrite { path, reason } => {
                 write!(f, "Could not write to {} because: {reason}", path.display())
             }
-            Self::HeaderError(err) => {
-                write!(f, "{err}")
-            }
+
+            Self::HeaderError(err) => write!(f, "{err}"),
             Self::DataError { path, cause } => {
                 write!(f, "Error in data format of {}: {cause}", path.display())
             }
             Self::ConvergenceError(reason) => {
                 write!(f, "{reason}")
             }
-            Self::NotImplemented(case) => {
-                write!(f, "Not implemented: {case}")
-            }
-            Self::Context(msg) => {
+            Self::Lua(msg) => {
                 write!(f, "{msg}")
             }
-            Self::Custom(msg) => {
-                write!(f, "{msg}")
-            }
+
+            Self::NotImplemented(case) => write!(f, "Not implemented: {case}"),
+
+            Self::Context(msg) => write!(f, "{msg}"),
+
+            Self::Custom(msg) => write!(f, "{msg}"),
         }
     }
 }
@@ -146,6 +144,10 @@ impl GggError {
 
     pub fn not_implemented<S: ToString>(case: S) -> Self {
         Self::NotImplemented(case.to_string())
+    }
+
+    pub fn lua<S: Display>(ctx: S, err: mlua::Error) -> Self {
+        Self::Lua(format!("{ctx}. Lua error was: {err}"))
     }
 
     pub fn custom<S: ToString>(msg: S) -> Self {
@@ -173,15 +175,11 @@ pub enum GggPathErrorKind {
 impl Display for GggPathErrorKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::NotSet => {
-                write!(f, "GGGPATH/gggpath environmental variables not set")
-            }
-            Self::DoesNotExist(p) => {
-                write!(f, "Current GGGPATH ({}) does not exist", p.display())
-            }
-            Self::IsNotDir(p) => {
-                write!(f, "Current GGGPATH ({}) is not a directory", p.display())
-            }
+            Self::NotSet => write!(f, "GGGPATH/gggpath environmental variables not set"),
+
+            Self::DoesNotExist(p) => write!(f, "Current GGGPATH ({}) does not exist", p.display()),
+
+            Self::IsNotDir(p) => write!(f, "Current GGGPATH ({}) is not a directory", p.display()),
         }
     }
 }
@@ -192,20 +190,44 @@ impl Display for GggPathErrorKind {
 #[cfg(feature = "netcdf")]
 #[derive(Debug)]
 pub enum GggNcError {
+    /// Indicates that an attribute expected on a variable is missing.
+    ///
+    /// If `group` is `None`, then the variable was in the root group.
     MissingVarAttr {
         attribute: String,
         variable: String,
         group: Option<String>,
     },
-    MissingGroupAttr {
-        attribute: String,
-        group: String,
-    },
+
+    /// Indicates that an attribute expected on a group is missing.
+    MissingGroupAttr { attribute: String, group: String },
+
+    /// Indicates that a variable was missing.
+    ///
+    /// If `group` is `None`, the variable was expected to be in the
+    /// root group.
     MissingVar {
         variable: String,
         group: Option<String>,
     },
+
+    /// Indicates that a variable had a different number of dimensions than expected.
+    ///
+    /// If `group` is `None`, the variable was expected to be in the
+    /// root group.
+    WrongDimensionality {
+        variable: String,
+        group: Option<String>,
+        shape_err: ndarray::ShapeError,
+    },
+
+    /// Wraps a netCDF error.
     NcErr(netcdf::Error),
+
+    /// A custom error for other problems that are uncommon.
+    Custom(String),
+
+    /// Provides additional context for lower-level error via [`error_stack`].
     Context(String),
 }
 
@@ -240,6 +262,7 @@ impl Display for GggNcError {
             GggNcError::MissingGroupAttr { attribute, group } => {
                 write!(f, "Attribute '{attribute}' not found on group '{group}'")
             }
+
             GggNcError::MissingVar { variable, group } => {
                 if let Some(grp) = group {
                     write!(f, "Variable '{variable}' not found in group '{grp}'")
@@ -247,12 +270,25 @@ impl Display for GggNcError {
                     write!(f, "Variable '{variable}' not found")
                 }
             }
-            GggNcError::NcErr(error) => {
-                write!(f, "{error}")
+            GggNcError::WrongDimensionality {
+                variable,
+                group,
+                shape_err,
+            } => {
+                if let Some(grp) = group {
+                    write!(
+                        f,
+                        "Variable '{variable}' in group '{grp}' has wrong number of dimensions, underlying error was: {shape_err}"
+                    )
+                } else {
+                    write!(f, "Variable '{variable}' has wrong number of dimensions, underlying error was: {shape_err}")
+                }
             }
-            GggNcError::Context(msg) => {
-                write!(f, "{msg}")
-            }
+            GggNcError::NcErr(error) => write!(f, "{error}"),
+
+            GggNcError::Custom(msg) => write!(f, "{msg}"),
+
+            GggNcError::Context(msg) => write!(f, "{msg}"),
         }
     }
 }
@@ -294,9 +330,115 @@ impl GggNcError {
         }
     }
 
+    /// Construct a variant with a general error message for uncommon error cases.
+    pub fn custom<C: ToString>(msg: C) -> Self {
+        Self::Custom(msg.to_string())
+    }
+
     /// Construct a variant useful for adding context to a lower-level error.
     pub fn context<C: ToString>(msg: C) -> Self {
         Self::Context(msg.to_string())
+    }
+}
+
+/// Derive the TCCON site ID from a filename.
+///
+/// Currently, this assumes that the site ID will be the first two characters of the
+/// file's base name. However, all code should use this function rather than directly
+/// extracting the site ID, since this could change in the future.
+pub fn site_id_from_filename(p: &Path) -> Result<String, GggError> {
+    let name = p
+        .file_name()
+        .ok_or_else(|| {
+            GggError::Custom(format!("Could not get base name of file {}", p.display()))
+        })?
+        .to_str()
+        .ok_or_else(|| {
+            GggError::Custom(format!(
+                "Could not convert base name of file {} to UTF-8",
+                p.display()
+            ))
+        })?;
+    let site_id = name.chars().take(2).join("");
+    Ok(site_id)
+}
+
+/// An enum describing what kind of fitting run this is, e.g. ground-based or laboratory.
+///
+/// This can be created from a path to a file where the first letter of the extension
+/// corresponds to this type. Examples are spectra lists, sunruns, and runlogs.
+#[derive(Debug, Clone, Copy)]
+pub enum RunType {
+    Air,
+    Bal,
+    Gnd,
+    Lab,
+    Orb,
+    Syn,
+    Other(char),
+}
+
+impl RunType {
+    /// Return the subdirectory sunruns and runlogs for this run type should go in.
+    pub fn subdir(&self) -> Result<&'static str, GggError> {
+        match self {
+            Self::Air => Ok("air"),
+            Self::Bal => Ok("bal"),
+            Self::Gnd => Ok("gnd"),
+            Self::Lab => Ok("lab"),
+            Self::Orb => Ok("orb"),
+            Self::Syn => Ok("syn"),
+            Self::Other(c) => Err(GggError::custom(format!(
+                "Starting character '{c}' does not have a defined subdirectory"
+            ))),
+        }
+    }
+
+    /// Return `true` if this is a lamp run.
+    pub fn is_lamp(&self) -> bool {
+        if let Self::Lab = self {
+            true
+        } else {
+            false
+        }
+    }
+}
+
+impl TryFrom<PathBuf> for RunType {
+    type Error = GggError;
+
+    fn try_from(value: PathBuf) -> Result<Self, Self::Error> {
+        Self::try_from(value.as_path())
+    }
+}
+
+impl TryFrom<&Path> for RunType {
+    type Error = GggError;
+
+    fn try_from(p: &Path) -> Result<Self, Self::Error> {
+        let ext = p
+            .extension()
+            .ok_or_else(|| {
+                GggError::custom(format!("Could not get extension from {}", p.display()))
+            })?
+            .as_encoded_bytes()
+            .get(0)
+            .ok_or_else(|| {
+                GggError::custom(format!(
+                    "Could not get first character of extension from {}",
+                    p.display()
+                ))
+            })?;
+
+        match ext {
+            b'a' => Ok(Self::Air),
+            b'b' => Ok(Self::Bal),
+            b'g' => Ok(Self::Gnd),
+            b'l' => Ok(Self::Lab),
+            b'o' => Ok(Self::Orb),
+            b's' => Ok(Self::Syn),
+            _ => Ok(Self::Other(char::from(*ext))),
+        }
     }
 }
 
@@ -946,6 +1088,7 @@ pub struct CommonHeader {
 /// # See also
 /// * [`get_nhead_ncol`] - shortcut to get the first two numbers (number of header lines and number of data columns)
 /// * [`get_nhead`] - shortcut to get the first number (number of header lines)
+/// * [`parse_file_shape_info`] - parse an already-read shape line.
 pub fn get_file_shape_info<F: BufRead>(
     f: &mut FileBuf<F>,
     min_numbers: usize,
@@ -958,28 +1101,40 @@ pub fn get_file_shape_info<F: BufRead>(
         })
     })?;
 
+    let numbers = parse_file_shape_info(&buf, Some(min_numbers)).with_location(f.path.as_path())?;
+
+    Ok(numbers)
+}
+
+/// Parse a line containing a sequence of integers that (usually) information about the file shape.
+///
+/// If `min_numbers` is `Some(n)`, then this function will return an `Err` if the there were fewer
+/// than `n` numbers in the line. You can then safely index the returned `Vec` up to `n-1`.
+/// Otherwise, this will only return an error if the line cannot be parsed as a sequence of integers.
+pub fn parse_file_shape_info(
+    shape_line: &str,
+    min_numbers: Option<usize>,
+) -> Result<Vec<usize>, HeaderError> {
     let mut numbers = vec![];
-    for (i, s) in buf.trim().split_whitespace().enumerate() {
+    for (i, s) in shape_line.trim().split_whitespace().enumerate() {
         let val: usize = s.parse().map_err(|_| {
             // let loc = FileLocation::new(Some(f.path), None, None);
             HeaderError::ParseError {
-                location: f.path.as_path().into(),
+                location: FileLocation::empty(),
                 cause: format!("Could not parse number at position {}: {s}", i + 1),
             }
         })?;
         numbers.push(val);
     }
 
-    if numbers.len() < min_numbers {
-        return Err(HeaderError::ParseError {
-            location: f.path.as_path().into(),
-            cause: format!(
-                "Expected at least {min_numbers} numbers, found {}",
-                numbers.len()
-            ),
-        });
+    if let Some(n) = min_numbers {
+        if numbers.len() < n {
+            return Err(HeaderError::ParseError {
+                location: FileLocation::empty(),
+                cause: format!("Expected at least {n} numbers, found {}", numbers.len()),
+            });
+        }
     }
-
     Ok(numbers)
 }
 
@@ -1429,6 +1584,7 @@ pub fn split_gas_and_window(colname: &str) -> Option<(&str, &str)> {
     }
 }
 
+/// Iterator type for [`iter_dates`]
 pub struct DateIter {
     curr: chrono::NaiveDate,
     end: chrono::NaiveDate,
@@ -1448,12 +1604,20 @@ impl Iterator for DateIter {
     }
 }
 
+/// Create an iterator over all dates between start and end, _inclusive_.
 pub fn iter_dates(start_date: chrono::NaiveDate, end_date: chrono::NaiveDate) -> DateIter {
     DateIter {
         curr: start_date,
         end: end_date,
     }
 }
+
+// pub fn array_median_skipnan<F: num_traits::Float + From<f64>, D: ndarray::Dimension>(arr: Array<F, D>) {
+//     let q = noisy_float::NoisyFloat::<F, noisy_float::checkers::NumChecker>::new(0.5.into());
+//     let n_arr =
+//         arr.mapv(|v| noisy_float::NoisyFloat::<F, noisy_float::checkers::NumChecker>::new(v));
+
+// }
 
 #[derive(Debug, thiserror::Error)]
 pub enum EncodingError {
@@ -1474,6 +1638,34 @@ pub fn read_unknown_encoding_file<P: AsRef<Path>>(filepath: P) -> Result<String,
     );
 
     content_result.map_err(|e| EncodingError::ConversionError(e.into_owned()))
+}
+
+/// Directly read and deserialize a TOML file.
+///
+/// Since the [`toml`] crate only provides a `from_str` method to deserialize,
+/// this helper function handles reading the given file to a string and then
+/// deserializing. Note that, like most deserialization functions, you will need
+/// to specify the type by either annotating the receiving variable's type,
+/// e.g. `let cfg: T = read_toml_file(...)`, or using the "turbofish" syntax,
+/// e.g. `let cfg = read_toml_file::<T>(...)`. In both examples, you would replace
+/// `T` with the specific type you wish returned.
+pub fn read_toml_file<T: serde::de::DeserializeOwned>(file: &Path) -> Result<T, GggError> {
+    let mut f = std::fs::File::open(file).map_err(|e| GggError::CouldNotOpen {
+        descr: "TOML file".to_string(),
+        path: file.to_path_buf(),
+        reason: e.to_string(),
+    })?;
+    let mut s = String::new();
+    f.read_to_string(&mut s)
+        .map_err(|e| GggError::CouldNotRead {
+            path: file.to_path_buf(),
+            reason: e.to_string(),
+        })?;
+    let obj: T = toml::from_str(&s).map_err(|e| GggError::CouldNotRead {
+        path: file.to_path_buf(),
+        reason: format!("Error deserializing TOML:\n{e}"),
+    })?;
+    Ok(obj)
 }
 
 /// Remove a comment from a line
@@ -1715,9 +1907,74 @@ fn make_path_abs(p: PathBuf) -> PathBuf {
     }
 }
 
+/// Convert bytes to either a UTF-8 string or a hex representation.
+///
+/// This tries to convert the given bytes to a UTF-8 string. If that
+/// fails, it returns a hex string version of the bytes instead.
+/// If `omit_trailing_nulls` is `true`, then any trailing 0s will be ignored
+/// in the byte slice will not be included when converting to a string.
+/// However, this parameter is ignored if a hex string is returned.
+///
+/// If the bytes can be interpreted as UTF-8, then a string slice is
+/// returned to avoid an allocation. A hex string does require an
+/// allocation, however.
+///
+/// ```rust
+/// # use ggg_rs::utils::utf_or_hex;
+/// // Trailing 0s are ignored
+/// let s = utf_or_hex(&[97, 98, 99, 0, 0, 0], true);
+/// assert_eq!(&s, "abc");
+///
+/// // Trailing 0s are encoded as nulls
+/// let s = utf_or_hex(&[97, 98, 99, 0, 0, 0], false);
+/// assert_eq!(&s, "abc\0\0\0");
+///
+/// // Bytes above 127 that aren't valid UTF-8 trigger
+/// // this to be written as a hex string. This will
+/// // always include the trailing 0s.
+/// let s = utf_or_hex(&[128, 129, 130, 0], true);
+/// assert_eq!(&s, "0x80818200");
+/// let s = utf_or_hex(&[128, 129, 130, 0], false);
+/// assert_eq!(&s, "0x80818200");
+/// ```
+pub fn utf_or_hex(bytes: &[u8], omit_trailing_nulls: bool) -> Cow<'_, str> {
+    let i = if omit_trailing_nulls {
+        bytes
+            .iter()
+            .position(|b| *b == 0)
+            .unwrap_or_else(|| bytes.len())
+    } else {
+        bytes.len()
+    };
+
+    if let Ok(s) = str::from_utf8(&bytes[..i]) {
+        Cow::Borrowed(s)
+    } else {
+        let s = hex::encode(bytes);
+        Cow::Owned(format!("0x{s}"))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_utils::utc_dt_ymd;
+
+    #[test]
+    fn test_date_iter() {
+        let date_iter = iter_dates(
+            utc_dt_ymd(2020, 1, 1).date_naive(),
+            utc_dt_ymd(2020, 1, 3).date_naive(),
+        )
+        .collect_vec();
+        // Confirm that the end date is included in the iteration
+        let expected_dates = vec![
+            utc_dt_ymd(2020, 1, 1).date_naive(),
+            utc_dt_ymd(2020, 1, 2).date_naive(),
+            utc_dt_ymd(2020, 1, 3).date_naive(),
+        ];
+        assert_eq!(date_iter, expected_dates);
+    }
 
     #[test]
     fn test_nth_day_of_week() {
@@ -1865,5 +2122,27 @@ mod tests {
             d,
             vpath,
         })
+    }
+
+    #[test]
+    fn test_subdir_from_ext() {
+        let p = PathBuf::from("pa_ggg_benchmark.gnd");
+        let subdir = RunType::try_from(p.as_path()).unwrap().subdir().unwrap();
+        assert_eq!("gnd", subdir);
+
+        // Since we keep the extension as u8 values, make sure the error
+        // tells us the actual character, not the byte value.
+        let p = PathBuf::from("pa_ggg_benchmark.xnd");
+        let e = RunType::try_from(p.as_path())
+            .unwrap()
+            .subdir()
+            .unwrap_err();
+        match e {
+            GggError::Custom(msg) => assert_eq!(
+                "Starting character 'x' does not have a defined subdirectory",
+                msg
+            ),
+            _ => panic!("Unexpected GggError type"),
+        }
     }
 }

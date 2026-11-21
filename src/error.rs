@@ -30,7 +30,15 @@ pub struct FileLocation {
     line_value: Option<String>,
 }
 
+/// Represents the source of an error in an external file.
+///
+/// Can be created with [`FileLocation::new`], [`FileLocation::empty`],
+/// or by converting from a `&Path`, `PathBuf`, `&str`, or `String` with
+/// `.into()`. Converting from a `&Path` or `PathBuf` populates the
+/// `path` field; converting from a `&str` or `String` populates the
+/// `line_value` field.
 impl FileLocation {
+    /// Create a new `FileLocation`.
     pub fn new<P: AsRef<Path>, S: AsRef<str>>(
         path: Option<P>,
         line_num: Option<usize>,
@@ -40,6 +48,17 @@ impl FileLocation {
             path: path.map(|p| p.as_ref().to_owned()),
             line_num,
             line_value: line_value.map(|s| s.as_ref().to_owned()),
+        }
+    }
+
+    /// Create a `FileLocation` with all fields set to `None`.
+    /// This should normally be replaced at a higher level in the
+    /// call stack to provide real information.
+    pub fn empty() -> Self {
+        Self {
+            path: None,
+            line_num: None,
+            line_value: None,
         }
     }
 }
@@ -227,5 +246,101 @@ pub enum WriteError {
 impl WriteError {
     pub fn convert_error<S: Into<String>>(reason: S) -> Self {
         Self::ConvertError(reason.into())
+    }
+}
+
+/// An extension trait to provide the `with_location` method for relevant `Result` types.
+///
+/// Currently implemented for: [`HeaderError`].
+pub trait LocationErr {
+    /// For a [`Result::Err`] variant that contains a [`FileLocation`],
+    /// replace that location with a new one. The `loc` argument may
+    /// be anything that can be safely converted into a [`FileLocation`],
+    /// e.g., [`Path`], [`PathBuf`], [`String`], or [`str`].
+    fn with_location<L: Into<FileLocation>>(self, loc: L) -> Self;
+}
+
+impl<T> LocationErr for Result<T, HeaderError> {
+    fn with_location<L: Into<FileLocation>>(self, loc: L) -> Self {
+        match self {
+            Ok(v) => Ok(v),
+            Err(HeaderError::CouldNotRead { location: _, cause }) => {
+                Err(HeaderError::CouldNotRead {
+                    location: loc.into(),
+                    cause,
+                })
+            }
+            Err(HeaderError::Custom(msg)) => Err(HeaderError::Custom(msg)),
+            Err(HeaderError::NumColMismatch {
+                location: _,
+                expected,
+                got,
+            }) => Err(HeaderError::NumColMismatch {
+                location: loc.into(),
+                expected,
+                got,
+            }),
+            Err(HeaderError::NumLinesMismatch { expected, got }) => {
+                Err(HeaderError::NumLinesMismatch { expected, got })
+            }
+            Err(HeaderError::ParseError { location: _, cause }) => Err(HeaderError::ParseError {
+                location: loc.into(),
+                cause,
+            }),
+        }
+    }
+}
+
+/// An adaptor trait that allows converting [`error_stack::Report`] errors into standard error types.
+///
+/// This makes `error_stack::Report`s easier to convert into errors that crates
+/// like `eyre` or `anyhow` can wrap; a `Report` does not implement [`std::error::Error`],
+/// but calling `.adapt_err()` from this trait on a `Result<_, Report>` will convert
+/// it to a `Result` with a standard error-compatible error type that retains
+/// as much of the report's context as possible.
+pub trait ErrStackAdaptor<T, C: error_stack::Context + std::error::Error> {
+    fn adapt_err(self) -> Result<T, ErrStackCompat<C>>;
+}
+
+impl<T, C: error_stack::Context + std::error::Error> ErrStackAdaptor<T, C>
+    for Result<T, error_stack::Report<C>>
+{
+    fn adapt_err(self) -> Result<T, ErrStackCompat<C>> {
+        match self {
+            Ok(val) => Ok(val),
+            Err(err) => Err(ErrStackCompat::from(err)),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct ErrStackCompat<C>(pub error_stack::Report<C>);
+
+impl<C> Display for ErrStackCompat<C> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl<C: error_stack::Context + std::error::Error> std::error::Error for ErrStackCompat<C> {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        // We can't expose error_stack's internal frames as `dyn Error`
+        // (attachments can be arbitrary types), but we can at least
+        // surface the innermost context as the "cause".
+        Some(self.0.current_context())
+    }
+}
+
+impl<C> From<error_stack::Report<C>> for ErrStackCompat<C> {
+    fn from(report: error_stack::Report<C>) -> Self {
+        ErrStackCompat(report)
+    }
+}
+
+// Lets you call `.current_context()`, `.frames()`, etc. straight through.
+impl<C> std::ops::Deref for ErrStackCompat<C> {
+    type Target = error_stack::Report<C>;
+    fn deref(&self) -> &error_stack::Report<C> {
+        &self.0
     }
 }

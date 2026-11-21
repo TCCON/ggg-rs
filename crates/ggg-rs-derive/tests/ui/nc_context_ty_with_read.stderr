@@ -1,0 +1,5 @@
+error: `context(ty = ...)` sets one type for both directions, so it cannot be combined with `read = ...` or `write = ...`
+ --> tests/ui/nc_context_ty_with_read.rs:8:10
+  |
+8 | #[netcdf(context(ty = "A", read = "B"))]
+  |          ^^^^^^^

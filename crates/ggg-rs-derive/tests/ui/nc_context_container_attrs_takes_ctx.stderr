@@ -1,0 +1,43 @@
+error[E0277]: this container-level `attrs(func = ...)` function takes a context argument, but this struct has no write context
+  --> tests/ui/nc_context_container_attrs_takes_ctx.rs:11:23
+   |
+10 | #[derive(WriteNetcdf)]
+   |          ----------- required by a bound introduced by this call
+11 | #[netcdf(attrs(func = global))]
+   |                       ^^^^^^ remove the final context parameter from this function
+   |
+help: the trait `__ExpectGroupAttrs` is not implemented for `__TakesContext`
+  --> tests/ui/nc_context_container_attrs_takes_ctx.rs:10:10
+   |
+10 | #[derive(WriteNetcdf)]
+   |          ^^^^^^^^^^^
+   = note: this struct has no `context(...)` annotation, so `WriteNetcdf` passes no context; add `#[netcdf(context(write = "..."))]` if this function needs one
+help: the trait `__ExpectGroupAttrs` is implemented for `__TakesNoContext`
+  --> tests/ui/nc_context_container_attrs_takes_ctx.rs:10:10
+   |
+10 | #[derive(WriteNetcdf)]
+   |          ^^^^^^^^^^^
+note: required by a bound in `__check_GroupAttrs`
+  --> tests/ui/nc_context_container_attrs_takes_ctx.rs:10:10
+   |
+10 | #[derive(WriteNetcdf)]
+   |          ^^^^^^^^^^^ required by this bound in `__check_GroupAttrs`
+   = note: this error originates in the derive macro `WriteNetcdf` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0061]: this function takes 3 arguments but 2 arguments were supplied
+  --> tests/ui/nc_context_container_attrs_takes_ctx.rs:11:23
+   |
+10 | #[derive(WriteNetcdf)]
+   |          ----------- argument #3 of type `&Ctx` is missing
+11 | #[netcdf(attrs(func = global))]
+   |                       ^^^^^^
+   |
+note: function defined here
+  --> tests/ui/nc_context_container_attrs_takes_ctx.rs:6:4
+   |
+ 6 | fn global(_d: &Bad, _g: &mut netcdf::GroupMut<'_>, _c: &Ctx) -> netcdf::Result<()> {
+   |    ^^^^^^                                          --------
+help: provide the argument
+   |
+11 | #[netcdf(attrs(func = global(WriteNetcdf, WriteNetcdf, /* &Ctx */)))]
+   |                             ++++++++++++++++++++++++++++++++++++++

@@ -1,13 +1,91 @@
+use std::io::Read;
+// #[cfg(feature = "netcdf")]
+use std::{fmt::Debug, ops::Mul, str::FromStr};
 use std::{
+    fmt::Display,
     io::{BufRead, BufReader, Lines},
     path::{Path, PathBuf},
-    process::{Command, Stdio},
 };
 
+use approx::AbsDiffEq;
+#[cfg(feature = "netcdf")]
+use netcdf::NcTypeDescriptor;
+
+#[cfg(feature = "netcdf")]
+use crate::nc_utils::{GetNcAttr, GetNcVar};
+
+static INIT_LOGGING: std::sync::Once = std::sync::Once::new();
+pub const NCDF_F32_DEFAULT_FILL: f32 = 9.969209716543442e30;
+
 #[allow(dead_code)]
-pub(crate) fn test_data_dir() -> PathBuf {
+pub fn test_data_dir() -> PathBuf {
     let crate_root = env!("CARGO_MANIFEST_DIR");
     PathBuf::from(crate_root).join("test-data")
+}
+
+/// Set up the log4rs backend to interact properly with Cargo's test capture mechanism
+///
+/// Tests should call this to set up logging during their run, rather than relying on
+/// the normal [`crate::logging::init_logging`]. Use `level = None` for the default
+/// log level (debug).
+pub fn init_test_logging(level: Option<log::LevelFilter>) {
+    let level = level.unwrap_or(log::LevelFilter::Debug);
+    INIT_LOGGING.call_once(|| {
+        let encoder = Box::new(log4rs::encode::pattern::PatternEncoder::new(
+            crate::logging::LOG_PATTERN,
+        ));
+        let inner_appender = TestAppender { encoder };
+        let appender = log4rs::config::Appender::builder().build("test", Box::new(inner_appender));
+        let config = log4rs::config::Config::builder()
+            .appender(appender)
+            .build(
+                log4rs::config::Root::builder()
+                    .appender("test")
+                    .build(level),
+            )
+            .expect("should be able to build test log4rs config");
+        log4rs::init_config(config).expect("should be able to initialize log4rs logging for tests");
+    });
+}
+
+/// An appender that uses eprint! so that `cargo test` captures output correctly.
+#[derive(Debug)]
+struct TestAppender {
+    encoder: Box<dyn log4rs::encode::Encode>,
+}
+
+impl log4rs::append::Append for TestAppender {
+    fn append(&self, record: &log::Record) -> anyhow::Result<()> {
+        let mut buf = vec![];
+        self.encoder.encode(
+            &mut log4rs::encode::writer::ansi::AnsiWriter(&mut buf),
+            record,
+        )?;
+        eprint!("{}", String::from_utf8_lossy(&buf));
+        Ok(())
+    }
+
+    fn flush(&self) {}
+}
+
+/// Test helper function to quickly create a UTC datetime.
+pub fn utc_dt_ymd(year: i32, month: u32, day: u32) -> chrono::DateTime<chrono::Utc> {
+    utc_dt_ymdhms(year, month, day, 0, 0, 0)
+}
+
+pub fn utc_dt_ymdhms(
+    year: i32,
+    month: u32,
+    day: u32,
+    hour: u32,
+    minute: u32,
+    second: u32,
+) -> chrono::DateTime<chrono::Utc> {
+    chrono::NaiveDate::from_ymd_opt(year, month, day)
+        .unwrap()
+        .and_hms_opt(hour, minute, second)
+        .unwrap()
+        .and_utc()
 }
 
 pub fn remove_file_if_exists(file: &Path) -> std::io::Result<()> {
@@ -19,19 +97,405 @@ pub fn remove_file_if_exists(file: &Path) -> std::io::Result<()> {
 }
 
 pub fn compare_output_text_files(expected_dir: &Path, output_dir: &Path, out_file_name: &str) {
-    let mut child = Command::new("diff")
-        .arg("-q")
-        .arg(expected_dir.join(out_file_name))
-        .arg(output_dir.join(out_file_name))
-        .stdout(Stdio::null())
-        .spawn()
-        .expect("Spawning diff process should not fail");
+    let expected_file = expected_dir.join(out_file_name);
+    let output_file = output_dir.join(out_file_name);
 
-    let is_same = child
-        .wait()
-        .expect("Waiting for diff process should not fail")
-        .success();
-    assert!(is_same, "{out_file_name} did not match expected.");
+    // Could do this with block reads, but going to assume that test text
+    // files are not big enough for that to be worth it.
+    let mut expected_bytes = vec![];
+    std::fs::File::open(&expected_file)
+        .expect(&format!(
+            "should be able to open the expected file {}",
+            expected_file.display()
+        ))
+        .read_to_end(&mut expected_bytes)
+        .expect(&format!(
+            "should be able to read the expected file {}",
+            expected_file.display()
+        ));
+
+    let mut output_bytes = vec![];
+    std::fs::File::open(&output_file)
+        .expect(&format!(
+            "should be able to open the output file {}",
+            output_file.display()
+        ))
+        .read_to_end(&mut output_bytes)
+        .expect(&format!(
+            "should be able to read the output file {}",
+            output_file.display()
+        ));
+
+    assert!(
+        expected_bytes == output_bytes,
+        "{out_file_name} did not match expected"
+    );
+}
+
+/// Extension trait for `Result` types to aid test debugging.
+///
+/// Some errors are much easier to read when formatted using the
+/// [`Display`] trait, but `.unwrap()` formats using the [`Debug`]
+/// trait. (TOML deserialization errors are an example.) Using the
+/// `unwrap_print` method from this trait will first print the
+/// `Display`-formatted error, then call `.unwrap()` to produce the
+/// normal backtrace.
+pub trait TestResult<T> {
+    fn unwrap_print(self) -> T;
+}
+
+impl<T, E: std::fmt::Debug + Display> TestResult<T> for Result<T, E> {
+    fn unwrap_print(self) -> T {
+        match self {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!("ERROR: {e}");
+                Err(e).unwrap()
+            }
+        }
+    }
+}
+
+/// Create a structure and verify its fields are contained in another struct.
+///
+/// This is meant to support testing configuration examples from the mdbook.
+/// Sometimes in the book we want to show only a small snippet of a configuration
+/// file, but still check that the fields are correct. For example, let's say
+/// our full config object looked like this:
+///
+/// ```rust
+/// # use std::path::PathBuf;
+/// #[derive(serde::Deserialize)]
+/// struct Config {
+///     user: String,
+///     source: PathBuf,
+///     allowed_flags: Vec<i32>
+/// }
+/// ```
+///
+/// but we only wanted to focus on how to write the list of flags. If we
+/// had this TOML:
+///
+/// ```toml
+/// allowed_flags = [0, 1000]
+/// ```
+///
+/// deserializing it to `Config` won't work, because it's missing the `user`
+/// and `source` fields. So, for testing, we might make a `ConfigOnlyFlags`
+/// struct:
+///
+/// ```rust
+/// #[derive(serde::Deserialize)]
+/// struct ConfigOnlyFlags {
+///     allowed_flags: Vec<i32>
+/// }
+/// ```
+///
+/// which will let us test this example. But if we later change `Config` so that
+/// field is now named `good_flags`, our example in the book is wrong, and the
+/// test won't catch it (because we defined a separate struct to deserialize that
+/// test).
+///
+/// That's where this macro comes in. It lets you define a struct like normal, but
+/// also specify what struct this one "subsets". For our example, that would be:
+///
+/// ```ignore
+/// # // test ignored because it is triggering a weird netCDF linking failure,
+/// # // not sure why it affects this one.
+/// # use ggg_rs::test_struct_check_fields;
+/// # use std::path::PathBuf;
+///
+/// struct Config { allowed_flags: Vec<i32> }
+///
+/// test_struct_check_fields! {
+///     #[derive(serde::Deserialize)]
+///     struct ConfigOnlyFlags {
+///         allowed_flags: Vec<i32>
+///     } : Config
+/// }
+/// ```
+///
+/// By specifying the `: Config` at the end, this will require that all fields in
+/// `ConfigOnlyFlags` also exist in `Config`. If that stops being true (e.g., because
+/// we changed the name in `Config`), this will generate a compile-time error.
+///
+/// If you want to verify the types of the fields as well, use [`test_struct_check_field_types!`]
+/// instead.
+///
+/// Note that this macro can only be used in a `#[cfg(test)]`, as it relies on the
+/// `static_assertions` crate, which is a dev dependency for ggg-rs. Also, as this is
+/// macro exported, it must be `use`d from the `ggg_rs` root: `use ggg_rs::test_struct_check_fields`.
+#[macro_export]
+macro_rules! test_struct_check_fields {
+    (
+        $(#[$meta:meta])*
+        struct $name:ident {
+            $( $field:ident : $ty:ty ),* $(,)?
+        } : $other:path
+    ) => {
+        static_assertions::assert_fields!($other: $($field),*);
+
+        $(#[$meta])*
+        struct $name {
+            $( $field: $ty ),*
+        }
+    };
+}
+
+/// As [`test_struct_check_fields!`], but checks field types, not just names.
+///
+/// This has the same invocation as [`test_struct_check_fields!`], so see that
+/// macro for examples. Here, we cause a compiler error if the type of the fields
+/// does not match as well as the name. The former error will seem backwards;
+/// if the defined structure has type `A` and the original structure has type `B`,
+/// you'll see "expected `A`, found `B`".
+///
+/// You will not want to use this when mocking a struct with a different subtype
+/// that has limited fields, e.g., if your normal `Config` structure was:
+///
+/// ```rust
+/// ```
+///
+/// Also note that the fields of the original structure must be accessible where
+/// this macro is called. This should be the case in most tests.
+#[macro_export]
+macro_rules! test_struct_check_field_types {
+    (
+        $(#[$meta:meta])*
+        struct $name:ident {
+            $( $field:ident : $ty:ty ),* $(,)?
+        } : $other:path
+    ) => {
+        // Redundant with the type check, but clearer if the field name is wrong
+        static_assertions::assert_fields!($other: $($field),*);
+
+        // CLAUDE CODE, OPUS 4.8: Type check: never called, exists only so the compiler verifies
+        // each field in `$other` has exactly the type declared here.
+        // Anonymous `const _` avoids name collisions across invocations.
+        // Caveats: struct can't implement `Drop` and fields must be accessible at the call site.
+        const _: () = {
+            #[allow(dead_code)]
+            fn assert_field_types(other: $other) {
+                $( let _: $ty = other.$field; )*
+            }
+        };
+
+        $(#[$meta])*
+        struct $name {
+            $( $field: $ty ),*
+        }
+    };
+}
+
+/// Compare an array of plain floats to expected values in a [`netcdf::File`].
+///
+/// This will use a relative comparison of 1e-7 times the larger value in each comparison.
+/// That was necessary for comparing the CO2 prior loaded from L2 files in the `write-timeavg-netcdf`
+/// code.
+///
+/// # See also
+/// [`compare_to_netcdf_values_eq`] - for integer arrays
+/// [`compare_to_netcdf_quantities`] - for [`uom::si::Quantity`] arrays
+#[cfg(feature = "netcdf")]
+pub fn compare_to_netcdf_values_approx<T, D, O>(
+    expected_ds: O,
+    nc_var: &str,
+    data: &ndarray::Array<T, D>,
+) where
+    T: Copy
+        + NcTypeDescriptor
+        + approx::RelativeEq
+        + num_traits::Float
+        + Debug
+        + ndarray_npy::WritableElement
+        + From<f32>,
+    <T as approx::AbsDiffEq>::Epsilon: Copy + Debug + From<f32> + Into<T>,
+    D: ndarray::Dimension + Copy,
+    O: GetNcVar,
+{
+    // The relative tolerance of 1e-7 was selected for timeavg read_l2 tests of the CO2 prior
+    let rtol: <T as AbsDiffEq>::Epsilon = 1e-7.into();
+    compare_to_netcdf_values_approx_with_tolerance::<_, _, O>(expected_ds, nc_var, data, rtol);
+}
+
+/// Like [`compare_to_netcdf_values_approx`], but with a custom tolerance.
+///
+/// Don't let the trait bounds scare you, `rtol` should just be the same type as contained
+/// in `data` - `f32` or `f64`.
+#[cfg(feature = "netcdf")]
+pub fn compare_to_netcdf_values_approx_with_tolerance<T, D, O>(
+    expected_ds: O,
+    nc_var: &str,
+    data: &ndarray::Array<T, D>,
+    rtol: <T as AbsDiffEq>::Epsilon,
+) where
+    T: Copy
+        + NcTypeDescriptor
+        + approx::RelativeEq
+        + num_traits::Float
+        + Debug
+        + ndarray_npy::WritableElement
+        + From<f32>,
+    <T as approx::AbsDiffEq>::Epsilon: Copy + Debug + From<f32> + Into<T>,
+    D: ndarray::Dimension + Copy,
+    O: GetNcVar,
+{
+    let expected_data = crate::nc_utils::get_var_data::<T, D, O>(expected_ds, nc_var).expect(
+        &format!("Could not get variable '{nc_var}' from the validation netCDF file"),
+    );
+    eprintln!("Checking against {nc_var}");
+    assert_arrays_allclose(&expected_data, data, rtol);
+}
+
+/// Compare an array of plain numbers to expected values in a [`netcdf::File`].
+///
+/// This will use exact equality, so is only useful for integers. Hence, `T`
+/// is limited to types that implement `Eq`, not just `PartialEq`.
+///
+/// # See also
+/// [`compare_to_netcdf_values_approx`] - for float arrays
+/// [`compare_to_netcdf_quantities`] - for [`uom::si::Quantity`] arrays
+#[cfg(feature = "netcdf")]
+pub fn compare_to_netcdf_values_eq<T, D, O>(
+    expected_ds: O,
+    nc_var: &str,
+    data: &ndarray::Array<T, D>,
+) where
+    T: Copy + NcTypeDescriptor + Eq + Debug,
+    D: ndarray::Dimension,
+    O: GetNcVar,
+{
+    let expected_data = crate::nc_utils::get_var_data::<T, D, O>(expected_ds, nc_var).expect(
+        &format!("Could not get variable '{nc_var}' from the validation netCDF file"),
+    );
+    eprintln!("Checking against {nc_var}");
+    assert_eq!(expected_data, data)
+}
+
+/// Compare an array of [`uom::si::Quantity`] values to expected values in a [`netcdf::File`].
+///
+/// This uses the same relative comparison as [`compare_to_netcdf_values_approx`] for the
+/// same reason. Note that this requires the netCDF variable read to have the "units" attribute
+/// and for those units to be parseable by [`crate::nc_utils::get_var_data_quantity`].
+///
+/// The actual comparison is done by converting the quantities back to `f64` values in their
+/// base units. This keeps the trait bounds simpler and ensures that we do an apples-to-apples
+/// comparison, but if the quantities contained `f32` values, you could see some value drift.
+#[cfg(feature = "netcdf")]
+pub fn compare_to_netcdf_quantities<T, D, Q>(
+    expected_ds: &netcdf::File,
+    nc_var: &str,
+    data: &ndarray::ArrayRef<Q, D>,
+) where
+    T: Copy + NcTypeDescriptor,
+    D: ndarray::Dimension + Copy,
+    Q: FromStr<Err = uom::str::ParseQuantityError>
+        + Copy
+        + Mul<T, Output = Q>
+        + crate::array_ops::FloatConversion,
+{
+    // The relative tolerance of 1e-7 was selected for timeavg read_l2 tests of the CO2 prior
+    compare_to_netcdf_quantities_with_tolerance(expected_ds, nc_var, &data, 1e-7);
+}
+
+/// Like [`compare_to_netcdf_quantities`], but with an option for a custom tolerance.
+#[cfg(feature = "netcdf")]
+pub fn compare_to_netcdf_quantities_with_tolerance<T, D, Q, O>(
+    expected_ds: O,
+    nc_var: &str,
+    data: &ndarray::ArrayRef<Q, D>,
+    rtol: f64,
+) where
+    T: Copy + NcTypeDescriptor,
+    D: ndarray::Dimension + Copy,
+    Q: FromStr<Err = uom::str::ParseQuantityError>
+        + Copy
+        + Mul<T, Output = Q>
+        + crate::array_ops::FloatConversion,
+    O: GetNcVar,
+{
+    let expected_data = crate::nc_utils::get_var_data_quantity::<T, D, Q, O>(expected_ds, nc_var)
+        .expect(&format!(
+            "Could not get variable '{nc_var}' from the validation netCDF file"
+        ));
+    let expected_data = expected_data.mapv(|q| q.into_f64());
+    let data = data.mapv(|q| q.into_f64());
+    eprintln!("Checking against {nc_var} with rtol = {rtol}");
+    // assert_arrays_rel_eq!(&expected_data, &data, tol)
+    assert_arrays_allclose(&expected_data, &data, rtol);
+}
+
+/// Assert that two arrays (usually of floats) are within some relative tolerance.
+///
+/// This function will also log the unequal elements to stderr (through [`log::debug!`],
+/// so be sure to call [`init_test_logging`] if you want to see that) with a reproduction
+/// of the [`approx`] crate's logic to help understand exactly why it fails. The panic
+/// message will list the indices that were not equal, the values, and the difference. This
+/// also saves the two arrays out in a format `numpy` can read, if further debugging is needed.
+fn assert_arrays_allclose<T, D>(
+    expected: &ndarray::ArrayRef<T, D>,
+    actual: &ndarray::ArrayRef<T, D>,
+    rtol: <T as AbsDiffEq>::Epsilon,
+) where
+    T: approx::RelativeEq + num_traits::Float + ndarray_npy::WritableElement,
+    <T as std::ops::Sub<T>>::Output: Debug,
+    <T as AbsDiffEq>::Epsilon: Into<T> + Copy + Debug,
+    D: ndarray::Dimension + Copy,
+    D::Pattern: Debug,
+{
+    let mut uneq = vec![];
+    ndarray::Zip::indexed(expected)
+        .and(actual)
+        .for_each(|idx, ex, ac| {
+            if ex.relative_ne(ac, T::default_epsilon(), rtol.clone()) {
+                // Debugging: mimic the relative_eq implementation (https://docs.rs/approx/latest/src/approx/relative_eq.rs.html#38)
+                // to understand where the difference is coming from
+                log::debug!("At index = {idx:?}");
+                let abs_diff = (*ac - *ex).abs();
+                let abs_ac = (*ac).abs();
+                let abs_ex = (*ex).abs();
+                let largest = if abs_ac > abs_ex { abs_ac } else { abs_ex };
+                log::debug!(
+                    "Abs diff = {abs_diff:?} vs. epsilon = {:?}, pass = {}",
+                    T::default_epsilon(),
+                    abs_diff < T::default_epsilon().into()
+                );
+                log::debug!(
+                    "Max rel diff = {:?}, largest = {largest:?}, rtol = {rtol:?}, pass = {}",
+                    largest * rtol.into(),
+                    abs_diff < largest * rtol.into()
+                );
+                // End debugging
+                uneq.push((idx, ex, ac, *ac - *ex))
+            }
+        });
+    if !uneq.is_empty() {
+        // Dump to disk (ignoring Result so it doesn't mask the panic)
+        let _ = ndarray_npy::write_npy("debug_actual.npy", actual);
+        let _ = ndarray_npy::write_npy("debug_expected.npy", expected);
+        panic!("Arrays do not match. The unequal indices, expected values, actual values, and differences, are:\n\t{uneq:?}\nActual and Expected arrays have been dumped to 'debug_actual.npy' and 'debug_expected.npy', access with numpy.load.")
+    }
+}
+
+/// Compare the values of one or more netCDF attributes between two objects that
+/// can both have attributes. Usually this will be an expected dataset, group,
+/// or variable and the output of a test.
+#[cfg(feature = "netcdf")]
+pub fn compare_nc_attrs<A: GetNcAttr, B: GetNcAttr>(
+    expected: A,
+    test_output: B,
+    attributes: &[&str],
+) {
+    for attr in attributes {
+        let val_a = expected.get_attr_val(attr).expect(&format!(
+            "must be able to get expected attribute value for {attr}"
+        ));
+        let val_b = test_output.get_attr_val(attr).expect(&format!(
+            "must be able to get output attribute value for {attr}"
+        ));
+
+        assert_eq!(val_a, val_b, "values for attribute '{attr}' differ");
+    }
 }
 
 /// Iterate over fenced blocks in a Markdown file.
@@ -42,6 +506,24 @@ pub fn compare_output_text_files(expected_dir: &Path, output_dir: &Path, out_fil
 /// that returns each fenced block tagged with `tag` in each of the files
 /// listed in `files`. `files` may be anything that can become an iterator
 /// over pathlike objects.
+///
+/// This also recognizes two subtag types. If the starting line includes
+/// `#notest`, then that fenced block will be skipped by the iterator:
+///
+/// ````markdown
+/// ```toml #notest
+/// ...
+/// ```
+/// ````
+///
+/// If it include something starting with a `+`, that will be returned
+/// as the `subtag` field of [`FencedBlock`] (without the leading `+`):
+///
+/// ````markdown
+/// ```toml +constants
+/// ...
+/// ```
+/// ````
 pub fn iter_fenced_blocks<P, F, I>(tag: &str, files: I) -> FencedBlocks<P, F>
 where
     P: AsRef<Path>,
@@ -53,6 +535,7 @@ where
 
 pub struct FencedBlock {
     pub text: String,
+    pub subtag: Option<String>,
     pub file: PathBuf,
     pub line: usize,
 }
@@ -95,7 +578,13 @@ where
 
             if let Some(line) = opt_line {
                 if line.starts_with(&self.fence_start) && !line.contains("#notest") {
-                    return Some(self.get_block(self.line_num));
+                    // Get the first thing that starts with a "+"
+                    let subtag = line
+                        .split_ascii_whitespace()
+                        .filter(|s| s.starts_with('+'))
+                        .next()
+                        .map(|s| s.trim_start_matches('+').to_string());
+                    return Some(self.get_block(self.line_num, subtag));
                 }
             } else {
                 // Ran out of lines in the file, so set lines back to None so that we advance to the next file
@@ -134,7 +623,11 @@ where
         Some(Ok(()))
     }
 
-    fn get_block(&mut self, starting_line: usize) -> std::io::Result<FencedBlock> {
+    fn get_block(
+        &mut self,
+        starting_line_num: usize,
+        subtag: Option<String>,
+    ) -> std::io::Result<FencedBlock> {
         let mut text = String::new();
         // We should only be here if we found a line starting with the opening of
         // a fenced block, so the next line should be the actual first line of the fenced
@@ -144,7 +637,7 @@ where
                 Some(Ok(line)) => line,
                 Some(Err(e)) => return Err(e),
                 None => {
-                    let msg = format!("fenced block starting at line {starting_line} was still unclosed at the end of the file");
+                    let msg = format!("fenced block starting at line {starting_line_num} was still unclosed at the end of the file");
                     return Err(std::io::Error::other(msg));
                 }
             };
@@ -152,6 +645,7 @@ where
             if next_line.starts_with("```") {
                 let block = FencedBlock {
                     text,
+                    subtag,
                     file: self.curr_file.clone().unwrap(),
                     line: self.line_num,
                 };

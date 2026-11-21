@@ -2,32 +2,44 @@
 name = "ggg-rs"
 version = "0.1.0"
 edition = "2021"
+
+[workspace]
+members = ["crates/xtask"]
 # Use the newer feature resolving algorithm
 resolver = "2"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-approx = "0.5.1"
+anyhow = { version = "1", optional = true }  # needed for test_utils' custom log4rs appender
+approx = "0.5.1"  # this is needed for more than tests (e.g., apply_nc_fills)
 chrono = { version = "0.4.40", features = ["serde"] }
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4", features = ["derive", "cargo"] }
 clap-verbosity-flag = "2.2.0"
+# If in the future I need a dynamic builder pattern, use this crate.
+# derive_builder = "0.20.2"
+# If in the future I need a typed builder pattern, use this crate.
+# typed-builder = "0.23.2"
 encoding = "0.2.33"
+ggg-rs-derive = { path = "crates/ggg-rs-derive" }
 itertools = "0.14.0"
 log = "0.4.27"
 log4rs = "1.2.0"
 error-stack = "0.5.0"
+field_names = "0.2.0"
 figment = { version = "0.10.19", features = ["toml"] }
-fortformat = { version = "0.2.0", features = ["serde"] }
+fortformat = { version = "0.2.1", features = ["serde"] }
 indexmap = { version = "2.9", features = ["serde"] }
 ndarray = { version = "0.17", features = ["approx"] }
-netcdf = { version = "0.11.0", optional = true }
+ndarray-npy = "0.10.0"
+netcdf = { version = "0.12.1", optional = true }
 num-traits = "0.2.16"
 pest = "2.8.0"
 pest_derive = "2.8.0"
 plotly = { version = "0.8.3", features = ["kaleido"], optional = true }
 regex = "1.9.3"
-serde = { version = "1.0.219", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
 serde_json = "1.0.140"
+serde_with = "3"
 strum = { version = "0.27.1", features = ["derive"] }
 tabled = "0.18.0"
 thiserror = "1.0.50"
@@ -39,18 +51,36 @@ hex = "0.4.3"
 rayon = "1.10.0"
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.20", features = ["json"] }
-indicatif = "0.17.11"
+indicatif = "0.18"
 interp = "2.0.2"
 glob = "0.3.2"
+uom = "0.38.0" # NB: tried adding i64 feature, but parsing units of "d" or "days" with i64 didn't work, so sticking to floats only
+ndarray-stats = "0.7.0"
+noisy_float = "0.2.1"
+# Needed v0.11 (not 0.12, which was available at the time) to match an `ffi` version.
+mlua = {version = "0.11.0", features = ["lua55", "serde", "vendored"]}
+csv = "1.4.0"
+textwrap = "0.16.4"
+reqwest = {version = "0.13.5", features = ["blocking"] }
+tar = "0.4.46"
+flate2 = "1.1.10"
+tempfile = "3.27.0"
 
 [dev-dependencies]
+nccompare = { path = "./crates/nccompare" }
 rstest = "0.18.2"
+static_assertions = "1.1.0"
+xtask = { path = "./crates/xtask" }
+# This is a workaround to gate the test_utils module behind a feature
+# to avoid pulling in some unnecessary dependencies outside of testing
+ggg-rs = { path = ".", features = ["test-utils"] }
 
 [features]
 inprogress = []
 netcdf = ["dep:netcdf"]
 static = ["netcdf", "netcdf/static"]
 plotting = ["dep:plotly"]
+test-utils = ["dep:anyhow"]
 
 [lib]
 
@@ -74,6 +104,9 @@ name = "apply_tccon_insitu_correction"
 name = "list_spectra"
 
 [[bin]]
+name = "create_sunrun_rs"
+
+[[bin]]
 name = "add_nc_flags"
 required-features = ["netcdf"]
 
@@ -84,6 +117,9 @@ required-features = ["netcdf"]
 [[bin]]
 name = "plot_spt"
 required-features = ["plotting"]
+
+[[bin]]
+name = "opus_hdr_rs"
 
 [[bin]]
 name = "query_output"
@@ -100,6 +136,10 @@ required-features = ["netcdf", "inprogress"]
 
 [[bin]]
 name = "write_public_netcdf"
+required-features = ["netcdf"]
+
+[[bin]]
+name = "write_timeavg_netcdf"
 required-features = ["netcdf"]
 
 [[bin]]
